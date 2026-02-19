@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Prime Broker - Loan Management</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Utility Functions
+        const formatDateSGT = (dateString) => {
+            if (!dateString) return '';
+            const date = new Date(dateString);
+            // Convert to SGT (GMT+8)
+            const sgtDate = new Date(date.getTime() + (8 * 60 * 60 * 1000));
+            const day = sgtDate.getUTCDate();
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const month = months[sgtDate.getUTCMonth()];
+            const year = sgtDate.getUTCFullYear();
+            return `${day}-${month}-${year}`;
+        };
+
+        const formatDateTimeSGT = (isoString) => {
+            if (!isoString) return '';
+            const date = new Date(isoString);
+            // Convert to SGT (GMT+8)
+            const sgtDate = new Date(date.getTime() + (8 * 60 * 60 * 1000));
+            return sgtDate.toLocaleString('en-SG', { 
+                timeZone: 'Asia/Singapore',
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            });
+        };
+
+        const generateLoanId = (counterparty, existingLoans) => {
+            // Remove spaces from counterparty name
+            const cleanCounterparty = counterparty.replace(/\s+/g, '');
+            // Count existing loans for this counterparty
+            const counterpartyLoans = existingLoans.filter(
+                loan => loan.counterparty === counterparty
+            );
+            const sequenceNumber = counterpartyLoans.length + 1;
+            return `${cleanCounterparty}-Loan-${sequenceNumber}`;
+        };
+
+        // Icon components as SVG
+        const Icons = {
+            AlertTriangle: () => (
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+                    <path d="M12 9v4"/><path d="M12 17h.01"/>
+                </svg>
+            ),
+            Plus: () => (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M5 12h14"/><path d="M12 5v14"/>
+                </svg>
+            ),
+            DollarSign: () => (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                </svg>
+            ),
+            Edit2: () => (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                </svg>
+            ),
+            Check: () => (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 6 9 17l-5-5"/>
+                </svg>
+            ),
+            X: () => (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+                </svg>
+            ),
+            Download: () => (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>
+                </svg>
+            ),
+            RefreshCw: ({ className }) => (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>
+                </svg>
+            ),
+            Settings: () => (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+            ),
+        };
+
+        const LoanManager = () => {
+            // State management
+            const [loans, setLoans] = useState([]);
+            const [transactions, setTransactions] = useState([]);
+            const [prices, setPrices] = useState({ BTC: 0, ETH: 0 });
+            const [config, setConfig] = useState({
+                scriptUrl: '',
+                telegramBotToken: '',
+                telegramChatId: ''
+            });
+            const [showAddLoan, setShowAddLoan] = useState(false);
+            const [editingLoan, setEditingLoan] = useState(null);
+            const [showSettings, setShowSettings] = useState(false);
+            const [showAddTransaction, setShowAddTransaction] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [lastSync, setLastSync] = useState(null);
+            const [alertsSent, setAlertsSent] = useState(new Set());
+            const [sortBy, setSortBy] = useState('default');
+            const [sortOrder, setSortOrder] = useState('desc');
+            const [filterStatus, setFilterStatus] = useState('all');
+            const priceUpdateInterval = useRef(null);
+
+            // Load config from localStorage
+            useEffect(() => {
+                const savedConfig = localStorage.getItem('cryptoLoanConfig');
+                if (savedConfig) {
+                    setConfig(JSON.parse(savedConfig));
+                }
+            }, []);
+
+            // Save config to localStorage
+            const saveConfig = (newConfig) => {
+                setConfig(newConfig);
+                localStorage.setItem('cryptoLoanConfig', JSON.stringify(newConfig));
+            };
+
+            // Fetch live prices from CoinGecko
+            const fetchPrices = async () => {
+                try {
+                    const response = await fetch(
+                        'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd'
+                    );
+                    const data = await response.json();
+                    setPrices({
+                        BTC: data.bitcoin?.usd || 0,
+                        ETH: data.ethereum?.usd || 0
+                    });
+                } catch (error) {
+                    console.error('Error fetching prices:', error);
+                }
+            };
+
+            // Start price monitoring
+            useEffect(() => {
+                fetchPrices();
+                priceUpdateInterval.current = setInterval(fetchPrices, 30000);
+                
+                return () => {
+                    if (priceUpdateInterval.current) {
+                        clearInterval(priceUpdateInterval.current);
+                    }
+                };
+            }, []);
+
+            // Fetch data from Google Sheets via Apps Script
+            const fetchFromSheets = async () => {
+                if (!config.scriptUrl) return;
+                
+                setLoading(true);
+                try {
+                    // Fetch Loans sheet
+                    const loansResponse = await fetch(
+                        `${config.scriptUrl}?action=read&sheetName=Loans`
+                    );
+                    const loansData = await loansResponse.json();
+                    
+                    // Fetch Transactions sheet
+                    const transactionsResponse = await fetch(
+                        `${config.scriptUrl}?action=read&sheetName=Transactions`
+                    );
+                    const transactionsData = await transactionsResponse.json();
+
+                    if (loansData.success && loansData.values) {
+                        const formattedLoans = loansData.values
+                            .filter(row => row[0] && row[1]) // Only rows with ID and counterparty
+                            .map(row => ({
+                                id: row[0] || '',
+                                counterparty: row[1] || '',
+                                loanAmount: parseFloat(row[2]) || 0,
+                                underlying: row[3] || 'USDC',
+                                collateralAmount: parseFloat(row[4]) || 0,
+                                collateralType: row[5] || 'BTC',
+                                interestRate: parseFloat(row[6]) || 0,
+                                interestAccrued: parseFloat(row[7]) || 0,
+                                interestPaid: parseFloat(row[8]) || 0,
+                                tenor: parseInt(row[9]) || 0,
+                                startDate: row[10] || '',
+                                maturityDate: row[11] || '',
+                                marginCallThreshold: parseFloat(row[12]) || 120,
+                                originalCollateralRatio: parseFloat(row[13]) || 130,
+                                status: row[14] || 'Active',
+                                createdAt: row[15] || '',
+                                lastAlertTime: row[16] || ''
+                            }));
+                        setLoans(formattedLoans);
+                    } else {
+                        setLoans([]);
+                    }
+
+                    if (transactionsData.success && transactionsData.values) {
+                        const formattedTransactions = transactionsData.values
+                            .filter(row => row[0] && row[1]) // Only rows with transaction ID and loan ID
+                            .map(row => ({
+                                id: row[0] || '',
+                                loanId: row[1] || '',
+                                type: row[2] || '',
+                                amount: parseFloat(row[3]) || 0,
+                                timestamp: row[4] || ''
+                            }));
+                        setTransactions(formattedTransactions);
+                    } else {
+                        setTransactions([]);
+                    }
+
+                    setLastSync(new Date());
+                } catch (error) {
+                    console.error('Error fetching from Sheets:', error);
+                    alert('Error fetching data. Please check your Script URL.');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            // Write to Google Sheets via Apps Script
+            const writeToSheets = async (sheetName, values) => {
+                if (!config.scriptUrl) {
+                    alert('Please configure your Script URL first');
+                    return false;
+                }
+
+                try {
+                    const url = `${config.scriptUrl}?action=append&sheetName=${sheetName}&values=${encodeURIComponent(JSON.stringify(values))}`;
+                    
+                    console.log('Writing to:', url);
+
+                    const response = await fetch(url);
+                    const responseData = await response.json();
+                    
+                    console.log('Response:', responseData);
+
+                    if (!responseData.success) {
+                        throw new Error(responseData.error || 'Failed to write to Sheets');
+                    }
+
+                    await fetchFromSheets();
+                    return true;
+                } catch (error) {
+                    console.error('Error writing to Sheets:', error);
+                    alert(`Error saving data: ${error.message}\n\nPlease ensure:\n1. Your Apps Script is deployed correctly\n2. The script URL is correct\n3. The sheet tabs are named exactly "Loans" and "Transactions"`);
+                    return false;
+                }
+            };
+
+            // Update existing row in Google Sheets via Apps Script
+            const updateInSheets = async (sheetName, rowIndex, values) => {
+                if (!config.scriptUrl) return;
+
+                try {
+                    const url = `${config.scriptUrl}?action=update&sheetName=${sheetName}&rowIndex=${rowIndex}&values=${encodeURIComponent(JSON.stringify(values))}`;
+                    
+                    const response = await fetch(url);
+                    const responseData = await response.json();
+
+                    if (!responseData.success) {
+                        throw new Error(responseData.error || 'Failed to update Sheets');
+                    }
+
+                    await fetchFromSheets();
+                } catch (error) {
+                    console.error('Error updating Sheets:', error);
+                    alert(`Error updating data: ${error.message}`);
+                }
+            };
+
+            // Calculate interest accrued (360-day basis, calendar month tracking)
+            const calculateInterestAccrued = (loan) => {
+                if (!loan.startDate) return 0;
+                const startDate = new Date(loan.startDate);
+                const today = new Date();
+                const daysPassed = Math.floor((today - startDate) / (1000 * 60 * 60 * 24));
+                
+                // 360-day year basis
+                const interestAccrued = (loan.loanAmount * loan.interestRate / 100 * daysPassed) / 360;
+                return interestAccrued;
+            };
+
+            // Calculate interest for display (showing monthly breakdown)
+            const calculateInterestBreakdown = (loan) => {
+                if (!loan.startDate) return { currentMonth: 0, total: 0, monthName: '' };
+                
+                const startDate = new Date(loan.startDate);
+                const today = new Date();
+                
+                // Get current month boundaries
+                const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+                const currentMonthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+                
+                // Calculate total accrued
+                const totalDays = Math.floor((today - startDate) / (1000 * 60 * 60 * 24));
+                const totalAccrued = (loan.loanAmount * loan.interestRate / 100 * totalDays) / 360;
+                
+                // Calculate current month only (if loan started this month, use start date)
+                const monthStartDate = startDate > currentMonthStart ? startDate : currentMonthStart;
+                const monthDays = Math.floor((today - monthStartDate) / (1000 * 60 * 60 * 24));
+                const currentMonthAccrued = monthDays > 0 ? (loan.loanAmount * loan.interestRate / 100 * monthDays) / 360 : 0;
+                
+                const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                const monthName = monthNames[today.getMonth()];
+                
+                return {
+                    currentMonth: currentMonthAccrued,
+                    total: totalAccrued,
+                    monthName: monthName,
+                    year: today.getFullYear()
+                };
+            };
+
+            // Calculate total loan amount including interest
+            const calculateTotalLoanAmount = (loan) => {
+                const interestAccrued = calculateInterestAccrued(loan);
+                return loan.loanAmount + interestAccrued - loan.interestPaid;
+            };
+
+            // FIX #3: Calculate tenor automatically
+            const calculateTenor = (startDate, maturityDate) => {
+                if (!startDate || !maturityDate) return 0;
+                const start = new Date(startDate);
+                const maturity = new Date(maturityDate);
+                const diffTime = Math.abs(maturity - start);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                return diffDays;
+            };
+
+            // Calculate metrics for a loan
+            const calculateMetrics = (loan) => {
+                if (!loan.collateralType || !prices[loan.collateralType]) {
+                    return {
+                        collateralValue: 0,
+                        totalLoanAmount: loan.loanAmount,
+                        currentCollateralizationRatio: 0,
+                        isAtRisk: false,
+                        requiredTopUp: 0,
+                        interestAccrued: 0,
+                        marginCallPrice: 0,
+                        requiredTopUpToOriginal: 0,
+                        interestBreakdown: { currentMonth: 0, total: 0, monthName: '' }
+                    };
+                }
+
+                const collateralValue = loan.collateralAmount * prices[loan.collateralType];
+                const interestBreakdown = calculateInterestBreakdown(loan);
+                const totalLoanAmount = loan.loanAmount + interestBreakdown.total - loan.interestPaid;
+                
+                // NEW: Collateralization based on ORIGINAL LOAN ONLY (ignore interest)
+                const currentCollateralizationRatio = collateralValue > 0 
+                    ? (collateralValue / loan.loanAmount) * 100 
+                    : 0;
+                
+                const isAtRisk = currentCollateralizationRatio <= loan.marginCallThreshold;
+                
+                // Calculate margin call price based on original loan only
+                const marginCallPrice = loan.collateralAmount > 0 
+                    ? (loan.loanAmount * loan.marginCallThreshold) / (loan.collateralAmount * 100)
+                    : 0;
+                
+                // Required top-up to restore to original ratio (based on original loan)
+                const requiredCollateralValue = loan.loanAmount * (loan.originalCollateralRatio / 100);
+                const requiredTopUpToOriginal = Math.max(0, (requiredCollateralValue - collateralValue) / prices[loan.collateralType]);
+                
+                return { 
+                    collateralValue, 
+                    totalLoanAmount,
+                    currentCollateralizationRatio, 
+                    isAtRisk,
+                    requiredTopUp: requiredTopUpToOriginal,
+                    interestAccrued: interestBreakdown.total,
+                    marginCallPrice,
+                    requiredTopUpToOriginal,
+                    interestBreakdown
+                };
+            };
+
+            // Send Telegram alert with 30-minute repeat logic (via Vercel backend)
+            const sendTelegramAlert = async (loan, metrics) => {
+                if (!config.telegramBotToken || !config.telegramChatId) return;
+
+                const now = new Date();
+                const lastAlert = loan.lastAlertTime ? new Date(loan.lastAlertTime) : null;
+                
+                // Check if this is first alert OR 30 minutes have passed since last alert
+                const thirtyMinutesAgo = new Date(now.getTime() - 30 * 60 * 1000);
+                const shouldSendAlert = !lastAlert || lastAlert < thirtyMinutesAgo;
+                
+                if (!shouldSendAlert) {
+                    console.log(`Skipping alert for ${loan.id} - sent within last 30 minutes`);
+                    return;
+                }
+
+                try {
+                    const currentTime = now.toLocaleString('en-US', { 
+                        timeZone: 'UTC',
+                        dateStyle: 'medium',
+                        timeStyle: 'long'
+                    });
+
+                    // Create Telegram message with HTML formatting
+                    const message = `🚨 <b>MARGIN CALL REQUIRED</b> 🚨
+
+<b>Loan ID:</b> ${loan.id}
+<b>Counterparty:</b> ${loan.counterparty}
+
+<b>Loan Amount:</b> $${metrics.totalLoanAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} ${loan.underlying}
+<b>Loan Period:</b> ${loan.startDate} → ${loan.maturityDate}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Current ${loan.collateralType} Price:</b> $${prices[loan.collateralType].toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+<i>As of: ${currentTime}</i>
+
+<b>Collateral Value:</b> $${metrics.collateralValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+
+<b>Current Collateralization:</b> ${metrics.currentCollateralizationRatio.toFixed(2)}%
+<b>Margin Call Threshold:</b> ${loan.marginCallThreshold}%
+
+━━━━━━━━━━━━━━━━━━━━
+
+🔺 <b>REQUIRED ACTION:</b>
+Top up <b>${metrics.requiredTopUpToOriginal.toFixed(8)} ${loan.collateralType}</b>
+to restore to original ${loan.originalCollateralRatio}% collateral level
+
+<i>Alert will repeat every 30 minutes until collateral is topped up or loan status changes.</i>`;
+
+                    // Send via Vercel backend API
+                    const apiUrl = '/api/send-telegram';
+                    
+                    console.log('Sending Telegram alert via Vercel API...');
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            botToken: config.telegramBotToken,
+                            chatId: config.telegramChatId,
+                            message: message
+                        })
+                    });
+
+                    const responseData = await response.json();
+
+                    if (!responseData.success) {
+                        throw new Error(responseData.error || 'Failed to send Telegram notification');
+                    }
+
+                    // Update lastAlertTime in the loan
+                    const updatedLoan = { ...loan, lastAlertTime: now.toISOString() };
+                    const rowIndex = loans.findIndex(l => l.id === loan.id) + 2;
+                    
+                    if (config.scriptUrl) {
+                        await updateInSheets('Loans', rowIndex, [
+                            updatedLoan.id,
+                            updatedLoan.counterparty,
+                            updatedLoan.loanAmount,
+                            updatedLoan.underlying,
+                            updatedLoan.collateralAmount,
+                            updatedLoan.collateralType,
+                            updatedLoan.interestRate,
+                            updatedLoan.interestAccrued,
+                            updatedLoan.interestPaid,
+                            updatedLoan.tenor,
+                            updatedLoan.startDate,
+                            updatedLoan.maturityDate,
+                            updatedLoan.marginCallThreshold,
+                            updatedLoan.originalCollateralRatio,
+                            updatedLoan.status,
+                            updatedLoan.createdAt,
+                            updatedLoan.lastAlertTime
+                        ]);
+                    }
+
+                    console.log(`✅ Telegram alert sent for ${loan.id}`);
+                } catch (error) {
+                    console.error('Error sending Telegram alert:', error);
+                }
+            };
+
+            // Check for margin calls
+            useEffect(() => {
+                if (!prices.BTC || !prices.ETH || loans.length === 0) return;
+
+                loans.forEach(loan => {
+                    if (loan.status === 'Active') {
+                        const metrics = calculateMetrics(loan);
+                        if (metrics.isAtRisk) {
+                            sendTelegramAlert(loan, metrics);
+                        }
+                    }
+                });
+            }, [prices, loans]);
+
+            // Auto-sync every 30 seconds
+            useEffect(() => {
+                if (config.scriptUrl) {
+                    fetchFromSheets();
+                    const interval = setInterval(fetchFromSheets, 30000);
+                    return () => clearInterval(interval);
+                }
+            }, [config.scriptUrl]);
+
+            // Add new loan
+            const addLoan = async (loanData) => {
+                // Generate new format Loan ID
+                const loanId = generateLoanId(loanData.counterparty, loans);
+                const now = new Date().toISOString();
+                
+                // Auto-calculate tenor
+                const tenor = calculateTenor(loanData.startDate, loanData.maturityDate);
+                
+                const values = [
+                    loanId,
+                    loanData.counterparty,
+                    loanData.loanAmount,
+                    loanData.underlying,
+                    loanData.collateralAmount,
+                    loanData.collateralType,
+                    loanData.interestRate,
+                    0, // interestAccrued
+                    0, // interestPaid
+                    tenor,
+                    loanData.startDate,
+                    loanData.maturityDate,
+                    loanData.marginCallThreshold,
+                    loanData.originalCollateralRatio,
+                    'Active',
+                    now,
+                    '' // lastAlertTime
+                ];
+
+                const success = await writeToSheets('Loans', values);
+                if (success) {
+                    setShowAddLoan(false);
+                }
+            };
+
+            // Update loan
+            const updateLoan = async (loan) => {
+                const rowIndex = loans.findIndex(l => l.id === loan.id) + 2; // +2 for header row and 0-index
+                
+                // Recalculate tenor when updating
+                const tenor = calculateTenor(loan.startDate, loan.maturityDate);
+                
+                const values = [
+                    loan.id,
+                    loan.counterparty,
+                    loan.loanAmount,
+                    loan.underlying,
+                    loan.collateralAmount,
+                    loan.collateralType,
+                    loan.interestRate,
+                    loan.interestAccrued,
+                    loan.interestPaid,
+                    tenor, // Auto-calculated tenor
+                    loan.startDate,
+                    loan.maturityDate,
+                    loan.marginCallThreshold,
+                    loan.originalCollateralRatio,
+                    loan.status,
+                    loan.createdAt,
+                    loan.lastAlertTime || ''
+                ];
+
+                await updateInSheets('Loans', rowIndex, values);
+                setEditingLoan(null);
+            };
+
+            // Add transaction
+            const addTransaction = async (loanId, type, amount) => {
+                const transactionId = `TXN-${Date.now()}`;
+                const timestamp = new Date().toISOString();
+
+                const values = [
+                    transactionId,
+                    loanId,
+                    type,
+                    amount,
+                    timestamp
+                ];
+
+                const success = await writeToSheets('Transactions', values);
+
+                if (success) {
+                    // Update loan based on transaction type
+                    const loan = loans.find(l => l.id === loanId);
+                    if (loan) {
+                        const updatedLoan = { ...loan };
+                        
+                        if (type === 'Collateral Top-up') {
+                            updatedLoan.collateralAmount += parseFloat(amount);
+                        } else if (type === 'Loan Repayment') {
+                            updatedLoan.loanAmount -= parseFloat(amount);
+                            if (updatedLoan.loanAmount <= 0) {
+                                updatedLoan.status = 'Repaid';
+                            }
+                        } else if (type === 'Interest Payment') {
+                            updatedLoan.interestPaid += parseFloat(amount);
+                        }
+
+                        await updateLoan(updatedLoan);
+                    }
+
+                    setShowAddTransaction(null);
+                }
+            };
+
+            // Sort and filter loans
+            const getSortedAndFilteredLoans = () => {
+                let filtered = [...loans];
+                
+                // Apply status filter
+                if (filterStatus !== 'all') {
+                    if (filterStatus === 'active') {
+                        filtered = filtered.filter(loan => loan.status === 'Active');
+                    } else if (filterStatus === 'margin-called') {
+                        filtered = filtered.filter(loan => {
+                            const metrics = calculateMetrics(loan);
+                            return metrics.isAtRisk && loan.status === 'Active';
+                        });
+                    } else if (filterStatus === 'repaid') {
+                        filtered = filtered.filter(loan => loan.status === 'Repaid');
+                    }
+                }
+                
+                // Apply sorting
+                if (sortBy !== 'default') {
+                    filtered.sort((a, b) => {
+                        let compareValue = 0;
+                        
+                        if (sortBy === 'margin-call-price') {
+                            const metricsA = calculateMetrics(a);
+                            const metricsB = calculateMetrics(b);
+                            compareValue = metricsB.marginCallPrice - metricsA.marginCallPrice;
+                        } else if (sortBy === 'maturity-date') {
+                            const dateA = new Date(a.maturityDate);
+                            const dateB = new Date(b.maturityDate);
+                            compareValue = dateB - dateA;
+                        } else if (sortBy === 'counterparty') {
+                            compareValue = a.counterparty.localeCompare(b.counterparty);
+                        } else if (sortBy === 'loan-amount') {
+                            compareValue = b.loanAmount - a.loanAmount;
+                        }
+                        
+                        return sortOrder === 'desc' ? compareValue : -compareValue;
+                    });
+                }
+                
+                return filtered;
+            };
+
+            // Export to CSV
+            const exportToCSV = () => {
+                const headers = [
+                    'Loan ID', 'Counterparty', 'Loan Amount', 'Underlying', 'Collateral Amount', 
+                    'Collateral Type', 'Interest Rate (%)', 'Interest Accrued', 'Interest Paid', 
+                    'Tenor (days)', 'Start Date', 'Maturity Date', 'Margin Call Threshold (%)', 
+                    'Status', 'Current Collateralization (%)', 'Collateral Value ($)', 
+                    'Total Loan Amount ($)', 'Required Top-Up'
+                ];
+
+                const rows = loans.map(loan => {
+                    const metrics = calculateMetrics(loan);
+                    return [
+                        loan.id,
+                        loan.counterparty,
+                        loan.loanAmount,
+                        loan.underlying,
+                        loan.collateralAmount,
+                        loan.collateralType,
+                        loan.interestRate,
+                        metrics.interestAccrued.toFixed(2),
+                        loan.interestPaid,
+                        loan.tenor,
+                        loan.startDate,
+                        loan.maturityDate,
+                        loan.marginCallThreshold,
+                        loan.status,
+                        metrics.currentCollateralizationRatio.toFixed(2),
+                        metrics.collateralValue.toFixed(2),
+                        metrics.totalLoanAmount.toFixed(2),
+                        metrics.requiredTopUp.toFixed(8)
+                    ];
+                });
+
+                const csvContent = [
+                    headers.join(','),
+                    ...rows.map(row => row.join(','))
+                ].join('\n');
+
+                const blob = new Blob([csvContent], { type: 'text/csv' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `crypto-loans-${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-4 md:p-6">
+                    <div className="max-w-7xl mx-auto">
+                        {/* Header */}
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                            <div>
+                                <h1 className="text-3xl md:text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                                    Crypto Prime Broker
+                                </h1>
+                                <p className="text-slate-400">Securitized Loan Management System</p>
+                                {lastSync && (
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Last synced: {lastSync.toLocaleTimeString()}
+                                    </p>
+                                )}
+                            </div>
+                            <div className="flex gap-3 flex-wrap">
+                                <button
+                                    onClick={fetchFromSheets}
+                                    disabled={loading}
+                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    <Icons.RefreshCw className={loading ? 'animate-spin' : ''} />
+                                    Sync
+                                </button>
+                                <button
+                                    onClick={exportToCSV}
+                                    disabled={loans.length === 0}
+                                    className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    <Icons.Download />
+                                    Export CSV
+                                </button>
+                                <button
+                                    onClick={() => setShowSettings(!showSettings)}
+                                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors flex items-center gap-2"
+                                >
+                                    <Icons.Settings />
+                                    Settings
+                                </button>
+                                <button
+                                    onClick={() => setShowAddLoan(true)}
+                                    className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 rounded-lg font-semibold flex items-center gap-2 transition-all"
+                                >
+                                    <Icons.Plus />
+                                    New Loan
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Settings Panel */}
+                        {showSettings && (
+                            <div className="bg-slate-800 rounded-xl p-6 mb-6 border border-slate-700">
+                                <h3 className="text-xl font-semibold mb-4">Configuration</h3>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">Google Apps Script URL</label>
+                                        <input
+                                            type="text"
+                                            value={config.scriptUrl}
+                                            onChange={(e) => setConfig({...config, scriptUrl: e.target.value})}
+                                            placeholder="https://script.google.com/macros/s/.../exec"
+                                            className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                        />
+                                        <p className="text-xs text-slate-400 mt-1">
+                                            For Google Sheets sync only (optional for alerts)
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">Telegram Bot Token</label>
+                                        <input
+                                            type="text"
+                                            value={config.telegramBotToken}
+                                            onChange={(e) => setConfig({...config, telegramBotToken: e.target.value})}
+                                            placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+                                            className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                        />
+                                        <p className="text-xs text-slate-400 mt-1">
+                                            Get from @BotFather on Telegram
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium mb-2">Telegram Chat ID</label>
+                                        <input
+                                            type="text"
+                                            value={config.telegramChatId}
+                                            onChange={(e) => setConfig({...config, telegramChatId: e.target.value})}
+                                            placeholder="-1001234567890"
+                                            className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                        />
+                                        <p className="text-xs text-slate-400 mt-1">
+                                            Your channel or chat ID (includes the minus sign)
+                                        </p>
+                                    </div>
+                                    <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-4">
+                                        <p className="text-sm text-blue-300 mb-2">✅ Telegram Setup (Simplified!):</p>
+                                        <ol className="text-xs text-slate-300 space-y-1 list-decimal list-inside">
+                                            <li>Message @BotFather → /newbot → Get bot token</li>
+                                            <li>Create a Telegram channel for alerts</li>
+                                            <li>Add your bot as channel administrator</li>
+                                            <li>Send a message in channel</li>
+                                            <li>Visit: api.telegram.org/botTOKEN/getUpdates</li>
+                                            <li>Find "chat":{"{"}"id":-1001234567890} and copy the ID</li>
+                                        </ol>
+                                        <p className="text-xs text-green-300 mt-2">
+                                            ℹ️ Alerts now work without Apps Script authorization!
+                                        </p>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <button
+                                            onClick={() => {
+                                                saveConfig(config);
+                                                setShowSettings(false);
+                                            }}
+                                            className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg"
+                                        >
+                                            Save Configuration
+                                        </button>
+                                        <button
+                                            onClick={() => setShowSettings(false)}
+                                            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg"
+                                        >
+                                            Cancel
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Price Ticker */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                            <div className="bg-gradient-to-br from-orange-500/20 to-orange-600/20 border border-orange-500/30 rounded-xl p-4">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-sm text-slate-400">Bitcoin</p>
+                                        <p className="text-2xl md:text-3xl font-bold">${prices.BTC.toLocaleString()}</p>
+                                    </div>
+                                    <div className="text-orange-400 text-4xl">₿</div>
+                                </div>
+                            </div>
+                            <div className="bg-gradient-to-br from-purple-500/20 to-purple-600/20 border border-purple-500/30 rounded-xl p-4">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-sm text-slate-400">Ethereum</p>
+                                        <p className="text-2xl md:text-3xl font-bold">${prices.ETH.toLocaleString()}</p>
+                                    </div>
+                                    <div className="text-purple-400 text-4xl">Ξ</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Loans Dashboard */}
+                        {!config.scriptUrl ? (
+                            <div className="bg-slate-800/50 rounded-xl p-12 text-center border border-slate-700">
+                                <div className="w-12 h-12 mx-auto mb-4">
+                                    <Icons.Settings />
+                                </div>
+                                <p className="text-slate-400 text-lg mb-4">Please configure your settings first</p>
+                                <button
+                                    onClick={() => setShowSettings(true)}
+                                    className="px-6 py-3 bg-cyan-600 hover:bg-cyan-700 rounded-lg font-semibold"
+                                >
+                                    Open Settings
+                                </button>
+                            </div>
+                        ) : loans.length === 0 ? (
+                            <div className="bg-slate-800/50 rounded-xl p-12 text-center border border-slate-700">
+                                <div className="w-12 h-12 mx-auto mb-4">
+                                    <Icons.DollarSign />
+                                </div>
+                                <p className="text-slate-400 text-lg">No active loans. Create your first loan to get started.</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {loans.map(loan => {
+                                    const metrics = calculateMetrics(loan);
+                                    const loanTransactions = transactions.filter(t => t.loanId === loan.id);
+                                    
+                                    return (
+                                        <div
+                                            key={loan.id}
+                                            className={`bg-slate-800 rounded-xl p-4 md:p-6 border transition-all ${
+                                                metrics.isAtRisk && loan.status === 'Active'
+                                                    ? 'border-red-500/50 shadow-lg shadow-red-500/20'
+                                                    : 'border-slate-700 hover:border-slate-600'
+                                            }`}
+                                        >
+                                            <div className="flex flex-col md:flex-row justify-between items-start mb-4 gap-3">
+                                                <div>
+                                                    <div className="flex items-center gap-3 flex-wrap">
+                                                        <h3 className="text-xl md:text-2xl font-bold">{loan.counterparty}</h3>
+                                                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                                                            loan.status === 'Active' ? 'bg-green-500/20 text-green-400' :
+                                                            loan.status === 'Margin Called' ? 'bg-red-500/20 text-red-400' :
+                                                            loan.status === 'Defaulted' ? 'bg-orange-500/20 text-orange-400' :
+                                                            'bg-blue-500/20 text-blue-400'
+                                                        }`}>
+                                                            {loan.status}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-slate-400 text-sm mt-1">
+                                                        Loan ID: {loan.id}
+                                                    </p>
+                                                    <p className="text-slate-400 text-xs">
+                                                        {loan.startDate} - {loan.maturityDate} ({loan.tenor} days)
+                                                    </p>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    {metrics.isAtRisk && loan.status === 'Active' && (
+                                                        <div className="flex items-center gap-2 px-3 py-1 bg-red-500/20 border border-red-500/50 rounded-full">
+                                                            <Icons.AlertTriangle />
+                                                            <span className="text-red-400 font-semibold text-sm">Margin Call</span>
+                                                        </div>
+                                                    )}
+                                                    <button
+                                                        onClick={() => setEditingLoan(loan)}
+                                                        className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
+                                                    >
+                                                        <Icons.Edit2 />
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 md:gap-4 mb-4">
+                                                <div className="bg-slate-900/50 rounded-lg p-3">
+                                                    <p className="text-slate-400 text-xs mb-1">Original Loan</p>
+                                                    <p className="text-lg md:text-xl font-bold">${loan.loanAmount.toLocaleString()}</p>
+                                                    <p className="text-slate-400 text-xs">{loan.underlying}</p>
+                                                </div>
+                                                <div className="bg-slate-900/50 rounded-lg p-3">
+                                                    <p className="text-slate-400 text-xs mb-1">Interest Accrued</p>
+                                                    <p className="text-lg md:text-xl font-bold text-yellow-400">
+                                                        ${metrics.interestAccrued.toFixed(2)}
+                                                    </p>
+                                                    <p className="text-slate-400 text-xs">{loan.interestRate}% APR</p>
+                                                </div>
+                                                <div className="bg-slate-900/50 rounded-lg p-3">
+                                                    <p className="text-slate-400 text-xs mb-1">Total Owed</p>
+                                                    <p className="text-lg md:text-xl font-bold text-cyan-400">
+                                                        ${metrics.totalLoanAmount.toFixed(2)}
+                                                    </p>
+                                                    <p className="text-slate-400 text-xs">Paid: ${loan.interestPaid.toFixed(2)}</p>
+                                                </div>
+                                                <div className="bg-slate-900/50 rounded-lg p-3">
+                                                    <p className="text-slate-400 text-xs mb-1">Collateral</p>
+                                                    <p className="text-lg md:text-xl font-bold">
+                                                        {loan.collateralAmount.toFixed(4)} {loan.collateralType}
+                                                    </p>
+                                                    <p className="text-slate-400 text-xs">
+                                                        ≈ ${metrics.collateralValue.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                                    </p>
+                                                </div>
+                                                <div className="bg-slate-900/50 rounded-lg p-3">
+                                                    <p className="text-slate-400 text-xs mb-1">Collateralization</p>
+                                                    <p className={`text-lg md:text-xl font-bold ${
+                                                        metrics.isAtRisk ? 'text-red-400' : 'text-green-400'
+                                                    }`}>
+                                                        {metrics.currentCollateralizationRatio.toFixed(2)}%
+                                                    </p>
+                                                    <p className="text-slate-400 text-xs">
+                                                        Target: {loan.originalCollateralRatio}%
+                                                    </p>
+                                                </div>
+                                                <div className="bg-slate-900/50 rounded-lg p-3">
+                                                    <p className="text-slate-400 text-xs mb-1">Margin Call Price</p>
+                                                    <p className="text-lg md:text-xl font-bold text-orange-400">
+                                                        ${metrics.marginCallPrice.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                    </p>
+                                                    <p className="text-slate-400 text-xs">
+                                                        @ {loan.marginCallThreshold}%
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            {metrics.isAtRisk && loan.status === 'Active' && (
+                                                <div className="bg-red-900/20 border border-red-500/30 rounded-lg p-3 mb-4">
+                                                    <p className="text-red-400 font-semibold text-sm mb-1">
+                                                        ⚠️ Required Top-Up: {metrics.requiredTopUpToOriginal.toFixed(8)} {loan.collateralType}
+                                                    </p>
+                                                    <p className="text-slate-400 text-xs">
+                                                        To restore to original {loan.originalCollateralRatio}% collateral level
+                                                    </p>
+                                                </div>
+                                            )}
+
+                                            <div className="flex gap-2 md:gap-3 flex-wrap">
+                                                <button
+                                                    onClick={() => setShowAddTransaction({ loanId: loan.id, type: 'Collateral Top-up' })}
+                                                    className="flex-1 min-w-[140px] px-3 md:px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors text-sm"
+                                                >
+                                                    <Icons.Plus /> Add Collateral
+                                                </button>
+                                                <button
+                                                    onClick={() => setShowAddTransaction({ loanId: loan.id, type: 'Loan Repayment' })}
+                                                    className="flex-1 min-w-[140px] px-3 md:px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors text-sm"
+                                                >
+                                                    <Icons.DollarSign /> Repayment
+                                                </button>
+                                                <button
+                                                    onClick={() => setShowAddTransaction({ loanId: loan.id, type: 'Interest Payment' })}
+                                                    className="flex-1 min-w-[140px] px-3 md:px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors text-sm"
+                                                >
+                                                    <Icons.DollarSign /> Pay Interest
+                                                </button>
+                                            </div>
+
+                                            {/* Recent Transactions */}
+                                            {loanTransactions.length > 0 && (
+                                                <div className="mt-4 pt-4 border-t border-slate-700">
+                                                    <h4 className="text-sm font-semibold text-slate-400 mb-2">Recent Transactions</h4>
+                                                    <div className="space-y-1">
+                                                        {loanTransactions.slice(-3).reverse().map((txn) => (
+                                                            <div key={txn.id} className="text-xs text-slate-400 flex justify-between">
+                                                                <span>{txn.type}: {txn.amount}</span>
+                                                                <span>{new Date(txn.timestamp).toLocaleString()}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* Add Loan Modal */}
+                        {showAddLoan && (
+                            <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 overflow-y-auto">
+                                <div className="bg-slate-800 rounded-xl p-6 max-w-2xl w-full border border-slate-700 my-8">
+                                    <h2 className="text-2xl font-bold mb-4">Create New Loan</h2>
+                                    <form onSubmit={(e) => {
+                                        e.preventDefault();
+                                        const formData = new FormData(e.target);
+                                        addLoan({
+                                            counterparty: formData.get('counterparty'),
+                                            loanAmount: parseFloat(formData.get('loanAmount')),
+                                            underlying: formData.get('underlying'),
+                                            collateralAmount: parseFloat(formData.get('collateralAmount')),
+                                            collateralType: formData.get('collateralType'),
+                                            interestRate: parseFloat(formData.get('interestRate')),
+                                            startDate: formData.get('startDate'),
+                                            maturityDate: formData.get('maturityDate'),
+                                            marginCallThreshold: parseFloat(formData.get('marginCallThreshold')),
+                                            originalCollateralRatio: parseFloat(formData.get('originalCollateralRatio'))
+                                        });
+                                    }}>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div className="md:col-span-2">
+                                                <label className="block text-sm font-medium mb-2">Counterparty Name</label>
+                                                <input
+                                                    type="text"
+                                                    name="counterparty"
+                                                    required
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">Loan Amount</label>
+                                                <input
+                                                    type="number"
+                                                    name="loanAmount"
+                                                    required
+                                                    step="0.01"
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">Stablecoin</label>
+                                                <select
+                                                    name="underlying"
+                                                    required
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                >
+                                                    <option value="USDC">USDC</option>
+                                                    <option value="USDT">USDT</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">Collateral Amount</label>
+                                                <input
+                                                    type="number"
+                                                    name="collateralAmount"
+                                                    required
+                                                    step="0.00000001"
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">Collateral Type</label>
+                                                <select
+                                                    name="collateralType"
+                                                    required
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                >
+                                                    <option value="BTC">BTC</option>
+                                                    <option value="ETH">ETH</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">Interest Rate (% APR)</label>
+                                                <input
+                                                    type="number"
+                                                    name="interestRate"
+                                                    required
+                                                    step="0.01"
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">Start Date</label>
+                                                <input
+                                                    type="date"
+                                                    name="startDate"
+                                                    required
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">Maturity Date</label>
+                                                <input
+                                                    type="date"
+                                                    name="maturityDate"
+                                                    required
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2 bg-blue-900/20 border border-blue-500/30 rounded-lg p-3">
+                                                <p className="text-sm text-blue-300">
+                                                    ℹ️ Tenor will be automatically calculated from Start Date to Maturity Date
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">Margin Call Threshold (%)</label>
+                                                <input
+                                                    type="number"
+                                                    name="marginCallThreshold"
+                                                    required
+                                                    step="0.01"
+                                                    defaultValue="120"
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                />
+                                                <p className="text-xs text-slate-400 mt-1">Alert when collateralization falls to this %</p>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium mb-2">Original Collateral Ratio (%)</label>
+                                                <input
+                                                    type="number"
+                                                    name="originalCollateralRatio"
+                                                    required
+                                                    step="0.01"
+                                                    defaultValue="130"
+                                                    className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                                />
+                                                <p className="text-xs text-slate-400 mt-1">Target level to restore during margin calls</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-3 mt-6">
+                                            <button
+                                                type="submit"
+                                                className="flex-1 px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 rounded-lg font-semibold"
+                                            >
+                                                Create Loan
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowAddLoan(false)}
+                                                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Transaction Modal */}
+                        {showAddTransaction && (
+                            <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+                                <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full border border-slate-700">
+                                    <h2 className="text-2xl font-bold mb-4">{showAddTransaction.type}</h2>
+                                    <form onSubmit={(e) => {
+                                        e.preventDefault();
+                                        const formData = new FormData(e.target);
+                                        addTransaction(
+                                            showAddTransaction.loanId,
+                                            showAddTransaction.type,
+                                            parseFloat(formData.get('amount'))
+                                        );
+                                    }}>
+                                        <div className="mb-4">
+                                            <label className="block text-sm font-medium mb-2">Amount</label>
+                                            <input
+                                                type="number"
+                                                name="amount"
+                                                required
+                                                step="0.00000001"
+                                                placeholder="Enter amount"
+                                                className="w-full px-4 py-2 bg-slate-700 rounded-lg border border-slate-600 focus:border-cyan-500 focus:outline-none text-white"
+                                            />
+                                        </div>
+                                        <div className="flex gap-3">
+                                            <button
+                                                type="submit"
+                                                className="flex-1 px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 rounded-lg font-semibold"
+                                            >
+                                                Submit
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowAddTransaction(null)}
+                                                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<LoanManager />, document.getElementById('root'));
+    </script>
+</body>
+</html>
