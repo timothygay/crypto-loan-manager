@@ -1,0 +1,1387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Prime Broker</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'DM Sans', sans-serif; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .tab-active { border-bottom: 2px solid #22d3ee; color: #22d3ee; }
+        .tab-inactive { border-bottom: 2px solid transparent; color: #94a3b8; }
+        .tab-inactive:hover { color: #cbd5e1; border-bottom-color: #475569; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        input[type="number"]::-webkit-inner-spin-button { opacity: 0.5; }
+        .badge-active { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
+        .badge-matured { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+        .badge-invested { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+        .badge-repaid { background: rgba(148,163,184,0.15); color: #94a3b8; border: 1px solid rgba(148,163,184,0.3); }
+        .badge-expiring { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+        .trigger-row { background: rgba(239,68,68,0.07); }
+        .card { background: rgba(15,23,42,0.6); border: 1px solid rgba(51,65,85,0.8); border-radius: 12px; }
+        .card-inner { background: rgba(15,23,42,0.8); border: 1px solid rgba(51,65,85,0.5); border-radius: 8px; }
+        .gradient-text { background: linear-gradient(135deg, #38bdf8, #22d3ee, #34d399); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .btn-primary { background: linear-gradient(135deg, #0ea5e9, #06b6d4); transition: all 0.2s; }
+        .btn-primary:hover { background: linear-gradient(135deg, #0284c7, #0891b2); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(6,182,212,0.3); }
+        .btn-secondary { background: rgba(51,65,85,0.8); border: 1px solid rgba(71,85,105,0.8); transition: all 0.2s; }
+        .btn-secondary:hover { background: rgba(71,85,105,0.8); }
+        .spinning { animation: spin 1s linear infinite; }
+        @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        .table-row-hover:hover { background: rgba(51,65,85,0.3); }
+        .drill-back { color: #22d3ee; cursor: pointer; }
+        .drill-back:hover { color: #67e8f9; }
+        .fully-invested-glow { box-shadow: 0 0 20px rgba(245,158,11,0.2); border-color: rgba(245,158,11,0.4) !important; }
+        .expiring-glow { box-shadow: 0 0 16px rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.35) !important; }
+        .trading-desk { background: linear-gradient(135deg, rgba(6,182,212,0.05), rgba(16,185,129,0.03)); border: 1px solid rgba(6,182,212,0.18); border-radius: 12px; }
+        .sell-row { background: rgba(239,68,68,0.05); }
+        .base-row { background: rgba(6,182,212,0.05); }
+    </style>
+</head>
+<body class="bg-slate-950 text-white min-h-screen">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ─── UTILS ────────────────────────────────────────────────────────────────────
+const fmt = (n, d=2) => (n||0).toLocaleString('en-US', {minimumFractionDigits:d, maximumFractionDigits:d});
+const fmtCrypto = (n, d=8) => (n||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:d});
+const fmtDate = (s) => {
+    if (!s) return '';
+    // Normalise: if string looks like ISO "YYYY-MM-DD" use UTC, else parse as-is
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s+'T00:00:00Z') : new Date(s);
+    if (isNaN(d.getTime())) return s; // return raw if unparseable
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${d.getUTCDate()}-${months[d.getUTCMonth()]}-${d.getUTCFullYear()}`;
+};
+const fmtDateTimeSGT = (iso) => {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString('en-SG', {timeZone:'Asia/Singapore',day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
+};
+const daysUntil = (dateStr) => {
+    const today = new Date(); today.setUTCHours(0,0,0,0);
+    const target = new Date(dateStr+'T00:00:00Z');
+    return Math.ceil((target - today) / 86400000);
+};
+const todayUTC = () => new Date().toISOString().split('T')[0];
+// Local calendar date in the user's timezone — used for form defaults so the date
+// matches what the user sees on their calendar (not the UTC date which can be yesterday).
+const todayLocal = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+
+// Convert any date format from Google Sheets to YYYY-MM-DD string.
+// Sheets returns dates in 3 possible forms:
+//   1. Already ISO: "2026-02-25"  → return as-is
+//   2. US locale string: "2/25/2026" → parse with Date()
+//   3. Serial number: 46872 (days since 30-Dec-1899) → convert via Unix epoch offset
+const normaliseSheetDate = (raw) => {
+    if (!raw && raw !== 0) return '';
+    const s = String(raw).trim();
+    if (!s) return '';
+    // Already ISO YYYY-MM-DD — return as-is (no timezone conversion needed)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    // Pure integer: Google Sheets date serial (days since 30-Dec-1899)
+    if (/^\d+$/.test(s)) {
+        const serial = parseInt(s, 10);
+        const unixDays = serial > 60 ? serial - 25569 : serial - 25568;
+        const d = new Date(unixDays * 86400000);
+        if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+        return '';
+    }
+    // US locale "M/D/YYYY" — parse parts to avoid local-timezone shift
+    const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (us) {
+        const [,m,d,y] = us;
+        return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    }
+    // DD/MM/YYYY (some locales)
+    const eu = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (eu && parseInt(eu[1]) > 12) { // day > 12 means it can't be month
+        const [,d,m,y] = eu;
+        return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    }
+    // ISO with time component like "2026-02-17T00:00:00.000Z" — take date part only
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s.slice(0,10);
+    // Last resort: parse with Date in UTC by appending T00:00:00Z
+    const d = new Date(s.includes('T') ? s : s + 'T00:00:00Z');
+    if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+    return '';
+};
+
+// ─── ICONS ────────────────────────────────────────────────────────────────────
+const Icon = {
+    Plus:         ()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5v14"/></svg>,
+    Edit:         ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>,
+    Trash:        ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>,
+    Refresh:      ({spin})=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={spin?'spinning':''}><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>,
+    Download:     ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>,
+    Upload:       ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>,
+    Settings:     ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 1 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg>,
+    ChevLeft:     ()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>,
+    ChevRight:    ()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m9 18 6-6-6-6"/></svg>,
+    Alert:        ()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>,
+    Lock:         ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+    X:            ()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>,
+    Check:        ()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6 9 17l-5-5"/></svg>,
+    TrendDown:    ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/></svg>,
+    Calendar:     ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>,
+    Desk:         ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>,
+};
+
+// ─── FORM PRIMITIVES ──────────────────────────────────────────────────────────
+const Field = ({label, hint, children}) => (
+    <div>
+        <label className="block text-xs font-medium text-slate-400 mb-1.5">{label}</label>
+        {children}
+        {hint && <p className="text-xs text-slate-500 mt-1">{hint}</p>}
+    </div>
+);
+const Input = (props) => (
+    <input {...props} className={`w-full px-3 py-2 bg-slate-800 rounded-lg border border-slate-700 focus:border-cyan-500 focus:outline-none text-white text-sm mono ${props.className||''}`}/>
+);
+const Select = ({children, ...props}) => (
+    <select {...props} className="w-full px-3 py-2 bg-slate-800 rounded-lg border border-slate-700 focus:border-cyan-500 focus:outline-none text-white text-sm">
+        {children}
+    </select>
+);
+const Modal = ({title, children, onClose, wide}) => (
+    <div className="fixed inset-0 bg-black/80 flex items-start justify-center p-4 z-50 overflow-y-auto">
+        <div className={`bg-slate-900 border border-slate-700 rounded-xl p-6 ${wide?'max-w-3xl':'max-w-md'} w-full my-8`}>
+            <div className="flex justify-between items-center mb-5">
+                <h2 className="text-lg font-bold">{title}</h2>
+                <button onClick={onClose} className="p-1.5 rounded-lg btn-secondary"><Icon.X/></button>
+            </div>
+            {children}
+        </div>
+    </div>
+);
+
+// ─── BYBIT API ────────────────────────────────────────────────────────────────
+// Live spot price via tickers endpoint (used for top-of-page ticker, every 60s)
+const fetchBybitLive = async (symbol) => {
+    const r = await fetch(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${symbol}`);
+    const d = await r.json();
+    if (d.retCode===0 && d.result?.list?.length>0) return parseFloat(d.result.list[0].lastPrice);
+    throw new Error('No ticker data');
+};
+
+// 08:00 UTC open price via hourly kline (= 16:00 SGT fixing price).
+// Bybit V5 kline: ascending=false (default), results DESCENDING (newest first).
+// Each candle: [startTimeMs(string), open, high, low, close, volume, turnover]
+//
+// Reliable strategy:
+//   - Request 3 candles in a 3-hour window centred on T08:00 UTC
+//   - window: T06:00Z → T10:00Z (start is inclusive, end is exclusive in Bybit V5)
+//   - Pick the candle whose startTime is closest to T08:00Z
+//   - Only accept if within ±30 min of target (1800000ms) — reject otherwise
+//   - Never silently use a wrong candle (a wrong price corrupts the whole ledger)
+const fetchBybitFixing = async (symbol, dateStr) => {
+    const target = new Date(`${dateStr}T08:00:00Z`).getTime(); // ms
+    // Wide window: T06:00→T10:00 UTC, ask for up to 5 candles
+    const start = target - 2 * 3600000; // T06:00 UTC
+    const end   = target + 2 * 3600000; // T10:00 UTC  (exclusive)
+    const url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${symbol}&interval=60&start=${start}&end=${end}&limit=5`;
+    const r = await fetch(url);
+    const d = await r.json();
+    if (d.retCode !== 0) {
+        throw new Error(`Bybit kline API error: ${d.retMsg} (${symbol} ${dateStr})`);
+    }
+    const list = d.result?.list || [];
+    if (!list.length) {
+        throw new Error(`Bybit returned no candles for ${symbol} on ${dateStr}`);
+    }
+    // Find candle closest to 08:00 UTC
+    let best = null, bestDiff = Infinity;
+    for (const c of list) {
+        const ts = parseInt(c[0], 10);
+        const diff = Math.abs(ts - target);
+        if (diff < bestDiff) { bestDiff = diff; best = c; }
+    }
+    // Only accept if within ±30 minutes of 08:00 UTC
+    if (!best || bestDiff > 1800000) {
+        const got = list.map(c => new Date(parseInt(c[0])).toISOString()).join(', ');
+        throw new Error(`No candle within 30min of 08:00 UTC for ${symbol} ${dateStr}. Got: ${got}`);
+    }
+    const price = parseFloat(best[1]); // open price
+    if (!price || price <= 0) throw new Error(`Bad price ${price} for ${symbol} ${dateStr}`);
+    return price;
+};
+
+// Backfill: walk every calendar day from fromDate up to (not including) today,
+// fetch both BTC and ETH 08:00 UTC opens from Bybit for missing entries.
+const runBackfill = async (fromDate, toDate, existingHistory, onProgress) => {
+    const history = { ...existingHistory };
+    // Stop at yesterday strictly — today's fixing runs via fetchTodayPrices at 16:00 SGT.
+    // yesterdayUTC: today minus 1 day in YYYY-MM-DD format.
+    const todayStr = todayUTC();
+    const yesterdayMs = new Date(todayStr+'T00:00:00Z').getTime() - 86400000;
+    const yesterdayStr = new Date(yesterdayMs).toISOString().split('T')[0];
+    // Don't go past maturity either
+    const stopStr = toDate < yesterdayStr ? toDate : yesterdayStr;
+    // Collect dates needing a fetch (missing or no valid price for both symbols)
+    const dates = [];
+    let d = new Date(fromDate+'T00:00:00Z');
+    const stopMs = new Date(stopStr+'T00:00:00Z').getTime();
+    while (d.getTime() <= stopMs) {
+        const ds = d.toISOString().split('T')[0];
+        const e = existingHistory[ds];
+        if (!e || (!e.BTC && !e.ETH)) dates.push(ds);
+        d.setUTCDate(d.getUTCDate()+1);
+    }
+    for (let i=0; i<dates.length; i++) {
+        const ds = dates[i];
+        const [btc, eth] = await Promise.allSettled([
+            fetchBybitFixing('BTCUSDT', ds),
+            fetchBybitFixing('ETHUSDT', ds),
+        ]);
+        history[ds] = {
+            BTC: btc.status==='fulfilled' ? btc.value : (existingHistory[ds]?.BTC||null),
+            ETH: eth.status==='fulfilled' ? eth.value : (existingHistory[ds]?.ETH||null),
+            fetchedAt: new Date().toISOString(),
+        };
+        if (onProgress) onProgress(i+1, dates.length);
+        await new Promise(r => setTimeout(r, 150)); // gentle rate limiting
+    }
+    return { history, datesProcessed: dates.length };
+};
+
+// ─── PRICE TICKER ─────────────────────────────────────────────────────────────
+const PriceTicker = ({prices, lastUpdate}) => (
+    <div className="grid grid-cols-2 gap-3 mb-6">
+        {[['BTC','₿','orange'],['ETH','Ξ','purple']].map(([sym,icon,c])=>(
+            <div key={sym} className={`card p-4 bg-gradient-to-br from-${c}-500/10 to-${c}-600/5 border-${c}-500/20`}>
+                <div className="flex items-center justify-between">
+                    <div>
+                        <p className="text-xs text-slate-400">{sym==='BTC'?'Bitcoin':'Ethereum'} · Bybit Live</p>
+                        <p className="text-2xl font-bold mono">${fmt(prices[sym],0)}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">{lastUpdate?`${lastUpdate.toLocaleTimeString()} SGT`:'Connecting…'}</p>
+                    </div>
+                    <div className={`text-3xl text-${c}-400 opacity-60`}>{icon}</div>
+                </div>
+            </div>
+        ))}
+    </div>
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOAN MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+const LoanModule = ({prices}) => {
+    const [loans, setLoans] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_loans')||'[]');}catch{return[];} });
+    const [transactions, setTransactions] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_transactions')||'[]');}catch{return[];} });
+    const [config, setConfig] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_loan_config')||'{}');}catch{return{};} });
+    const [showAdd, setShowAdd] = useState(false);
+    const [editingLoan, setEditingLoan] = useState(null);
+    const [showSettings, setShowSettings] = useState(false);
+    const [showTxn, setShowTxn] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [filterStatus, setFilterStatus] = useState('all');
+    useEffect(()=>{ localStorage.setItem('cpb_loans',JSON.stringify(loans)); },[loans]);
+    useEffect(()=>{ localStorage.setItem('cpb_transactions',JSON.stringify(transactions)); },[transactions]);
+    useEffect(()=>{ localStorage.setItem('cpb_loan_config',JSON.stringify(config)); },[config]);
+
+    const calcInterest = (loan) => {
+        if (!loan.startDate) return 0;
+        const start=new Date(loan.startDate), mat=new Date(loan.maturityDate), today=new Date();
+        const end=today<mat?today:mat;
+        return Math.max(0, loan.loanAmount*loan.interestRate/100*Math.floor((end-start)/86400000)/360);
+    };
+    const calcMetrics = (loan) => {
+        const price=prices[loan.collateralType]||0, collVal=loan.collateralAmount*price;
+        const interest=calcInterest(loan), owed=loan.loanAmount+interest-loan.interestPaid;
+        const ratio=collVal>0?(collVal/loan.loanAmount)*100:0;
+        const atRisk=ratio<=loan.marginCallThreshold&&loan.status==='Active';
+        const mcPrice=loan.collateralAmount>0?(loan.loanAmount*loan.marginCallThreshold)/(loan.collateralAmount*100):0;
+        const topUp=price>0?Math.max(0,(loan.loanAmount*(loan.originalCollateralRatio/100)-collVal)/price):0;
+        return {collVal,interest,owed,ratio,atRisk,mcPrice,topUp};
+    };
+    const calcTenor = (s,m)=>!s||!m?0:Math.ceil((new Date(m)-new Date(s))/86400000);
+
+    const fetchSheets = async () => {
+        if (!config.scriptUrl) return;
+        setLoading(true);
+        try {
+            const [lr,tr] = await Promise.all([
+                fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json()),
+                fetch(`${config.scriptUrl}?action=read&sheetName=Transactions`).then(r=>r.json())
+            ]);
+            if (lr.success&&lr.values) setLoans(lr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],counterparty:r[1],loanAmount:+r[2],underlying:r[3],collateralAmount:+r[4],collateralType:r[5],interestRate:+r[6],interestPaid:+r[8],tenor:+r[9],startDate:r[10],maturityDate:r[11],marginCallThreshold:+r[12],originalCollateralRatio:+r[13],status:r[14],createdAt:r[15]})));
+            if (tr.success&&tr.values) setTransactions(tr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],loanId:r[1],type:r[2],amount:+r[3],timestamp:r[4]})));
+        } catch(e){alert('Sync error: '+e.message);}
+        setLoading(false);
+    };
+    useEffect(()=>{ if(config.scriptUrl){fetchSheets();const t=setInterval(fetchSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
+
+    const addLoan = (d)=>{ setLoans(p=>[...p,{...d,id:d.loanId||`LOAN-${Date.now()}`,interestPaid:0,tenor:calcTenor(d.startDate,d.maturityDate),status:'Active',createdAt:new Date().toISOString()}]); setShowAdd(false); };
+    const updateLoan = (loan)=>{ setLoans(p=>p.map(l=>l.id===loan.id?loan:l)); setEditingLoan(null); };
+    const addTxn = (loanId,type,amount)=>{
+        setTransactions(p=>[...p,{id:`TXN-${Date.now()}`,loanId,type,amount:+amount,timestamp:new Date().toISOString()}]);
+        const loan=loans.find(l=>l.id===loanId);
+        if (loan){const u={...loan};if(type==='Collateral Top-up')u.collateralAmount+=+amount;else if(type==='Loan Repayment'){u.loanAmount-=+amount;if(u.loanAmount<=0)u.status='Repaid';}else if(type==='Interest Payment')u.interestPaid+=+amount;updateLoan(u);}
+        setShowTxn(null);
+    };
+    const exportCSV = ()=>{ const rows=loans.map(l=>{const m=calcMetrics(l);return[l.id,l.counterparty,l.loanAmount,l.underlying,l.collateralAmount,l.collateralType,l.interestRate,m.interest.toFixed(2),l.interestPaid,l.tenor,l.startDate,l.maturityDate,l.status,m.ratio.toFixed(2)].join(',');}); const csv=['ID,Counterparty,Loan,Currency,Collateral,CollType,Rate%,IntAccrued,IntPaid,Tenor,Start,Maturity,Status,Ratio%',...rows].join('\n'); const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`loans-${todayUTC()}.csv`;a.click(); };
+    const filtered=loans.filter(l=>filterStatus==='all'||(filterStatus==='active'&&l.status==='Active')||(filterStatus==='matured'&&l.status==='Matured')||(filterStatus==='repaid'&&l.status==='Repaid')||(filterStatus==='at-risk'&&calcMetrics(l).atRisk));
+
+    return (
+        <div>
+            <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
+                <div className="flex gap-2 flex-wrap">
+                    <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5"><option value="all">All</option><option value="active">Active</option><option value="at-risk">At Risk</option><option value="matured">Matured</option><option value="repaid">Repaid</option></Select>
+                    {config.scriptUrl&&<button onClick={fetchSheets} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={loading}/> Sync</button>}
+                    <button onClick={exportCSV} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Download/> Export</button>
+                    <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Config</button>
+                </div>
+                <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><Icon.Plus/> New Loan</button>
+            </div>
+            {showSettings&&(
+                <div className="card p-5 mb-5">
+                    <h3 className="font-semibold mb-3 text-sm">Google Sheets Config — Loans</h3>
+                    <Field label="Apps Script URL"><Input value={config.scriptUrl||''} onChange={e=>setConfig({...config,scriptUrl:e.target.value})} placeholder="https://script.google.com/macros/s/.../exec"/></Field>
+                    <div className="flex gap-2 mt-3"><button onClick={()=>{localStorage.setItem('cpb_loan_config',JSON.stringify(config));setShowSettings(false);}} className="btn-primary px-4 py-2 rounded-lg text-sm">Save</button><button onClick={()=>setShowSettings(false)} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button></div>
+                </div>
+            )}
+            {filtered.length===0?<div className="card p-12 text-center"><p className="text-slate-400">No loans found.</p></div>:(
+                <div className="space-y-3">
+                    {filtered.map(loan=>{
+                        const m=calcMetrics(loan), txns=transactions.filter(t=>t.loanId===loan.id);
+                        return(
+                            <div key={loan.id} className={`card p-5 ${m.atRisk?'border-red-500/40 shadow-red-500/10 shadow-lg':''}`}>
+                                <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
+                                    <div>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <h3 className="font-bold text-lg">{loan.counterparty}</h3>
+                                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${loan.status==='Active'?'badge-active':loan.status==='Matured'?'badge-matured':'badge-repaid'}`}>{loan.status}</span>
+                                            {m.atRisk&&<span className="px-2 py-0.5 rounded-full text-xs bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1"><Icon.Alert/> Margin Call</span>}
+                                        </div>
+                                        <p className="text-xs text-slate-500 mono mt-0.5">{loan.id} · {fmtDate(loan.startDate)} → {fmtDate(loan.maturityDate)} ({loan.tenor}d)</p>
+                                    </div>
+                                    <button onClick={()=>setEditingLoan(loan)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>
+                                </div>
+                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
+                                    {[['Loan',`$${fmt(loan.loanAmount)}`,loan.underlying,'text-white'],['Interest',`$${fmt(m.interest)}`,`${loan.interestRate}% APR`,'text-yellow-400'],['Total Owed',`$${fmt(m.owed)}`,`Paid: $${fmt(loan.interestPaid)}`,'text-cyan-400'],['Collateral',`${fmtCrypto(loan.collateralAmount,6)} ${loan.collateralType}`,`≈$${fmt(m.collVal,0)}`,'text-white'],['Ratio',`${fmt(m.ratio)}%`,`Target: ${loan.originalCollateralRatio}%`,m.atRisk?'text-red-400':'text-green-400'],['MC Price',`$${fmt(m.mcPrice,0)}`,`@ ${loan.marginCallThreshold}%`,'text-orange-400']].map(([lbl,val,sub,cls])=>(
+                                        <div key={lbl} className="card-inner p-3"><p className="text-xs text-slate-400 mb-1">{lbl}</p><p className={`font-bold mono text-sm ${cls}`}>{val}</p><p className="text-xs text-slate-500">{sub}</p></div>
+                                    ))}
+                                </div>
+                                {m.atRisk&&<div className="bg-red-900/20 border border-red-500/30 rounded-lg p-3 mb-3 text-sm">⚠️ Top-up needed: <span className="font-bold mono text-red-300">{fmtCrypto(m.topUp,8)} {loan.collateralType}</span></div>}
+                                <div className="flex gap-2 flex-wrap">
+                                    {[['Collateral Top-up','green'],['Loan Repayment','blue'],['Interest Payment','purple']].map(([t,c])=>(
+                                        <button key={t} onClick={()=>setShowTxn({loanId:loan.id,type:t})} className={`px-3 py-1.5 bg-${c}-600/20 hover:bg-${c}-600/40 border border-${c}-500/30 rounded-lg text-xs text-${c}-400 flex items-center gap-1 transition-colors`}><Icon.Plus/>{t}</button>
+                                    ))}
+                                </div>
+                                {txns.length>0&&<div className="mt-3 pt-3 border-t border-slate-800"><p className="text-xs text-slate-500 mb-2">Recent transactions</p>{txns.slice(-3).reverse().map(t=><div key={t.id} className="flex justify-between text-xs text-slate-400 mono"><span>{t.type}: {t.amount}</span><span>{fmtDateTimeSGT(t.timestamp)}</span></div>)}</div>}
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+            {showAdd&&<LoanFormModal title="New Loan" onSave={addLoan} onClose={()=>setShowAdd(false)} calcTenor={calcTenor}/>}
+            {editingLoan&&<LoanFormModal title={`Edit: ${editingLoan.id}`} loan={editingLoan} onSave={updateLoan} onClose={()=>setEditingLoan(null)} calcTenor={calcTenor}/>}
+            {showTxn&&<Modal title={showTxn.type} onClose={()=>setShowTxn(null)}><TxnForm onSubmit={a=>addTxn(showTxn.loanId,showTxn.type,a)} onCancel={()=>setShowTxn(null)}/></Modal>}
+        </div>
+    );
+};
+const LoanFormModal = ({title,loan,onSave,onClose,calcTenor})=>{
+    const [form,setForm]=useState(loan||{loanId:'',counterparty:'',loanAmount:'',underlying:'USDT',collateralAmount:'',collateralType:'BTC',interestRate:'',startDate:'',maturityDate:'',marginCallThreshold:120,originalCollateralRatio:130,interestPaid:0,status:'Active'});
+    const tenor=calcTenor(form.startDate,form.maturityDate);
+    const f=k=>e=>setForm(p=>({...p,[k]:e.target.value}));
+    return(
+        <Modal title={title} onClose={onClose} wide>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {!loan&&<div className="md:col-span-2"><Field label="Loan ID"><Input value={form.loanId} onChange={f('loanId')} placeholder="LOAN-001"/></Field></div>}
+                <div className="md:col-span-2"><Field label="Counterparty"><Input value={form.counterparty} onChange={f('counterparty')}/></Field></div>
+                <Field label="Loan Amount"><Input type="number" value={form.loanAmount} onChange={f('loanAmount')} step="0.01"/></Field>
+                <Field label="Currency"><Select value={form.underlying} onChange={f('underlying')}><option>USDT</option><option>USDC</option></Select></Field>
+                <Field label="Collateral Amount"><Input type="number" value={form.collateralAmount} onChange={f('collateralAmount')} step="0.00000001"/></Field>
+                <Field label="Collateral Type"><Select value={form.collateralType} onChange={f('collateralType')}><option>BTC</option><option>ETH</option></Select></Field>
+                <Field label="Interest Rate (% APR)"><Input type="number" value={form.interestRate} onChange={f('interestRate')} step="0.01"/></Field>
+                {loan&&<Field label="Interest Paid"><Input type="number" value={form.interestPaid} onChange={f('interestPaid')} step="0.01"/></Field>}
+                <Field label="Start Date"><Input type="date" value={form.startDate} onChange={f('startDate')}/></Field>
+                <Field label="Maturity Date"><Input type="date" value={form.maturityDate} onChange={f('maturityDate')}/></Field>
+                {tenor>0&&<div className="md:col-span-2 bg-cyan-900/20 border border-cyan-500/20 rounded-lg p-3 text-xs text-cyan-300">Tenor: {tenor} days</div>}
+                <Field label="Margin Call Threshold (%)"><Input type="number" value={form.marginCallThreshold} onChange={f('marginCallThreshold')}/></Field>
+                <Field label="Original Collateral Ratio (%)"><Input type="number" value={form.originalCollateralRatio} onChange={f('originalCollateralRatio')}/></Field>
+                {loan&&<Field label="Status"><Select value={form.status} onChange={f('status')}><option>Active</option><option>Matured</option><option>Repaid</option><option>Defaulted</option></Select></Field>}
+            </div>
+            <div className="flex gap-2 mt-5">
+                <button onClick={()=>onSave(form)} className="btn-primary flex-1 px-4 py-2 rounded-lg font-semibold text-sm">{loan?'Update':'Create'} Loan</button>
+                <button onClick={onClose} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+            </div>
+        </Modal>
+    );
+};
+const TxnForm = ({onSubmit,onCancel})=>{ const [v,setV]=useState(''); return <div><Field label="Amount"><Input type="number" value={v} onChange={e=>setV(e.target.value)} step="0.00000001"/></Field><div className="flex gap-2 mt-4"><button onClick={()=>onSubmit(v)} className="btn-primary flex-1 px-4 py-2 rounded-lg text-sm font-semibold">Submit</button><button onClick={onCancel} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button></div></div>; };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SSPS CORE LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+const buildSchedule = (contract) => {
+    const start=new Date(contract.tradeDate+'T00:00:00Z'), end=new Date(contract.maturityDate+'T00:00:00Z');
+    const days=[]; let d=new Date(start);
+    while(d<=end){ days.push(d.toISOString().split('T')[0]); d.setUTCDate(d.getUTCDate()+1); }
+    return days;
+};
+
+// Returns computed ledger rows. Purchase only recorded if fixing price exists for that day (i.e. 4pm SGT has passed).
+const computeLedger = (contract, priceHistory) => {
+    const { notional, baseNotional, trigger, scalingFactor, discountFactor } = contract;
+    const schedule = buildSchedule(contract);
+    let rows=[], notionalLeft=notional, totalSpent=0, fullyInvested=false;
+    // Track cumulative underlying as an INTEGER (satoshis = units × 1e8) to eliminate
+    // IEEE 754 floating-point drift. Never convert back to float between iterations.
+    let totalSats=0; // integer satoshis
+
+    for (let i=0; i<schedule.length; i++) {
+        const date=schedule[i];
+        const ph=priceHistory[date];
+        const fixingPrice = ph && ph[contract.underlying] ? ph[contract.underlying] : null;
+        let dodChange=null, triggerHit=false, partNotional=0, underlyingBought=0, notionalUsed=0;
+
+        if (fixingPrice !== null) {
+            // Find the most recent prior day's fixing price
+            let priorPrice=null;
+            for (let j=i-1; j>=0; j--) {
+                const pp=priceHistory[schedule[j]];
+                if (pp && pp[contract.underlying]) { priorPrice=pp[contract.underlying]; break; }
+            }
+            if (priorPrice && i>0) { dodChange=(fixingPrice-priorPrice)/priorPrice; triggerHit=dodChange<=trigger; }
+
+            // Day 0 = trade date = initial fixing only, no purchase
+            if (i>0 && !fullyInvested && notionalLeft>0.01) {
+                const scale=triggerHit?scalingFactor:1.0;
+                // Step 1: work in integer cents to avoid IEEE 754 float issues.
+                // e.g. 1111.11 * 100 = 111110.999... in float → Math.floor gives 111110 (wrong).
+                // Converting to cents first (Math.round) gives exact integer 111111.
+                const baseCents=Math.round(baseNotional*100);       // exact integer cents
+                const scaledCents=Math.floor(baseCents*scale);      // floor AFTER scaling
+                const scaledBase=scaledCents/100;                   // back to USDT, 2dp exact
+                const leftCents=Math.round(notionalLeft*100);
+                notionalUsed=Math.min(scaledCents,leftCents)/100;   // cap by notionalLeft, 2dp exact
+                partNotional=notionalUsed;
+                // Step 2: underlying bought = rounded notional ÷ discounted price → FLOOR to 8dp
+                const rawUnderlying=notionalUsed/(fixingPrice*(1-discountFactor));
+                const boughtSats=Math.floor(rawUnderlying*1e8); // integer satoshis, no rounding
+                underlyingBought=boughtSats/1e8;                // float for display only
+                // Step 3: accumulate as integers — exact, no drift
+                totalSats+=boughtSats;
+                notionalLeft=Math.round(Math.max(0,notionalLeft-notionalUsed)*100)/100;
+                totalSpent=Math.round((totalSpent+notionalUsed)*100)/100;
+                if (notionalLeft<=0.01) fullyInvested=true;
+            }
+        }
+        // totalUnderlying for this row = exact integer sats converted to float for display
+        rows.push({ date, fixingPrice, dodChange, triggerHit, partNotional, underlyingBought, notionalLeft, totalUnderlying:totalSats/1e8, totalSpent, becameFullyInvested: fullyInvested && i>0 && notionalUsed>0 });
+    }
+    return rows;
+};
+
+// ─── SHEETS HELPER ────────────────────────────────────────────────────────────
+const sheetsCall = async (url, payload) => {
+    const qs=Object.entries(payload).map(([k,v])=>`${k}=${encodeURIComponent(typeof v==='object'?JSON.stringify(v):v)}`).join('&');
+    const res=await fetch(`${url}?${qs}`);
+    const data=await res.json();
+    if (!data.success) throw new Error(data.error||'Sheets error');
+    return data;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRADING DESK WIDGET
+// ═══════════════════════════════════════════════════════════════════════════════
+const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
+    const today = todayUTC();
+
+    // Active, non-exhausted contracts only
+    const activeContracts = useMemo(()=>contracts.filter(c=>{
+        if (today>c.maturityDate) return false;
+        const rows=computeLedger(c,priceHistory);
+        const last=rows.filter(r=>r.fixingPrice).slice(-1)[0];
+        const left=last?last.notionalLeft:c.notional;
+        return left>0.01;
+    }),[contracts,priceHistory,today]);
+
+    // Underlyings actually in use (only show price info for these)
+    const underlyings = [...new Set(activeContracts.map(c=>c.underlying))];
+
+    // Last available fixing price per underlying.
+    // Rules:
+    //  - Only valid ISO YYYY-MM-DD keys
+    //  - entry must have a positive numeric price for the symbol
+    //  - entry must NOT be a fetchError-only entry (no valid price)
+    //  - Sorted descending by date (ISO lexicographic = chronological)
+    const lastFixing = useMemo(()=>{
+        const result={};
+        const sorted=Object.entries(priceHistory)
+            .filter(([date,entry]) =>
+                /^\d{4}-\d{2}-\d{2}$/.test(date) &&   // valid ISO date key
+                entry && !entry.fetchError              // not a failed fetch
+            )
+            .sort((a,b)=>b[0].localeCompare(a[0]));   // newest first
+        underlyings.forEach(sym=>{
+            for (const [date,entry] of sorted) {
+                const price = entry[sym];
+                if (price && +price > 0) {
+                    result[sym]={price:+price, date};
+                    break;
+                }
+            }
+        });
+        return result;
+    },[priceHistory,underlyings.join(',')]);
+
+    // Per-underlying buy schedule
+    const schedule = useMemo(()=>{
+        const out={};
+        underlyings.forEach(sym=>{
+            const cs=activeContracts.filter(c=>c.underlying===sym);
+            // Base: sum of all base notionals
+            const baseTotal=cs.reduce((s,c)=>s+c.baseNotional,0);
+            // Trigger groups: keyed by trigger value (e.g. -0.03)
+            const groups={};
+            cs.forEach(c=>{
+                const k=c.trigger.toFixed(6);
+                if (!groups[k]) groups[k]={trigger:c.trigger,additional:0};
+                groups[k].additional+=c.baseNotional*(c.scalingFactor-1);
+            });
+            const triggerRows=Object.values(groups).sort((a,b)=>b.trigger-a.trigger); // least negative first
+            out[sym]={baseTotal,triggerRows};
+        });
+        return out;
+    },[activeContracts]);
+
+    // Contracts expiring within 7 days — each listed individually
+    const expiring = useMemo(()=>contracts
+        .filter(c=>{ const d=daysUntil(c.maturityDate); return d>=0&&d<=7&&today<=c.maturityDate; })
+        .map(c=>{
+            const rows=computeLedger(c,priceHistory);
+            const last=rows.filter(r=>r.fixingPrice).slice(-1)[0];
+            return {...c, accumulated:last?last.totalUnderlying:0, daysLeft:daysUntil(c.maturityDate)};
+        })
+        .sort((a,b)=>a.daysLeft-b.daysLeft)
+    ,[contracts,priceHistory,today]);
+
+    if (activeContracts.length===0&&expiring.length===0) return null;
+
+    return (
+        <div className="trading-desk p-5 mb-6">
+            {/* Header */}
+            <div className="flex items-center gap-2 mb-5">
+                <Icon.Desk/>
+                <h2 className="font-bold text-sm text-cyan-300 uppercase tracking-wider">Trading Desk</h2>
+                <span className="text-xs text-slate-500">· {activeContracts.length} active contract{activeContracts.length!==1?'s':''}</span>
+            </div>
+
+            {/* Price reference — only for underlyings in use */}
+            {underlyings.length>0&&(
+                <div className={`grid grid-cols-2 md:grid-cols-${underlyings.length*2} gap-3 mb-5`}>
+                    {underlyings.map(sym=>(
+                        <React.Fragment key={sym}>
+                            <div className="card-inner p-3">
+                                <p className="text-xs text-slate-400 mb-1">{sym} Last Fixing</p>
+                                <p className="font-bold mono text-white text-sm">{lastFixing[sym]?`$${fmt(lastFixing[sym].price,2)}`:'—'}</p>
+                                <p className="text-xs text-slate-500">{lastFixing[sym]?`${fmtDate(lastFixing[sym].date)} · 08:00 UTC`:'No data'}</p>
+                            </div>
+                            <div className="card-inner p-3">
+                                <p className="text-xs text-slate-400 mb-1">{sym} Live Price</p>
+                                <p className="font-bold mono text-white text-sm">{livePrices[sym]?`$${fmt(livePrices[sym],2)}`:'—'}</p>
+                                <p className="text-xs text-slate-500">Bybit · 60s refresh</p>
+                            </div>
+                        </React.Fragment>
+                    ))}
+                </div>
+            )}
+
+            {/* Buy schedule — one table per underlying */}
+            {underlyings.map(sym=>{
+                const {baseTotal,triggerRows}=schedule[sym];
+                const yestPrice=lastFixing[sym]?.price;
+                return(
+                    <div key={sym} className="mb-4">
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{sym}/USDT · Buy Schedule</p>
+                        <div className="overflow-x-auto scrollbar-hide rounded-lg border border-slate-800 overflow-hidden">
+                            <table className="w-full text-xs">
+                                <thead>
+                                    <tr className="border-b border-slate-800 bg-slate-900/60">
+                                        <th className="text-left px-4 py-2.5 text-slate-400 font-medium w-48">Scenario</th>
+                                        <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Trigger Price</th>
+                                        <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Buy Amount (USDT)</th>
+                                        <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Cumulative Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {/* Row 1: Base — always, no matter what price does */}
+                                    <tr className="border-b border-slate-800/50 base-row">
+                                        <td className="px-4 py-3 font-semibold text-cyan-300">Base (always)</td>
+                                        <td className="px-4 py-3 text-slate-500 mono">—</td>
+                                        <td className="px-4 py-3 text-right font-bold mono text-white">${fmt(baseTotal)}</td>
+                                        <td className="px-4 py-3 text-right mono text-cyan-300 font-bold">${fmt(baseTotal)}</td>
+                                    </tr>
+                                    {/* One row per distinct trigger level */}
+                                    {triggerRows.map(tr=>{
+                                        const triggerPrice=yestPrice?yestPrice*(1+tr.trigger):null;
+                                        return(
+                                            <tr key={tr.trigger} className="border-b border-slate-800/50 trigger-row">
+                                                <td className="px-4 py-3 text-red-400 flex items-center gap-1.5"><Icon.TrendDown/> If DoD ≤ {(tr.trigger*100).toFixed(2)}%</td>
+                                                <td className="px-4 py-3 mono text-red-300 font-medium">
+                                                    {triggerPrice?`$${fmt(triggerPrice,2)}`:<span className="text-slate-600 italic">need yesterday's price</span>}
+                                                </td>
+                                                <td className="px-4 py-3 text-right mono text-red-300">+${fmt(tr.additional)}</td>
+                                                <td className="px-4 py-3 text-right mono font-bold text-red-300">${fmt(baseTotal+tr.additional)}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            })}
+
+            {/* Maturing within 7 days — each contract shown separately */}
+            {expiring.length>0&&(
+                <div>
+                    <p className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Icon.Calendar/> Maturing Within 7 Days — Sell Schedule</p>
+                    <div className="overflow-x-auto scrollbar-hide rounded-lg border border-slate-800 overflow-hidden">
+                        <table className="w-full text-xs">
+                            <thead>
+                                <tr className="border-b border-slate-800 bg-slate-900/60">
+                                    <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Client</th>
+                                    <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Contract ID</th>
+                                    <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Asset</th>
+                                    <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Maturity Date</th>
+                                    <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Days Left</th>
+                                    <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Amount to Sell</th>
+                                    <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Est. Value (Live)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {expiring.map(c=>(
+                                    <tr key={c.id} className="border-b border-slate-800/50 sell-row">
+                                        <td className="px-4 py-3 font-medium text-slate-200">{c.clientName}</td>
+                                        <td className="px-4 py-3 mono text-slate-400 text-xs">{c.id}</td>
+                                        <td className="px-4 py-3">
+                                            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${c.underlying==='BTC'?'bg-orange-500/15 text-orange-400':'bg-purple-500/15 text-purple-400'}`}>{c.underlying}</span>
+                                        </td>
+                                        <td className="px-4 py-3 mono text-slate-300">{fmtDate(c.maturityDate)}</td>
+                                        <td className={`px-4 py-3 text-right font-bold mono ${c.daysLeft===0?'text-red-400':c.daysLeft<=2?'text-red-400':c.daysLeft<=4?'text-yellow-400':'text-slate-300'}`}>
+                                            {c.daysLeft===0?'TODAY':c.daysLeft===1?'TOMORROW':`${c.daysLeft}d`}
+                                        </td>
+                                        <td className="px-4 py-3 text-right mono font-bold text-red-300">
+                                            {fmtCrypto(c.accumulated,8)} {c.underlying}
+                                        </td>
+                                        <td className="px-4 py-3 text-right mono text-slate-300">
+                                            {livePrices[c.underlying]&&c.accumulated>0?`$${fmt(c.accumulated*livePrices[c.underlying],0)}`:'—'}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SSPS MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+const SSPSModule = ({prices: livePrices}) => {
+    const [contracts, setContracts] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_ssps_contracts')||'[]');}catch{return[];} });
+    const [priceHistory, setPriceHistory] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_ssps_prices')||'{}');}catch{return{};} });
+    const [config, setConfig] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_ssps_config')||'{}');}catch{return{};} });
+    const [showAdd, setShowAdd] = useState(false);
+    const [showSettings, setShowSettings] = useState(false);
+    const [drillContract, setDrillContract] = useState(null);
+    const [fetchingDate, setFetchingDate] = useState(null);
+    const [lastAutoFetch, setLastAutoFetch] = useState(null);
+    const [syncStatus, setSyncStatus] = useState(null);
+    const [lastSync, setLastSync] = useState(null);
+    const [sheetsLoading, setSheetsLoading] = useState(false);
+    const [backfillModal, setBackfillModal] = useState(null); // {contract, count, from, to}
+    const [backfillProgress, setBackfillProgress] = useState(null); // {done,total}
+
+    useEffect(()=>{ localStorage.setItem('cpb_ssps_contracts',JSON.stringify(contracts)); },[contracts]);
+    useEffect(()=>{ localStorage.setItem('cpb_ssps_prices',JSON.stringify(priceHistory)); },[priceHistory]);
+    useEffect(()=>{ localStorage.setItem('cpb_ssps_config',JSON.stringify(config)); },[config]);
+
+    // ── Sheets helpers ───────────────────────────────────────────────────────
+    // Push contract summary to Sheets — pass latestLedger to include live remaining/bought figures
+    const r2 = (n) => n!==''&&n!=null ? parseFloat(Number(n).toFixed(2)) : '';
+    const r8 = (n) => n!==''&&n!=null ? parseFloat(Number(n).toFixed(8)) : '';
+
+    const pushContract = async (c, latestLedger) => {
+        if (!config.scriptUrl) return;
+        try {
+            setSyncStatus('syncing');
+            const notionalRemaining = latestLedger ? latestLedger.notionalLeft  : c.notional;
+            const underlyingBought  = latestLedger ? latestLedger.totalUnderlying : 0;
+            await sheetsCall(config.scriptUrl,{action:'upsertContract',values:[
+                c.id, c.clientName,
+                c.tradeDate, c.participationStart, c.maturityDate,
+                c.tenor, c.fixingDays, c.underlying,
+                r2(c.notional), r2(c.baseNotional),
+                (c.trigger*100).toFixed(2), c.scalingFactor, (c.discountFactor*100).toFixed(2),
+                r2(notionalRemaining), r8(underlyingBought),
+                c.status, c.createdAt
+            ]});
+            setSyncStatus('ok'); setLastSync(new Date());
+        } catch(e){ console.error(e); setSyncStatus('error'); }
+    };
+
+    // fullHistory: optional — pass the accumulated history object during backfill so
+    // computeLedger sees all prior prices (not just the stale React state snapshot).
+    const pushPriceRow = async (dateStr, entry, contract, fullHistory) => {
+        if (!config.scriptUrl) return;
+        try {
+            setSyncStatus('syncing');
+            await sheetsCall(config.scriptUrl,{action:'upsertPrice',values:[dateStr,entry.BTC||'',entry.ETH||'',entry.fetchedAt||'',entry.manualOverride?'YES':'NO']});
+            // Use fullHistory if provided (backfill path), otherwise fall back to current state
+            const histForCompute = fullHistory ? {...fullHistory,[dateStr]:entry} : {...priceHistory,[dateStr]:entry};
+            const rows=computeLedger(contract, histForCompute);
+            const row=rows.find(r=>r.date===dateStr);
+            if (row){
+                const dp=row.fixingPrice?row.fixingPrice*(1-contract.discountFactor):'';
+                const dodStr = row.dodChange!==null ? (row.dodChange*100).toFixed(4) : '';
+                const triggerStr = row.dodChange!==null ? (row.triggerHit?'YES':'NO') : '';
+                const scaleStr = row.dodChange!==null ? (row.triggerHit?contract.scalingFactor:1) : '';
+                await sheetsCall(config.scriptUrl,{action:'upsertLedgerRow',contractId:contract.id,values:[
+                    row.date, r2(row.fixingPrice)||'', r2(dp)||'',
+                    dodStr, triggerStr, scaleStr,
+                    r2(row.partNotional)||'', r8(row.underlyingBought)||'',
+                    r2(row.notionalLeft), r8(row.totalUnderlying), r2(row.totalSpent),
+                    row.becameFullyInvested?'YES':''
+                ]});
+            }
+            setSyncStatus('ok'); setLastSync(new Date());
+        } catch(e){ console.error(e); setSyncStatus('error'); }
+    };
+
+    const fetchFromSheets = async () => {
+        if (!config.scriptUrl) return;
+        setSheetsLoading(true);
+        try {
+            setSyncStatus('syncing');
+            const [cr,pr]=await Promise.all([sheetsCall(config.scriptUrl,{action:'readContracts'}),sheetsCall(config.scriptUrl,{action:'readPrices'})]);
+            if (cr.values?.length>0) {
+                const parsed = cr.values.map(r=>({
+                    id:r[0], clientName:r[1],
+                    tradeDate:normaliseSheetDate(r[2])||'',
+                    participationStart:normaliseSheetDate(r[3])||'',
+                    maturityDate:normaliseSheetDate(r[4])||'',
+                    tenor:+r[5]||0, fixingDays:+r[6]||0, underlying:r[7]||'BTC',
+                    notional:+r[8]||0, baseNotional:+r[9]||0,
+                    trigger:parseFloat(r[10])/100||0, scalingFactor:+r[11]||1,
+                    discountFactor:parseFloat(r[12])/100||0,
+                    status:r[15]||'Active', createdAt:r[16]||''
+                })).filter(c=>c.id && c.tradeDate && c.maturityDate); // only keep malformed rows
+                // Always sync — Sheets is source of truth. Deletions in Sheets propagate to UI.
+                setContracts(parsed);
+            } else {
+                // Sheets Contracts sheet is empty — clear UI too
+                setContracts([]);
+            }
+            if (pr.values?.length>0){
+                const fromSheets={};
+                pr.values.forEach(r=>{
+                    if (!r[0]) return;
+                    let dateKey = normaliseSheetDate(r[0]);
+                    if (!dateKey) return;
+                    fromSheets[dateKey]={BTC:r[1]?+r[1]:null,ETH:r[2]?+r[2]:null,fetchedAt:r[3]||'',manualOverride:r[4]==='YES'};
+                });
+                if (Object.keys(fromSheets).length > 0) {
+                    // Merge: local data wins if it was fetched MORE RECENTLY than Sheets data.
+                    // This prevents a stale 30s Sheets sync from overwriting a fresh re-fetch.
+                    setPriceHistory(local => {
+                        const merged = {...fromSheets};
+                        Object.entries(local).forEach(([date, localEntry]) => {
+                            const sheetsEntry = fromSheets[date];
+                            if (!sheetsEntry) {
+                                merged[date] = localEntry; // local-only entry, keep it
+                            } else {
+                                // Compare fetchedAt timestamps — keep whichever is more recent
+                                const localTime = localEntry.fetchedAt ? new Date(localEntry.fetchedAt).getTime() : 0;
+                                const sheetsTime = sheetsEntry.fetchedAt ? new Date(sheetsEntry.fetchedAt).getTime() : 0;
+                                if (localTime > sheetsTime) merged[date] = localEntry;
+                                // else: Sheets data is newer/same, already in merged
+                            }
+                        });
+                        return merged;
+                    });
+                }
+            }
+            setSyncStatus('ok'); setLastSync(new Date());
+        } catch(e){ console.error(e); setSyncStatus('error'); }
+        setSheetsLoading(false);
+    };
+    useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
+
+    // Auto-fetch fixing prices at 16:00 SGT = 08:00 UTC
+    useEffect(()=>{
+        const check=()=>{
+            const now=new Date(), sgtH=(now.getUTCHours()+8)%24, sgtM=now.getUTCMinutes(), ds=todayUTC();
+            if (sgtH===16&&sgtM<5&&lastAutoFetch!==ds){ fetchTodayPrices(ds); setLastAutoFetch(ds); }
+        };
+        const t=setInterval(check,60000); check(); return()=>clearInterval(t);
+    },[lastAutoFetch,contracts]);
+
+    const fetchTodayPrices = async (dateStr) => {
+        setFetchingDate(dateStr);
+        let entry={ fetchedAt:new Date().toISOString() };
+        try {
+            const [btc,eth]=await Promise.allSettled([fetchBybitFixing('BTCUSDT',dateStr),fetchBybitFixing('ETHUSDT',dateStr)]);
+            entry.BTC=btc.status==='fulfilled'?btc.value:null;
+            entry.ETH=eth.status==='fulfilled'?eth.value:null;
+            if (!entry.BTC&&!entry.ETH) entry.fetchError=true;
+        } catch(e){ entry.fetchError=true; }
+        const newHist={...priceHistory,[dateStr]:entry};
+        setPriceHistory(newHist);
+        // Push to Sheets for every contract spanning this date
+        for (const c of contracts){
+            if (new Date(c.tradeDate+'T00:00:00Z')<=new Date(dateStr+'T00:00:00Z')&&new Date(dateStr+'T00:00:00Z')<=new Date(c.maturityDate+'T00:00:00Z'))
+                await pushPriceRow(dateStr,entry,c);
+        }
+        setFetchingDate(null);
+    };
+
+    const manualPriceOverride = async (dateStr, btcVal, ethVal) => {
+        const entry={ ...(priceHistory[dateStr]||{}), BTC:btcVal?parseFloat(btcVal):(priceHistory[dateStr]?.BTC||null), ETH:ethVal?parseFloat(ethVal):(priceHistory[dateStr]?.ETH||null), manualOverride:true, fetchedAt:new Date().toISOString() };
+        const newHist={...priceHistory,[dateStr]:entry};
+        setPriceHistory(newHist);
+        for (const c of contracts){
+            if (new Date(c.tradeDate+'T00:00:00Z')<=new Date(dateStr+'T00:00:00Z')&&new Date(dateStr+'T00:00:00Z')<=new Date(c.maturityDate+'T00:00:00Z'))
+                await pushPriceRow(dateStr,entry,c);
+        }
+    };
+
+    // Check missing historical prices when adding a contract with a past trade date
+    const checkBackfillNeeded = (contract) => {
+        const today=todayUTC();
+        if (contract.tradeDate>=today) return null;
+        const sched=buildSchedule(contract);
+        const missing=sched.filter(d=>d<today&&(!priceHistory[d]||(!priceHistory[d].BTC&&!priceHistory[d].ETH)));
+        return missing.length>0?{count:missing.length,from:missing[0],to:missing[missing.length-1]}:null;
+    };
+
+    const addContract = async (c) => {
+        setContracts(p=>[...p,c]);
+        setShowAdd(false);
+        await pushContract(c, null);
+        const bf=checkBackfillNeeded(c);
+        if (bf) {
+            // Auto-trigger backfill immediately for past-dated contracts.
+            // This fetches all missing prices AND populates the Sheets ledger tab.
+            setBackfillModal({contract:c,...bf});
+        } else {
+            // No missing prices — but still push today's price row if it exists
+            const todayStr=todayUTC();
+            if (priceHistory[todayStr]) await pushPriceRow(todayStr,priceHistory[todayStr],c);
+        }
+    };
+
+    const doBackfill = async (contract) => {
+        setBackfillModal(null);
+        setBackfillProgress({done:0,total:0});
+        const { history, datesProcessed } = await runBackfill(
+            contract.tradeDate,
+            contract.maturityDate,
+            priceHistory,
+            (done,total)=>setBackfillProgress({done,total})
+        );
+        // IMPORTANT: Update React state first so UI re-renders with new prices
+        setPriceHistory(history);
+        // Push all newly filled rows to Sheets (only past dates that were backfilled)
+        const sched=buildSchedule(contract);
+        const todayStr=todayUTC();
+        for (const ds of sched){
+            if (ds>=todayStr) break; // don't push today or future dates
+            const entry=history[ds];
+            // Pass 'history' so each row is computed with all prior prices (not stale state)
+            if (entry && (entry.BTC||entry.ETH)) await pushPriceRow(ds,entry,contract,history);
+        }
+        // Refresh the contract summary row in Sheets with latest ledger totals
+        const finalLedger = computeLedger(contract, history);
+        const lastFilledRow = finalLedger.filter(r=>r.fixingPrice).slice(-1)[0];
+        await pushContract(contract, lastFilledRow||null);
+        setBackfillProgress(null);
+    };
+
+    // Clear ALL prices locally + from Sheets, then re-backfill every contract sequentially
+    const clearAndRefetchAll = async () => {
+        if (!confirm('This will:\n• Clear ALL locally cached prices\n• Clear the PriceHistory sheet and every contract ledger tab in Google Sheets\n• Re-fetch all prices from Bybit for every contract\n\nThis may take several minutes. Continue?')) return;
+
+        // Step 1: clear local price cache immediately
+        const emptyHistory = {};
+        setPriceHistory(emptyHistory);
+
+        // Step 2: clear Sheets — PriceHistory tab + every contract's ledger tab
+        if (config.scriptUrl) {
+            try {
+                setSyncStatus('syncing');
+                // Clear PriceHistory sheet data rows (keep header)
+                await sheetsCall(config.scriptUrl, {action:'clearSheet', sheetName:'PriceHistory'});
+                // Clear each contract's ledger tab
+                for (const c of contracts) {
+                    await sheetsCall(config.scriptUrl, {action:'clearSheet', sheetName:c.id});
+                }
+            } catch(e) { console.error('Sheets clear error:', e); }
+        }
+
+        // Step 3: backfill every contract sequentially, pushing each to Sheets as we go
+        let runningHistory = {};
+        for (const contract of contracts) {
+            setBackfillProgress({done:0, total:0, label:`Fetching ${contract.clientName}…`});
+            const { history } = await runBackfill(
+                contract.tradeDate,
+                contract.maturityDate,
+                runningHistory,
+                (done,total)=>setBackfillProgress({done,total,label:`${contract.clientName}: ${done}/${total}`})
+            );
+            runningHistory = history;
+            setPriceHistory({...runningHistory});
+
+            // Push all filled rows to Sheets for this contract
+            if (config.scriptUrl) {
+                const sched = buildSchedule(contract);
+                const todayStr = todayUTC();
+                for (const ds of sched) {
+                    if (ds >= todayStr) break;
+                    const entry = runningHistory[ds];
+                    if (entry && (entry.BTC || entry.ETH)) {
+                        await pushPriceRow(ds, entry, contract, runningHistory);
+                    }
+                }
+                const finalLedger = computeLedger(contract, runningHistory);
+                const lastRow = finalLedger.filter(r=>r.fixingPrice).slice(-1)[0];
+                await pushContract(contract, lastRow||null);
+            }
+        }
+        setBackfillProgress(null);
+        setSyncStatus('ok');
+        setLastSync(new Date());
+    };
+
+    const deleteContract = (id) => {
+        if (confirm('Delete contract locally? Remove the sheet tab manually if needed.'))
+            setContracts(p=>p.filter(c=>c.id!==id));
+    };
+
+    const exportData = () => { const blob=new Blob([JSON.stringify({contracts,priceHistory},null,2)],{type:'application/json'}); const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`ssps-data-${todayUTC()}.json`;a.click(); };
+    const importData = (e) => { const file=e.target.files[0];if(!file)return; const r=new FileReader(); r.onload=ev=>{try{const d=JSON.parse(ev.target.result);if(d.contracts)setContracts(d.contracts);if(d.priceHistory)setPriceHistory(d.priceHistory);}catch{alert('Invalid JSON');}}; r.readAsText(file); };
+
+    if (drillContract) {
+        const live=contracts.find(c=>c.id===drillContract.id)||drillContract;
+        return <SSPSLedger contract={live} priceHistory={priceHistory} prices={livePrices} onBack={()=>setDrillContract(null)} onFetchPrice={fetchTodayPrices} onManualPrice={manualPriceOverride} fetchingDate={fetchingDate}/>;
+    }
+
+    const today=todayUTC(), todayEntry=priceHistory[today];
+    const syncLabel=syncStatus==='ok'?`Synced ${lastSync?lastSync.toLocaleTimeString():''}`:syncStatus==='error'?'Sync error':syncStatus==='syncing'?'Syncing…':'Not configured';
+    const syncColor=syncStatus==='ok'?'text-green-400':syncStatus==='error'?'text-red-400':syncStatus==='syncing'?'text-yellow-400':'text-slate-500';
+
+    return (
+        <div>
+            {/* Trading Desk — always rendered at top */}
+            <TradingDeskWidget contracts={contracts} priceHistory={priceHistory} livePrices={livePrices}/>
+
+            {/* Toolbar */}
+            <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
+                <div className="flex gap-2 flex-wrap items-center">
+                    <button onClick={exportData} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Download/> Export</button>
+                    <label className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer"><Icon.Upload/> Import<input type="file" accept=".json" onChange={importData} className="hidden"/></label>
+                    <button onClick={()=>fetchTodayPrices(today)} disabled={!!fetchingDate} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={!!fetchingDate}/> Fetch Today's Prices</button>
+                    <button onClick={clearAndRefetchAll} disabled={!!fetchingDate||backfillProgress!==null} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-yellow-400 border-yellow-500/30"><Icon.Refresh spin={backfillProgress!==null}/> Clear & Re-fetch All Prices</button>
+                    {config.scriptUrl&&<button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={sheetsLoading}/> Sync Sheets</button>}
+                    <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Sheets Config</button>
+                    <span className={`text-xs ${syncColor} flex items-center gap-1`}>{syncStatus==='ok'&&<Icon.Check/>}{syncLabel}</span>
+                </div>
+                <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><Icon.Plus/> New Contract</button>
+            </div>
+
+            {/* Settings */}
+            {showSettings&&(
+                <div className="card p-5 mb-5">
+                    <h3 className="font-semibold mb-1 text-sm">Google Sheets Config — SSPS</h3>
+                    <p className="text-xs text-slate-500 mb-4">Separate spreadsheet from Loans.</p>
+                    <Field label="SSPS Apps Script URL" hint="Deploy as Web App → Execute as Me → Anyone can access">
+                        <Input value={config.scriptUrl||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/>
+                    </Field>
+                    <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs text-slate-400 space-y-1 mt-3">
+                        <p className="text-slate-300 font-medium">Setup:</p>
+                        <p>① New Google Spreadsheet → Extensions → Apps Script</p>
+                        <p>② Paste <span className="mono text-cyan-400">ssps-apps-script.gs</span> → run <span className="mono">manualInit()</span> once</p>
+                        <p>③ Deploy → New Deployment → Web App → Execute as Me → Anyone</p>
+                        <p>④ Paste URL above → Save & Connect</p>
+                    </div>
+                    <div className="flex gap-2 mt-3">
+                        <button onClick={()=>{setShowSettings(false);if(config.scriptUrl)fetchFromSheets();}} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
+                        <button onClick={()=>setShowSettings(false)} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+                    </div>
+                </div>
+            )}
+
+            {/* Backfill progress */}
+            {backfillProgress&&(
+                <div className="card p-4 mb-4">
+                    <p className="text-sm text-cyan-300 mb-2 flex items-center gap-2"><Icon.Refresh spin={true}/> Backfilling historical Bybit prices…</p>
+                    <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all" style={{width:`${backfillProgress.total>0?(backfillProgress.done/backfillProgress.total*100):0}%`}}/>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1">{backfillProgress.done} / {backfillProgress.total} days fetched</p>
+                </div>
+            )}
+
+            {/* Today's price status */}
+            {todayEntry?(
+                <div className="bg-green-900/20 border border-green-500/30 rounded-lg p-3 mb-4 text-xs text-green-400 flex items-center gap-2 flex-wrap">
+                    <Icon.Check/> Today's fixing prices loaded
+                    {todayEntry.BTC&&<span className="mono">BTC: ${fmt(todayEntry.BTC,0)}</span>}
+                    {todayEntry.ETH&&<span className="mono">ETH: ${fmt(todayEntry.ETH,0)}</span>}
+                    {todayEntry.manualOverride&&<span className="text-yellow-400">(manual)</span>}
+                    {todayEntry.fetchError&&<span className="text-yellow-400">(fetch failed — enter manually)</span>}
+                </div>
+            ):(
+                <div className="bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-3 mb-4 text-xs text-yellow-400 flex items-center gap-2">
+                    <Icon.Alert/> Today's prices not yet fetched. Auto-fetch runs at 16:00 SGT, or click "Fetch Today's Prices".
+                </div>
+            )}
+
+            {/* Contract cards */}
+            {contracts.length===0?(
+                <div className="card p-12 text-center"><p className="text-slate-400">No SSPS contracts yet. Create your first contract.</p></div>
+            ):(
+                <div className="space-y-3">
+                    {contracts.map(c=><SSPSContractCard key={c.id} contract={c} priceHistory={priceHistory} prices={livePrices} onDrill={()=>setDrillContract(c)} onDelete={()=>deleteContract(c.id)} onBackfill={()=>{ const bf=checkBackfillNeeded(c); if(bf) setBackfillModal({contract:c,...bf}); else alert('All prices up to date for this contract.'); }}/>)}
+                </div>
+            )}
+
+            {showAdd&&<SSPSFormModal onSave={addContract} onClose={()=>setShowAdd(false)}/>}
+
+            {/* Backfill confirmation modal */}
+            {backfillModal&&(
+                <Modal title="Backfill Historical Prices?" onClose={()=>setBackfillModal(null)}>
+                    <p className="text-sm text-slate-300 mb-3">
+                        This contract's trade date is in the past. There are <span className="text-cyan-300 font-bold mono">{backfillModal.count}</span> days of missing 08:00 UTC prices from <span className="mono text-cyan-300">{fmtDate(backfillModal.from)}</span> to <span className="mono text-cyan-300">{fmtDate(backfillModal.to)}</span>.
+                    </p>
+                    <p className="text-xs text-slate-400 mb-5">Fetch all missing BTC and ETH opening prices from Bybit now? This will also push rows to Google Sheets if configured. May take a minute.</p>
+                    <div className="flex gap-2">
+                        <button onClick={()=>doBackfill(backfillModal.contract)} className="btn-primary flex-1 px-4 py-2 rounded-lg text-sm font-semibold">Yes, Backfill Now</button>
+                        <button onClick={()=>setBackfillModal(null)} className="btn-secondary px-4 py-2 rounded-lg text-sm">Skip for Now</button>
+                    </div>
+                </Modal>
+            )}
+        </div>
+    );
+};
+
+// ─── SSPS CONTRACT CARD ───────────────────────────────────────────────────────
+const SSPSContractCard = ({contract, priceHistory, prices, onDrill, onDelete, onBackfill}) => {
+    const ledger=useMemo(()=>computeLedger(contract,priceHistory),[contract,priceHistory]);
+    const lastRow=ledger.filter(r=>r.fixingPrice).slice(-1)[0];
+    const notionalLeft=lastRow?lastRow.notionalLeft:contract.notional;
+    const totalUnderlying=lastRow?lastRow.totalUnderlying:0;
+    const totalSpent=lastRow?lastRow.totalSpent:0;
+    const livePrice=prices[contract.underlying]||0;
+    const mtm=totalUnderlying*livePrice, pnl=mtm-totalSpent;
+    const avgCost=totalUnderlying>0?totalSpent/totalUnderlying:0;
+    const isFullyInvested=notionalLeft<=0.01;
+    const today=todayUTC(), isMatured=today>contract.maturityDate;
+    const dl=daysUntil(contract.maturityDate);
+    const isExpiringSoon=dl>=0&&dl<=7&&!isMatured;
+    const daysWithPrice=ledger.filter(r=>r.fixingPrice).length;
+    const pct=ledger.length>0?Math.round(daysWithPrice/ledger.length*100):0;
+    const status=isMatured?'Matured':isFullyInvested?'Fully Invested':'Active';
+
+    return(
+        <div className={`card p-5 cursor-pointer hover:border-slate-600 transition-all ${isFullyInvested&&!isMatured?'fully-invested-glow':''} ${isExpiringSoon?'expiring-glow':''}`} onClick={onDrill}>
+            <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
+                <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-bold text-lg">{contract.clientName}</h3>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${status==='Active'?'badge-active':status==='Matured'?'badge-matured':'badge-invested'}`}>
+                            {status==='Fully Invested'&&<Icon.Lock/>} {status}
+                        </span>
+                        {isExpiringSoon&&<span className="badge-expiring px-2 py-0.5 rounded-full text-xs flex items-center gap-1"><Icon.Calendar/> Expires {dl===0?'TODAY':dl===1?'TOMORROW':`in ${dl}d`}</span>}
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${contract.underlying==='BTC'?'bg-orange-500/15 text-orange-400 border border-orange-500/25':'bg-purple-500/15 text-purple-400 border border-purple-500/25'}`}>{contract.underlying}/USDT</span>
+                    </div>
+                    <p className="text-xs text-slate-500 mono mt-0.5">{contract.id} · {fmtDate(contract.tradeDate)} → {fmtDate(contract.maturityDate)} · {contract.tenor}d</p>
+                </div>
+                <div className="flex gap-2" onClick={e=>e.stopPropagation()}>
+                    <button onClick={onDrill} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1">Ledger <Icon.ChevRight/></button>
+                    {onBackfill&&<button onClick={onBackfill} title="Fetch missing historical prices" className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1 text-yellow-400"><Icon.Refresh/> Update Prices</button>}
+                    <button onClick={onDelete} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>
+                </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 mb-3">
+                {[
+                    ['Notional',`$${fmt(contract.notional,0)}`,'USDT','text-white'],
+                    ['Invested',`$${fmt(totalSpent,0)}`,`${fmt(100-notionalLeft/contract.notional*100,1)}% deployed`,'text-cyan-400'],
+                    ['Remaining',`$${fmt(notionalLeft,0)}`,isFullyInvested?'🔒 Fully invested':'available',notionalLeft<500?'text-yellow-400':'text-white'],
+                    [`${contract.underlying} Bought`,fmtCrypto(totalUnderlying,6),`avg $${fmt(avgCost,0)}`,'text-white'],
+                    ['MTM Value',`$${fmt(mtm,0)}`,`@ $${fmt(livePrice,0)}`,'text-white'],
+                    ['P&L',`${pnl>=0?'+':''}$${fmt(Math.abs(pnl),0)}`,`${pnl>=0?'+':''}${totalSpent>0?fmt(pnl/totalSpent*100,2):'0.00'}%`,pnl>=0?'text-green-400':'text-red-400'],
+                    ['Progress',`${pct}%`,`${daysWithPrice}/${ledger.length} days`,'text-slate-300'],
+                    ['Days Left',isMatured?'Matured':`${dl}d`,isMatured?fmtDate(contract.maturityDate):'to maturity',dl<=7&&!isMatured?'text-yellow-400':'text-slate-300'],
+                ].map(([lbl,val,sub,cls])=>(
+                    <div key={lbl} className="card-inner p-2.5"><p className="text-xs text-slate-400 mb-1 truncate">{lbl}</p><p className={`font-bold mono text-xs ${cls}`}>{val}</p><p className="text-xs text-slate-500 truncate">{sub}</p></div>
+                ))}
+            </div>
+            <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all" style={{width:`${pct}%`}}/>
+            </div>
+        </div>
+    );
+};
+
+// ─── SSPS LEDGER DRILL-DOWN ───────────────────────────────────────────────────
+const SSPSLedger = ({contract, priceHistory, prices, onBack, onFetchPrice, onManualPrice, fetchingDate}) => {
+    const ledger=useMemo(()=>computeLedger(contract,priceHistory),[contract,priceHistory]);
+    // Display: only rows up to and including today, newest first.
+    // Future dates are excluded entirely. Rows without a price are shown only if they are
+    // today or in the past (so the user can see what's missing and fetch/enter prices).
+    const today=todayUTC();
+    const displayLedger=useMemo(()=>[...ledger].filter(r=>r.date<=today).reverse(),[ledger,today]);
+    const [manualInputs,setManualInputs]=useState({});
+    const [showManualDate,setShowManualDate]=useState(null);
+    const [saving,setSaving]=useState(false);
+
+    const lastRow=ledger.filter(r=>r.fixingPrice).slice(-1)[0];
+    const totalUnderlying=lastRow?lastRow.totalUnderlying:0;
+    const totalSpent=lastRow?lastRow.totalSpent:0;
+    const notionalLeft=lastRow?lastRow.notionalLeft:contract.notional;
+    const livePrice=prices[contract.underlying]||0;
+    const mtm=totalUnderlying*livePrice, pnl=mtm-totalSpent;
+    const avgCost=totalUnderlying>0?totalSpent/totalUnderlying:0;
+    const isFullyInvested=notionalLeft<=0.01;
+
+    const handleManualSave=async(date)=>{ const e=manualInputs[date]||{}; setSaving(true); await onManualPrice(date,e.BTC||'',e.ETH||''); setSaving(false); setShowManualDate(null); setManualInputs(p=>({...p,[date]:{}})); };
+
+    return(
+        <div>
+            <div className="flex items-center gap-2 mb-5">
+                <button onClick={onBack} className="drill-back flex items-center gap-1 text-sm font-medium"><Icon.ChevLeft/> All Contracts</button>
+                <span className="text-slate-600">/</span>
+                <span className="text-slate-300 text-sm">{contract.clientName}</span>
+                <span className="text-slate-500 text-sm">({contract.id})</span>
+            </div>
+
+            {/* Summary metrics */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                {[['Total Invested',`$${fmt(totalSpent)}`,`of $${fmt(contract.notional,0)} notional`,'text-cyan-400'],[`${contract.underlying} Accumulated`,fmtCrypto(totalUnderlying,8),`avg $${fmt(avgCost,2)}`,'text-white'],['MTM Value',`$${fmt(mtm)}`,`live @ $${fmt(livePrice,0)}`,'text-white'],['Unrealised P&L',`${pnl>=0?'+':''}$${fmt(Math.abs(pnl))}`,`${totalSpent>0?fmt(pnl/totalSpent*100,2):'0.00'}% return`,pnl>=0?'text-green-400':'text-red-400']].map(([lbl,val,sub,cls])=>(
+                    <div key={lbl} className="card p-4"><p className="text-xs text-slate-400 mb-1">{lbl}</p><p className={`text-xl font-bold mono ${cls}`}>{val}</p><p className="text-xs text-slate-500">{sub}</p></div>
+                ))}
+            </div>
+
+            {isFullyInvested&&(
+                <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg p-4 mb-4">
+                    <p className="text-amber-300 font-semibold text-sm flex items-center gap-2"><Icon.Lock/> Notional Fully Invested</p>
+                    <p className="text-xs text-slate-400 mt-1">Holding {contract.underlying} until maturity on {fmtDate(contract.maturityDate)}.</p>
+                    <p className="text-xs text-slate-300 mt-1">Estimated payout at current price: <span className="mono font-bold text-amber-300">${fmt(mtm)}</span></p>
+                </div>
+            )}
+
+            {/* Contract parameters */}
+            <div className="card p-4 mb-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
+                    {[['Contract ID',contract.id],['Underlying',`${contract.underlying}/USDT`],['Trade Date',fmtDate(contract.tradeDate)],['Participation Start',fmtDate(contract.participationStart)],['Maturity',fmtDate(contract.maturityDate)],['Tenor',`${contract.tenor} days`],['Notional',`$${fmt(contract.notional,0)}`],['Base Daily Notional',`$${fmt(contract.baseNotional,2)}`],['Perf. Trigger',`${(contract.trigger*100).toFixed(1)}%`],['Scaling Factor',`${contract.scalingFactor}x`],['Discount Factor',`${(contract.discountFactor*100).toFixed(2)}%`],['Fixing Days',`${ledger.length}`]].map(([k,v])=>(
+                        <div key={k} className="card-inner p-2.5"><p className="text-slate-400 mb-0.5">{k}</p><p className="font-medium mono text-slate-200">{v}</p></div>
+                    ))}
+                </div>
+            </div>
+
+            {/* Price controls */}
+            <div className="flex gap-2 mb-4 flex-wrap">
+                <button onClick={()=>onFetchPrice(today)} disabled={!!fetchingDate} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={!!fetchingDate}/> Fetch Today ({today})</button>
+                <button onClick={()=>setShowManualDate(today)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Edit/> Manual Override</button>
+                <button onClick={async()=>{ for(const row of ledger){ if(!row.fixingPrice && row.date < today && row.date > contract.tradeDate){ await onFetchPrice(row.date); await new Promise(r=>setTimeout(r,500)); } } }} disabled={!!fetchingDate} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-yellow-400"><Icon.Refresh spin={!!fetchingDate}/> Re-fetch Missing Prices</button>
+            </div>
+
+            {showManualDate&&(
+                <div className="card p-4 mb-4">
+                    <p className="text-sm font-medium mb-3">Manual Price Override</p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                        <Field label="Date"><Input type="date" value={showManualDate} onChange={e=>setShowManualDate(e.target.value)}/></Field>
+                        <Field label="BTC/USDT (08:00 UTC open)"><Input type="number" placeholder={`Current: ${priceHistory[showManualDate]?.BTC||'N/A'}`} onChange={e=>setManualInputs(p=>({...p,[showManualDate]:{...p[showManualDate],BTC:e.target.value}}))} step="0.01"/></Field>
+                        <Field label="ETH/USDT (08:00 UTC open)"><Input type="number" placeholder={`Current: ${priceHistory[showManualDate]?.ETH||'N/A'}`} onChange={e=>setManualInputs(p=>({...p,[showManualDate]:{...p[showManualDate],ETH:e.target.value}}))} step="0.01"/></Field>
+                    </div>
+                    <div className="flex gap-2">
+                        <button onClick={()=>handleManualSave(showManualDate)} disabled={saving} className="btn-primary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">{saving?<><Icon.Refresh spin={true}/> Saving…</>:<><Icon.Check/> Save</>}</button>
+                        <button onClick={()=>setShowManualDate(null)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs">Cancel</button>
+                    </div>
+                </div>
+            )}
+
+            {/* Daily ledger table */}
+            <div className="card overflow-hidden">
+                <div className="overflow-x-auto scrollbar-hide">
+                    <table className="w-full text-xs">
+                        <thead>
+                            <tr className="border-b border-slate-800 bg-slate-900/40">
+                                {['Date','Fixing Price (08:00 UTC)','Discounted Price','DoD Change','Trigger','Part. Notional','Underlying Bought','Notional Left','Cumul. Underlying','Notes'].map(h=>(
+                                    <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {displayLedger.map((row)=>{
+                                const ph=priceHistory[row.date];
+                                const rawP=ph?ph[contract.underlying]:null;
+                                const discP=rawP?rawP*(1-contract.discountFactor):null;
+                                const isToday=row.date===today;
+                                const isInitial=row.date===contract.tradeDate;
+                                return(
+                                    <tr key={row.date} className={`border-b border-slate-800/50 ${row.triggerHit?'trigger-row':''} ${isToday?'bg-cyan-900/10':''}`}>
+                                        <td className="px-3 py-2 mono text-slate-300 whitespace-nowrap">{row.date}{isToday&&<span className="ml-1 px-1 py-0.5 bg-cyan-500/20 text-cyan-400 rounded">today</span>}</td>
+                                        <td className="px-3 py-2 mono">
+                                            {rawP ? (
+                                                <span className="flex items-center gap-1.5 group">
+                                                    <span className="text-white">${fmt(rawP,2)}</span>
+                                                    <button onClick={()=>onFetchPrice(row.date)} disabled={!!fetchingDate} title="Re-fetch from Bybit" className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-cyan-400 transition-opacity"><Icon.Refresh spin={fetchingDate===row.date}/></button>
+                                                    <button onClick={()=>setShowManualDate(row.date)} disabled={!!fetchingDate} title="Manual override" className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-yellow-400 transition-opacity"><Icon.Edit/></button>
+                                                </span>
+                                            ) : (
+                                                <span className="flex items-center gap-1.5">
+                                                    <button onClick={()=>onFetchPrice(row.date)} disabled={!!fetchingDate} className="text-cyan-500 hover:text-cyan-400 flex items-center gap-1"><Icon.Refresh spin={fetchingDate===row.date}/> Fetch</button>
+                                                    <button onClick={()=>setShowManualDate(row.date)} className="text-yellow-500 hover:text-yellow-400 flex items-center gap-1"><Icon.Edit/> Enter</button>
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="px-3 py-2 mono text-slate-400">{discP?`$${fmt(discP,2)}`:'—'}</td>
+                                        <td className={`px-3 py-2 mono ${row.dodChange===null?'text-slate-600':row.dodChange<=contract.trigger?'text-red-400':'text-slate-300'}`}>{row.dodChange!==null?`${(row.dodChange*100).toFixed(2)}%`:isInitial?'Initial':'—'}</td>
+                                        <td className="px-3 py-2">{row.triggerHit?<span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded">{contract.scalingFactor}x</span>:row.dodChange!==null?<span className="text-slate-500">1x</span>:'—'}</td>
+                                        <td className="px-3 py-2 mono text-slate-300">{row.partNotional>0?`$${fmt(row.partNotional,2)}`:isInitial?<span className="text-slate-500">Initial fixing</span>:'—'}</td>
+                                        <td className="px-3 py-2 mono text-slate-300">{row.underlyingBought>0?fmtCrypto(row.underlyingBought,8):'—'}</td>
+                                        <td className="px-3 py-2 mono">{rawP?<span className={row.notionalLeft<=0.01?'text-amber-400':'text-slate-300'}>${fmt(row.notionalLeft,2)}</span>:'—'}</td>
+                                        <td className="px-3 py-2 mono text-slate-300">{row.totalUnderlying>0?fmtCrypto(row.totalUnderlying,8):'—'}</td>
+                                        <td className="px-3 py-2 text-slate-500">{row.becameFullyInvested?<span className="text-amber-400 flex items-center gap-1"><Icon.Lock/> Fully invested</span>:isInitial?'Initial fixing day':''}</td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ─── SSPS CONTRACT FORM — custom trade + maturity dates, no email ─────────────
+const SSPSFormModal = ({onSave, onClose}) => {
+    const today=todayUTC();
+    const [form,setForm]=useState({ contractId:'', clientName:'', tradeDate:todayLocal(), maturityDate:'', underlying:'BTC', notional:100000, trigger:-0.03, scalingFactor:1.5, discountFactor:0 });
+    const f=k=>e=>setForm(p=>({...p,[k]:e.target.type==='number'?parseFloat(e.target.value):e.target.value}));
+
+    const tenor=useMemo(()=>{
+        if (!form.tradeDate||!form.maturityDate) return 0;
+        return Math.ceil((new Date(form.maturityDate+'T00:00:00Z')-new Date(form.tradeDate+'T00:00:00Z'))/86400000);
+    },[form.tradeDate,form.maturityDate]);
+
+    const fixingDays=tenor>0?tenor+1:0;
+    const baseNotional=fixingDays>2?Math.floor(form.notional/(fixingDays-2)*100)/100:0;
+    const participationStart=useMemo(()=>{ if(!form.tradeDate)return''; const d=new Date(form.tradeDate+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+1); return d.toISOString().split('T')[0]; },[form.tradeDate]);
+
+    const handleSave=()=>{
+        if (!form.tradeDate||!form.maturityDate) return alert('Set both Trade Date and Maturity Date');
+        if (tenor<=0) return alert('Maturity Date must be after Trade Date');
+        onSave({ id:form.contractId||`SSPS-${Date.now()}`, clientName:form.clientName, tradeDate:form.tradeDate, participationStart, maturityDate:form.maturityDate, tenor, fixingDays, underlying:form.underlying, notional:form.notional, baseNotional, trigger:form.trigger, scalingFactor:form.scalingFactor, discountFactor:form.discountFactor, status:'Active', createdAt:new Date().toISOString() });
+    };
+
+    return(
+        <Modal title="New SSPS Contract" onClose={onClose} wide>
+            <div className="space-y-5">
+                {/* Client */}
+                <div>
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Client Details</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <Field label="Contract ID" hint="Auto-generated if blank"><Input value={form.contractId} onChange={f('contractId')} placeholder="e.g. 0WWHJ1TSA-SSPS-2026-1"/></Field>
+                        <Field label="Client Name"><Input value={form.clientName} onChange={f('clientName')}/></Field>
+                    </div>
+                </div>
+                {/* Trade Terms */}
+                <div>
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Trade Terms</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <Field label="Trade Date" hint="First fixing day. Participation buying starts next calendar day."><Input type="date" value={form.tradeDate} onChange={f('tradeDate')}/></Field>
+                        <Field label="Maturity Date" hint="Last fixing day. Tenor calculated automatically."><Input type="date" value={form.maturityDate} onChange={f('maturityDate')}/></Field>
+                        <Field label="Underlying"><Select value={form.underlying} onChange={f('underlying')}><option value="BTC">BTC/USDT</option><option value="ETH">ETH/USDT</option></Select></Field>
+                        <Field label="Notional (USDT)"><Input type="number" value={form.notional} onChange={f('notional')} step="1000"/></Field>
+                    </div>
+                </div>
+                {/* Participation Parameters */}
+                <div>
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Participation Parameters</p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <Field label="Perf. Trigger (%)" hint="DoD % ≤ this triggers scaling"><Input type="number" value={form.trigger*100} onChange={e=>setForm(p=>({...p,trigger:parseFloat(e.target.value)/100}))} step="0.1" placeholder="-3.0"/></Field>
+                        <Field label="Participation Scaling Factor" hint="Multiplier on trigger hit"><Input type="number" value={form.scalingFactor} onChange={f('scalingFactor')} step="0.1" min="1"/></Field>
+                        <Field label="Price Discount Factor (%)" hint="0% = full market price"><Input type="number" value={form.discountFactor*100} onChange={e=>setForm(p=>({...p,discountFactor:parseFloat(e.target.value)/100}))} step="0.1" min="0" max="50"/></Field>
+                    </div>
+                </div>
+                {/* Computed preview */}
+                {tenor>0&&(
+                    <div className="bg-slate-900/80 border border-slate-700 rounded-lg p-4">
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Auto-Computed</p>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                            {[['Tenor',`${tenor} calendar days`],['Participation Start',fmtDate(participationStart)],['Total Fixing Days',`${fixingDays}`],['Base Daily Notional',`$${fmt(baseNotional,2)}`],['Scaled Notional (if triggered)',`$${fmt(baseNotional*form.scalingFactor,2)}`],['Notional ÷ (fixing days−2)',`$${fmt(form.notional/(fixingDays-2)||0,2)}`]].map(([k,v])=>(
+                                <div key={k} className="card-inner p-2.5"><p className="text-slate-400">{k}</p><p className="font-semibold mono text-cyan-300">{v}</p></div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+            <div className="flex gap-2 mt-5">
+                <button onClick={handleSave} className="btn-primary flex-1 px-4 py-2 rounded-lg font-semibold text-sm">Create Contract</button>
+                <button onClick={onClose} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+            </div>
+        </Modal>
+    );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROOT APP — Bybit live prices via /v5/market/tickers, every 60s
+// ═══════════════════════════════════════════════════════════════════════════════
+const App = () => {
+    const [tab,setTab]=useState('ssps');
+    const [prices,setPrices]=useState({BTC:0,ETH:0});
+    const [lastUpdate,setLastUpdate]=useState(null);
+
+    const fetchLivePrices=useCallback(async()=>{
+        try {
+            const [btc,eth]=await Promise.allSettled([fetchBybitLive('BTCUSDT'),fetchBybitLive('ETHUSDT')]);
+            setPrices(p=>({
+                BTC:btc.status==='fulfilled'?btc.value:p.BTC,
+                ETH:eth.status==='fulfilled'?eth.value:p.ETH,
+            }));
+            setLastUpdate(new Date());
+        } catch(e){console.error('Live price error',e);}
+    },[]);
+
+    useEffect(()=>{ fetchLivePrices(); const t=setInterval(fetchLivePrices,60000); return()=>clearInterval(t); },[]);
+
+    return(
+        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
+            <div className="max-w-7xl mx-auto px-4 md:px-6 py-6">
+                <div className="mb-6">
+                    <h1 className="text-3xl font-bold gradient-text mb-1">Crypto Prime Broker</h1>
+                    <p className="text-slate-500 text-sm">Internal Portfolio Management System</p>
+                </div>
+                <PriceTicker prices={prices} lastUpdate={lastUpdate}/>
+                <div className="flex gap-1 mb-6 border-b border-slate-800">
+                    {[['loans','Securitised Loans'],['ssps','Smart Participation Swap']].map(([id,label])=>(
+                        <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
+                    ))}
+                </div>
+                {tab==='loans'?<LoanModule prices={prices}/>:<SSPSModule prices={prices}/>}
+            </div>
+        </div>
+    );
+};
+
+ReactDOM.render(<App/>, document.getElementById('root'));
+</script>
+</body>
+</html>
