@@ -694,15 +694,93 @@ const LoanModule = ({prices}) => {
                 fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json()),
                 fetch(`${config.scriptUrl}?action=read&sheetName=Transactions`).then(r=>r.json())
             ]);
-            if (lr.success&&lr.values) setLoans(lr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],counterparty:r[1],loanAmount:+r[2],underlying:r[3],collateralAmount:+r[4],collateralType:r[5],interestRate:+r[6],interestPaid:+r[8],tenor:+r[9],startDate:r[10],maturityDate:r[11],marginCallThreshold:+r[12],originalCollateralRatio:+r[13],status:r[14],createdAt:r[15]})));
+            if (lr.success && lr.values) {
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                const fetchedLoans = lr.values.filter(r=>r[0]&&r[1]).map(r=>({
+                    id:r[0], counterparty:r[1], loanAmount:+r[2], underlying:r[3],
+                    collateralAmount:+r[4], collateralType:r[5], interestRate:+r[6],
+                    interestPaid:+r[8], tenor:+r[9], startDate:r[10], maturityDate:r[11],
+                    marginCallThreshold:+r[12], originalCollateralRatio:+r[13],
+                    status:r[14], createdAt:r[15]
+                }));
+                // Auto-mature loans whose maturity date has passed but are still marked Active
+                // Push the status change back to Sheets so it persists
+                const toMature = fetchedLoans.filter(l => {
+                    if (l.status !== 'Active' || !l.maturityDate) return false;
+                    const mat = new Date(l.maturityDate); mat.setHours(0,0,0,0);
+                    return mat < today;
+                });
+                for (const loan of toMature) {
+                    loan.status = 'Matured';
+                    try {
+                        const rowIdx = lr.values.findIndex(r=>String(r[0]).trim()===String(loan.id).trim());
+                        if (rowIdx >= 0) {
+                            const sheetRow = rowIdx + 2;
+                            const m = calcMetrics(loan);
+                            await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
+                                loan.id, loan.counterparty, loan.loanAmount,
+                                loan.underlying, loan.collateralAmount, loan.collateralType,
+                                loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
+                                loan.tenor, loan.startDate, loan.maturityDate,
+                                loan.marginCallThreshold, loan.originalCollateralRatio,
+                                loan.status, loan.createdAt||''
+                            ]))}`);
+                        }
+                    } catch(e) { console.error('Auto-mature push failed for '+loan.id+':', e.message); }
+                }
+                setLoans(fetchedLoans);
+            }
             if (tr.success&&tr.values) setTransactions(tr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],loanId:r[1],type:r[2],amount:+r[3],timestamp:r[4]})));
         } catch(e){alert('Sync error: '+e.message);}
         setLoading(false);
     };
     useEffect(()=>{ if(config.scriptUrl){fetchSheets();const t=setInterval(fetchSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
 
-    const addLoan = (d)=>{ setLoans(p=>[...p,{...d,id:d.loanId||`LOAN-${Date.now()}`,interestPaid:0,tenor:calcTenor(d.startDate,d.maturityDate),status:'Active',createdAt:new Date().toISOString()}]); setShowAdd(false); };
-    const updateLoan = (loan)=>{ setLoans(p=>p.map(l=>l.id===loan.id?loan:l)); setEditingLoan(null); };
+    const addLoan = async (d) => {
+        const loan = {...d, id:d.loanId||`LOAN-${Date.now()}`, interestPaid:0, tenor:calcTenor(d.startDate,d.maturityDate), status:'Active', createdAt:new Date().toISOString()};
+        setLoans(p=>[...p, loan]);
+        setShowAdd(false);
+        // Append new loan row to Google Sheets
+        if (config.scriptUrl) {
+            try {
+                const m = calcMetrics(loan);
+                await fetch(`${config.scriptUrl}?action=append&sheetName=Loans&values=${encodeURIComponent(JSON.stringify([
+                    loan.id, loan.counterparty, loan.loanAmount,
+                    loan.underlying, loan.collateralAmount, loan.collateralType,
+                    loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
+                    loan.tenor, loan.startDate, loan.maturityDate,
+                    loan.marginCallThreshold, loan.originalCollateralRatio,
+                    loan.status, loan.createdAt
+                ]))}`);
+            } catch(e) { console.error('Sheets addLoan failed:', e.message); }
+        }
+    };
+    const updateLoan = async (loan) => {
+        setLoans(p=>p.map(l=>l.id===loan.id?loan:l));
+        setEditingLoan(null);
+        // Push updated loan row to Google Sheets immediately
+        if (config.scriptUrl) {
+            try {
+                const m = calcMetrics(loan);
+                const lr = await fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json());
+                if (lr.success && lr.values) {
+                    const rowIdx = lr.values.findIndex(r=>String(r[0]).trim()===String(loan.id).trim());
+                    if (rowIdx >= 0) {
+                        const sheetRow = rowIdx + 2;
+                        await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
+                            loan.id, loan.counterparty, loan.loanAmount,
+                            loan.underlying, loan.collateralAmount, loan.collateralType,
+                            loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
+                            loan.tenor, loan.startDate, loan.maturityDate,
+                            loan.marginCallThreshold, loan.originalCollateralRatio,
+                            loan.status, loan.createdAt||''
+                        ]))}`);
+                    }
+                }
+            } catch(e) { console.error('Sheets updateLoan failed:', e.message); }
+        }
+    };
     const addTxn = async (loanId,type,amount)=>{
         const txn = {id:`TXN-${Date.now()}`,loanId,type,amount:+amount,timestamp:new Date().toISOString()};
         // Update local state immediately so UI reflects change at once
