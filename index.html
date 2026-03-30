@@ -300,10 +300,10 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
         // Period: 1st of month to last day of month (or today if current month)
         const periodStart = new Date(year, month, 1);
         const isCurrentMonth = (year === today.getFullYear() && month === today.getMonth());
-        // Set periodEnd to MIDNIGHT of the FIRST day of next month.
-        // Feb 1 00:00 → Mar 1 00:00 = exactly 28 days → Math.floor = 28 ✓
-        // Feb 1 00:00 → Feb 28 23:59:59 = 27d 23h → Math.floor = 27 ✗ (previous wrong fix)
-        const periodEnd = isCurrentMonth ? today : new Date(year, month + 1, 1);
+        // Set to END of last day (23:59:59.999) so all days in month are counted.
+        // new Date(year, month+1, 0) = midnight of last day → only 27 days counted for Feb.
+        // new Date(year, month+1, 0, 23, 59, 59, 999) = end of last day → full 28 days counted.
+        const periodEnd = isCurrentMonth ? today : new Date(year, month + 1, 0, 23, 59, 59, 999);
         // Clamp to loan active period
         const effectiveStart = new Date(Math.max(loanStart, periodStart));
         const effectiveEnd   = new Date(Math.min(loanEnd, periodEnd));
@@ -420,11 +420,29 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
             {/* Main dashboard grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-3">
 
-                {/* 1 — Active loans by counterparty */}
+                {/* 1 — Active loans by counterparty + currency breakdown */}
                 <div className="card p-4">
                     <p className="text-xs text-slate-400 mb-2 font-medium">Active Loan Book</p>
-                    <p className="text-xl font-bold mono text-white mb-1">${fmt(totalActive, 0)}</p>
-                    <p className="text-xs text-slate-500 mb-3">{activeLoans.length} active loan{activeLoans.length!==1?'s':''}</p>
+                    <p className="text-xl font-bold mono text-white mb-0.5">${fmt(totalActive, 0)}</p>
+                    <p className="text-xs text-slate-500 mb-2">{activeLoans.length} active loan{activeLoans.length!==1?'s':''}</p>
+                    {/* Currency breakdown */}
+                    {(()=>{
+                        const currencies = [...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean);
+                        return currencies.length > 1 ? (
+                            <div className="flex gap-2 mb-3">
+                                {currencies.map(cur=>{
+                                    const total = activeLoans.filter(l=>l.underlying===cur).reduce((s,l)=>s+l.loanAmount,0);
+                                    return (
+                                        <div key={cur} className="flex-1 bg-slate-800/60 rounded px-2 py-1 text-center">
+                                            <p className="text-xs text-slate-400">{cur}</p>
+                                            <p className="text-xs font-bold mono text-cyan-400">${fmt(total,0)}</p>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : null;
+                    })()}
+                    {/* Counterparty breakdown */}
                     <div className="space-y-1.5">
                         {counterparties.map(cp => (
                             <div key={cp.name} className="flex items-center justify-between">
@@ -552,7 +570,7 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                                 const loanEnd    = new Date(loan.maturityDate);
                                 const periodStart = new Date(yr, mo, 1);
                                 const isCurrentMonth = (yr===today.getFullYear()&&mo===today.getMonth());
-                                const periodEnd = isCurrentMonth ? today : new Date(yr, mo+1, 1);
+                                const periodEnd = isCurrentMonth ? today : new Date(yr, mo+1, 0, 23, 59, 59, 999);
                                 const effStart = new Date(Math.max(loanStart, periodStart));
                                 const effEnd   = new Date(Math.min(loanEnd, periodEnd));
                                 const days = Math.max(0, Math.floor((effEnd-effStart)/86400000));
@@ -685,11 +703,55 @@ const LoanModule = ({prices}) => {
 
     const addLoan = (d)=>{ setLoans(p=>[...p,{...d,id:d.loanId||`LOAN-${Date.now()}`,interestPaid:0,tenor:calcTenor(d.startDate,d.maturityDate),status:'Active',createdAt:new Date().toISOString()}]); setShowAdd(false); };
     const updateLoan = (loan)=>{ setLoans(p=>p.map(l=>l.id===loan.id?loan:l)); setEditingLoan(null); };
-    const addTxn = (loanId,type,amount)=>{
-        setTransactions(p=>[...p,{id:`TXN-${Date.now()}`,loanId,type,amount:+amount,timestamp:new Date().toISOString()}]);
+    const addTxn = async (loanId,type,amount)=>{
+        const txn = {id:`TXN-${Date.now()}`,loanId,type,amount:+amount,timestamp:new Date().toISOString()};
+        // Update local state immediately so UI reflects change at once
+        setTransactions(p=>[...p,txn]);
         const loan=loans.find(l=>l.id===loanId);
-        if (loan){const u={...loan};if(type==='Collateral Top-up')u.collateralAmount+=+amount;else if(type==='Loan Repayment'){u.loanAmount-=+amount;if(u.loanAmount<=0)u.status='Repaid';}else if(type==='Interest Payment')u.interestPaid+=+amount;updateLoan(u);}
+        let updatedLoan = null;
+        if (loan){
+            const u={...loan};
+            if(type==='Collateral Top-up') u.collateralAmount+=+amount;
+            else if(type==='Loan Repayment'){u.loanAmount-=+amount;if(u.loanAmount<=0)u.status='Repaid';}
+            else if(type==='Interest Payment') u.interestPaid+=+amount;
+            updateLoan(u);
+            updatedLoan = u;
+        }
         setShowTxn(null);
+        // Push transaction and updated loan to Google Sheets
+        // Must happen AFTER state update so Sheets reflects the latest values
+        if (config.scriptUrl) {
+            try {
+                // 1. Append transaction row to Transactions sheet
+                await fetch(`${config.scriptUrl}?action=append&sheetName=Transactions&values=${encodeURIComponent(JSON.stringify([
+                    txn.id, txn.loanId, txn.type, txn.amount, txn.timestamp
+                ]))}`);
+                // 2. Update the loan row in Loans sheet with new collateral/amount/status
+                if (updatedLoan) {
+                    const m = calcMetrics(updatedLoan);
+                    // Find row index in sheet (loans are 1-indexed, +2 for header)
+                    // Use update action with rowIndex by finding the loan's position
+                    // We append a fresh read then update — simpler: use append+dedup or find row
+                    // The existing script uses rowIndex-based update, so we need to find the row.
+                    // Fetch current loans sheet to find row number of this loan
+                    const lr = await fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json());
+                    if (lr.success && lr.values) {
+                        const rowIdx = lr.values.findIndex(r=>r[0]===updatedLoan.id);
+                        if (rowIdx >= 0) {
+                            const sheetRow = rowIdx + 2; // +1 for header, +1 for 1-indexing
+                            await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
+                                updatedLoan.id, updatedLoan.counterparty, updatedLoan.loanAmount,
+                                updatedLoan.underlying, updatedLoan.collateralAmount, updatedLoan.collateralType,
+                                updatedLoan.interestRate, m.interest.toFixed(2), updatedLoan.interestPaid,
+                                updatedLoan.tenor, updatedLoan.startDate, updatedLoan.maturityDate,
+                                updatedLoan.marginCallThreshold, updatedLoan.originalCollateralRatio,
+                                updatedLoan.status, updatedLoan.createdAt||''
+                            ]))}`);
+                        }
+                    }
+                }
+            } catch(e) { console.error('Sheets push failed:', e.message); }
+        }
     };
     const exportCSV = ()=>{ const rows=loans.map(l=>{const m=calcMetrics(l);return[l.id,l.counterparty,l.loanAmount,l.underlying,l.collateralAmount,l.collateralType,l.interestRate,m.interest.toFixed(2),l.interestPaid,l.tenor,l.startDate,l.maturityDate,l.status,m.ratio.toFixed(2)].join(',');}); const csv=['ID,Counterparty,Loan,Currency,Collateral,CollType,Rate%,IntAccrued,IntPaid,Tenor,Start,Maturity,Status,Ratio%',...rows].join('\n'); const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`loans-${todayUTC()}.csv`;a.click(); };
     const filtered=loans.filter(l=>filterStatus==='all'||(filterStatus==='active'&&l.status==='Active')||(filterStatus==='matured'&&l.status==='Matured')||(filterStatus==='repaid'&&l.status==='Repaid')||(filterStatus==='at-risk'&&calcMetrics(l).atRisk));
