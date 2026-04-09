@@ -708,6 +708,24 @@ const LoanModule = ({prices}) => {
     };
     const calcTenor = (s,m)=>!s||!m?null:Math.ceil((new Date(m)-new Date(s))/86400000);
 
+    // Normalise any date format from Sheets to plain YYYY-MM-DD.
+    // Sheets may return: "2026-01-28", "2025-06-29T16:00:00.000Z", or other ISO variants.
+    // We always want just the date portion in local calendar terms.
+    const normaliseDate = (raw) => {
+        if (!raw || raw === '' || raw === 'Open Term') return '';
+        const s = String(raw).trim();
+        // Already plain date
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+        // ISO with time component — take the date part before 'T'
+        if (s.includes('T')) return s.split('T')[0];
+        // Fallback: try parsing and extracting UTC date
+        try {
+            const d = new Date(s);
+            if (!isNaN(d)) return d.toISOString().split('T')[0];
+        } catch(e) {}
+        return s;
+    };
+
     const fetchSheets = async () => {
         if (!config.scriptUrl) return;
         setLoading(true);
@@ -723,7 +741,8 @@ const LoanModule = ({prices}) => {
                     id:r[0], counterparty:r[1], loanAmount:+r[2], underlying:r[3],
                     collateralAmount:+r[4], collateralType:r[5], interestRate:+r[6],
                     interestPaid:+r[8], tenor:(r[9]===''||r[9]==='null'||r[9]===null)?null:+r[9],
-                    startDate:r[10], maturityDate:(r[11]===''||r[11]==='Open Term')?'':r[11],
+                    startDate:normaliseDate(r[10]),
+                    maturityDate:(r[11]===''||r[11]==='Open Term')?'':normaliseDate(r[11]),
                     marginCallThreshold:+r[12], originalCollateralRatio:+r[13],
                     status:r[14], createdAt:r[15],
                     secured: r[16]===false||r[16]==='false'||r[16]==='Unsecured' ? false : true
@@ -746,7 +765,7 @@ const LoanModule = ({prices}) => {
                                 loan.id, loan.counterparty, loan.loanAmount,
                                 loan.underlying, loan.collateralAmount, loan.collateralType,
                                 loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
-                                loan.tenor, loan.startDate, loan.maturityDate,
+                                loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
                                 loan.marginCallThreshold, loan.originalCollateralRatio,
                                 loan.status, loan.createdAt||''
                             ]))}`);
@@ -773,7 +792,7 @@ const LoanModule = ({prices}) => {
                     loan.id, loan.counterparty, loan.loanAmount,
                     loan.underlying, loan.collateralAmount, loan.collateralType,
                     loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
-                    loan.tenor, loan.startDate, loan.maturityDate,
+                    loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
                     loan.marginCallThreshold, loan.originalCollateralRatio,
                     loan.status, loan.createdAt, loan.secured===false?'Unsecured':'Secured'
                 ]))}`);
@@ -796,7 +815,7 @@ const LoanModule = ({prices}) => {
                             loan.id, loan.counterparty, loan.loanAmount,
                             loan.underlying, loan.collateralAmount, loan.collateralType,
                             loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
-                            loan.tenor, loan.startDate, loan.maturityDate,
+                            loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
                             loan.marginCallThreshold, loan.originalCollateralRatio,
                             loan.status, loan.createdAt||'', loan.secured===false?'Unsecured':'Secured'
                         ]))}`);
@@ -845,7 +864,7 @@ const LoanModule = ({prices}) => {
                                 updatedLoan.id, updatedLoan.counterparty, updatedLoan.loanAmount,
                                 updatedLoan.underlying, updatedLoan.collateralAmount, updatedLoan.collateralType,
                                 updatedLoan.interestRate, m.interest.toFixed(2), updatedLoan.interestPaid,
-                                updatedLoan.tenor, updatedLoan.startDate, updatedLoan.maturityDate,
+                                updatedLoan.tenor, normaliseDate(updatedLoan.startDate), normaliseDate(updatedLoan.maturityDate)||'',
                                 updatedLoan.marginCallThreshold, updatedLoan.originalCollateralRatio,
                                 updatedLoan.status, updatedLoan.createdAt||'', updatedLoan.secured===false?'Unsecured':'Secured'
                             ]))}`);
