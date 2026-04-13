@@ -3096,7 +3096,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
                         <table className="w-full text-xs">
                             <thead>
                                 <tr className="border-b border-slate-800 bg-slate-900/40">
-                                    {['Client','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Strike','Remaining','Action'].map(h=>(
+                                    {['Client','Underlying','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Strike','Remaining','Action'].map(h=>(
                                         <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
                                     ))}
                                 </tr>
@@ -3104,28 +3104,44 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
                             <tbody>
                                 {upcoming.map((s,i)=>{
                                     const f = s.existing;
-                                    const scenario = f?.fixingPrice ? accScenario(s.trade, parseFloat(f.fixingPrice)) : null;
+                                    // After 4pm SGT on the settlement date, lock to actual fixing price.
+                                    // Before 4pm SGT (or on future dates), use live price for indicative scenario.
+                                    const nowSGT = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
+                                    const isToday = s.date === todayUTC();
+                                    const pastFixingTime = isToday && nowSGT.getHours() >= 16;
+                                    const priceForScenario = f?.fixingPrice
+                                        ? parseFloat(f.fixingPrice)  // locked fixing price
+                                        : (!pastFixingTime ? (prices[accBaseAsset(s.trade.underlyingPair)] || null) : null); // live indicative
+                                    const isIndicative = !f?.fixingPrice && priceForScenario !== null;
+                                    const scenario = priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null;
                                     const amounts  = scenario ? accAmounts(s.trade, scenario) : null;
                                     const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
                                     const isKO = scenario === 'knockout';
                                     return (
                                         <tr key={i} className={`border-b border-slate-800/50 ${s.weekend?'bg-amber-900/10':''} ${isKO?'bg-orange-900/10':''}`}>
                                             <td className="px-3 py-2.5 font-medium text-slate-200">{s.trade.clientName}</td>
+                                            <td className="px-3 py-2.5 mono text-slate-400">{s.trade.underlyingPair}</td>
                                             <td className={`px-3 py-2.5 mono ${s.weekend?'text-amber-400':'text-slate-300'}`}>
                                                 {s.date}{s.weekend&&<span className="ml-1 text-[10px] text-amber-500">WE</span>}
                                             </td>
                                             <td className="px-3 py-2.5 text-slate-400">{dayName(s.date)}</td>
-                                            <td className="px-3 py-2.5 mono text-slate-300">
-                                                {f?.fixingPrice ? `$${fmt(parseFloat(f.fixingPrice),2)}` : <span className="text-slate-600">—</span>}
+                                            <td className="px-3 py-2.5 mono">
+                                                {f?.fixingPrice
+                                                    ? <span className="text-white">${fmt(parseFloat(f.fixingPrice),2)}</span>
+                                                    : isIndicative
+                                                        ? <span className="text-slate-400">${fmt(priceForScenario,2)} <span className="text-slate-600 text-[9px]">live</span></span>
+                                                        : <span className="text-slate-600">—</span>}
                                             </td>
                                             <td className="px-3 py-2.5">
-                                                {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${ss.bg} ${ss.text}`}>{ss.label}</span> : <span className="text-slate-600">—</span>}
+                                                {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${ss.bg} ${ss.text}`}>{ss.label}{isIndicative&&<span className="ml-0.5 opacity-60">~</span>}</span> : <span className="text-slate-600">—</span>}
                                             </td>
                                             <td className="px-3 py-2.5 mono text-cyan-400">
-                                                {amounts?.cryptoQty > 0 ? `${amounts.cryptoQty.toFixed(8)} ${amounts.cryptoCcy}` : '—'}
+                                                {amounts?.cryptoQty > 0 ? <span>{amounts.cryptoQty.toFixed(8)} {amounts.cryptoCcy}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span> : '—'}
                                             </td>
                                             <td className="px-3 py-2.5 mono text-yellow-400">
-                                                {amounts?.baseAmount > 0 ? `${s.trade.notionalCurrency} ${fmt(amounts.baseAmount,2)}` : isKO ? `${s.trade.notionalCurrency} ${fmt(s.remaining,2)} (remaining)` : '—'}
+                                                {amounts?.baseAmount > 0
+                                                    ? <span>{s.trade.notionalCurrency} {fmt(amounts.baseAmount,2)}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
+                                                    : isKO ? `${s.trade.notionalCurrency} ${fmt(s.remaining,2)} (remaining)` : '—'}
                                             </td>
                                             <td className="px-3 py-2.5 mono text-orange-400">
                                                 {s.trade.knockOutEnabled ? `$${fmt(parseFloat(s.trade.knockOutPrice),2)}` : '—'}
@@ -3133,12 +3149,10 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
                                             <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
                                             <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.remaining,2)}</td>
                                             <td className="px-3 py-2.5">
-                                                {f?.fixingPrice ? (
-                                                    <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
-                                                        className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 rounded text-green-400 text-[10px] transition-colors whitespace-nowrap">
-                                                        ✓ Confirm
-                                                    </button>
-                                                ) : <span className="text-slate-600 text-[10px]">Enter price first</span>}
+                                                <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
+                                                    className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 rounded text-green-400 text-[10px] transition-colors whitespace-nowrap">
+                                                    ✓ Confirm
+                                                </button>
                                             </td>
                                         </tr>
                                     );
@@ -3216,8 +3230,8 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                 {[
                     ['Notional', `${trade.notionalCurrency} ${fmt(notional,2)}`, trade.underlyingPair, 'text-white'],
                     ['Remaining', `${trade.notionalCurrency} ${fmt(remaining,2)}`, `${fmt(pctUsed,1)}% deployed`, remaining < amount2*2?'text-amber-400':'text-slate-300'],
-                    ['Amount 1', `${trade.notionalCurrency} ${fmt(amount1,2)}`, 'per above-strike', 'text-green-400'],
-                    ['Amount 2', `${trade.notionalCurrency} ${fmt(amount2,2)}`, 'per period', 'text-cyan-400'],
+                    ['Amount 1', `${trade.notionalCurrency} ${fmt(amount1,2)}`, parseFloat(trade.strikePrice)>0?`≈ ${(amount1/parseFloat(trade.strikePrice)).toFixed(8)} ${accBaseAsset(trade.underlyingPair)}`:'per above-strike', 'text-green-400'],
+                    ['Amount 2', `${trade.notionalCurrency} ${fmt(amount2,2)}`, parseFloat(trade.strikePrice)>0?`≈ ${(amount2/parseFloat(trade.strikePrice)).toFixed(8)} ${accBaseAsset(trade.underlyingPair)}`:'per period', 'text-cyan-400'],
                     ['Strike', `$${fmt(parseFloat(trade.strikePrice),2)}`, trade.underlyingPair, 'text-purple-400'],
                     ['KO Price', trade.knockOutEnabled?`$${fmt(parseFloat(trade.knockOutPrice),2)}`:'—', trade.knockOutEnabled?'knockout level':'no KO', 'text-orange-400'],
                     ['Buffer', trade.bufferEnabled?`$${fmt(parseFloat(trade.bufferPrice),2)}`:'—', trade.bufferEnabled?'buffer level':'no buffer', 'text-blue-400'],
