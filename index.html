@@ -2935,9 +2935,14 @@ const trunc8 = (n) => Math.floor(n * 1e8) / 1e8;
 
 // Calculate amounts for a given scenario
 const accAmounts = (trade, scenario) => {
-    const amount1 = parseFloat(trade.amount1);
-    const amount2 = parseFloat(trade.amount2);
-    const strike  = parseFloat(trade.strikePrice);
+    // Always recompute from source with truncation to avoid stale rounded stored values.
+    // amount2 = notional / periods (trunc 2dp), amount1 = amount2 / 2 (trunc 2dp)
+    const notional  = parseFloat(trade.notionalAmount) || 0;
+    const periods   = parseInt(trade.tenorValue) || 1;
+    const amount2raw = notional / periods;
+    const amount2   = trunc2(amount2raw);
+    const amount1   = trunc2(amount2 / 2);
+    const strike    = parseFloat(trade.strikePrice);
     const base    = accBaseAsset(trade.underlyingPair);
     const notionalCcy = trade.notionalCurrency;
     switch (scenario) {
@@ -3041,7 +3046,8 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
     activeTrades.forEach(t => {
         const sched = buildAccSchedule(t);
         const confirmedCount = (t.fixings||[]).filter(f=>f.confirmed).length;
-        const remaining = Math.max(0, parseFloat(t.notionalAmount) - confirmedCount * parseFloat(t.amount2));
+        const amount2dash = trunc2((parseFloat(t.notionalAmount)||0) / (parseInt(t.tenorValue)||1));
+        const remaining = Math.max(0, parseFloat(t.notionalAmount) - confirmedCount * amount2dash);
         const ccy = t.notionalCurrency;
         if (!portfolioTotals[ccy]) portfolioTotals[ccy] = {original:0, remaining:0};
         portfolioTotals[ccy].original  += parseFloat(t.notionalAmount);
@@ -3058,7 +3064,8 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
             const existing = (trade.fixings||[]).find(f=>f.date===date);
             if (existing?.confirmed) return;
             const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<date).length;
-            const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * parseFloat(trade.amount2));
+            const amount2up = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
+            const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
             upcoming.push({trade, date, existing, remaining, weekend:isWeekend(date)});
         });
     });
@@ -3183,10 +3190,12 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
     const schedule    = buildAccSchedule(trade);
     const fixings     = trade.fixings || [];
     const confirmed   = fixings.filter(f=>f.confirmed);
-    const amount1     = parseFloat(trade.amount1);
-    const amount2     = parseFloat(trade.amount2);
+    // Recompute with truncation so display is always correct even for older trades
+    const amount2     = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
+    const amount1     = trunc2(amount2 / 2);
     const notional    = parseFloat(trade.notionalAmount);
     const remaining   = Math.max(0, notional - confirmed.length * amount2);
+    // amount2 already recomputed above with truncation
     const pctUsed     = notional > 0 ? ((notional-remaining)/notional)*100 : 0;
     const statusCls   = ACC_STATUS_BADGE[trade.status] || ACC_STATUS_BADGE['Active'];
     const livePrice   = prices[accBaseAsset(trade.underlyingPair)] || 0;
@@ -3296,7 +3305,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                 const isFuture = date > today;
                                 // Remaining notional after this fixing
                                 const confirmedBefore = fixings.filter(f=>f.confirmed&&f.date<=date).length;
-                                const notionalAfter = Math.max(0, notional - confirmedBefore * amount2);
+                                const notionalAfter = Math.max(0, notional - confirmedBefore * amount2); // amount2 already truncated
                                 const isKO = scenario === 'knockout';
                                 return (
                                     <tr key={date} className={`border-b border-slate-800/40 ${weekend?'bg-amber-900/10':''} ${isKO?'bg-orange-900/10':''} ${isFuture?'opacity-50':''}`}>
