@@ -294,14 +294,9 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
     // ── Interest calc: strictly within calendar month (360-day year) ──────────
     const calcMonthInterest = (loan, year, month) => {
         // month is 0-indexed (Jan=0)
-        if (!loan.startDate) return 0;
+        if (!loan.startDate || !loan.maturityDate) return 0;
         const loanStart = new Date(loan.startDate);
-        const isOpenTerm = !loan.maturityDate || loan.maturityDate === '';
-        // For open-term Active loans: no maturity cap — accrue to end of period
-        // For matured/repaid open-term: use today as the cap (best approximation)
-        const loanEnd = isOpenTerm
-            ? (loan.status === 'Active' ? new Date(9999,0,1) : new Date())
-            : new Date(loan.maturityDate);
+        const loanEnd   = new Date(loan.maturityDate);
         // Period: 1st of month to last day of month (or today if current month)
         const periodStart = new Date(year, month, 1);
         const isCurrentMonth = (year === today.getFullYear() && month === today.getMonth());
@@ -341,8 +336,7 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
     // ── Collateral breakdown by type ─────────────────────────────────────────
     const collateralTypes = [...new Set(activeLoans.map(l => l.collateralType))].filter(Boolean);
     const collateralGroups = collateralTypes.map(type => {
-        // Exclude unsecured loans from collateral calculations
-        const group = activeLoans.filter(l => l.collateralType === type && l.secured !== false && l.secured !== 'false');
+        const group = activeLoans.filter(l => l.collateralType === type);
         const totalCollateral = group.reduce((s, l) => s + l.collateralAmount, 0);
         const price = prices[type] || 0;
         const totalCollVal = totalCollateral * price;
@@ -364,7 +358,7 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
     const totalActive = activeLoans.reduce((s,l) => s + l.loanAmount, 0);
 
     // ── Nearest margin call ───────────────────────────────────────────────────
-    const mcLoans = activeLoans.filter(l=>l.secured!==false&&l.secured!=='false').map(l => {
+    const mcLoans = activeLoans.map(l => {
         const m = calcMetrics(l);
         const price = prices[l.collateralType] || 0;
         const absDrop = price - m.mcPrice;
@@ -380,7 +374,6 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
     // ── Expiring within 7 days ────────────────────────────────────────────────
     const in7days = new Date(today.getTime() + 7 * 86400000);
     const expiring = activeLoans.filter(l => {
-        if (!l.maturityDate || l.maturityDate === '') return false; // open-term never expires
         const mat = new Date(l.maturityDate);
         return mat >= today && mat <= in7days;
     }).sort((a,b) => new Date(a.maturityDate) - new Date(b.maturityDate));
@@ -427,29 +420,11 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
             {/* Main dashboard grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-3">
 
-                {/* 1 — Active loans by counterparty + currency breakdown */}
+                {/* 1 — Active loans by counterparty */}
                 <div className="card p-4">
                     <p className="text-xs text-slate-400 mb-2 font-medium">Active Loan Book</p>
-                    <p className="text-xl font-bold mono text-white mb-0.5">${fmt(totalActive, 0)}</p>
-                    <p className="text-xs text-slate-500 mb-2">{activeLoans.length} active loan{activeLoans.length!==1?'s':''}</p>
-                    {/* Currency breakdown */}
-                    {(()=>{
-                        const currencies = [...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean);
-                        return currencies.length > 1 ? (
-                            <div className="flex gap-2 mb-3">
-                                {currencies.map(cur=>{
-                                    const total = activeLoans.filter(l=>l.underlying===cur).reduce((s,l)=>s+l.loanAmount,0);
-                                    return (
-                                        <div key={cur} className="flex-1 bg-slate-800/60 rounded px-2 py-1 text-center">
-                                            <p className="text-xs text-slate-400">{cur}</p>
-                                            <p className="text-xs font-bold mono text-cyan-400">${fmt(total,0)}</p>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        ) : null;
-                    })()}
-                    {/* Counterparty breakdown */}
+                    <p className="text-xl font-bold mono text-white mb-1">${fmt(totalActive, 0)}</p>
+                    <p className="text-xs text-slate-500 mb-3">{activeLoans.length} active loan{activeLoans.length!==1?'s':''}</p>
                     <div className="space-y-1.5">
                         {counterparties.map(cp => (
                             <div key={cp.name} className="flex items-center justify-between">
@@ -678,96 +653,20 @@ const LoanModule = ({prices}) => {
 
     const calcInterest = (loan) => {
         if (!loan.startDate) return 0;
-        const start = new Date(loan.startDate);
-        const today = new Date();
-        let end;
-        const isOpenTerm = !loan.maturityDate || loan.maturityDate === '';
-        if (isOpenTerm) {
-            // Open-term: accrue to today if Active, or to today if no maturity to cap at
-            end = today;
-        } else {
-            const mat = new Date(loan.maturityDate);
-            // If Active: accrue to today (or maturity if already past)
-            // If Matured/Repaid: accrue only to maturity date (stop on that date)
-            end = (loan.status === 'Active') ? (today < mat ? today : mat) : mat;
-        }
-        const days = Math.floor((end - start) / 86400000);
-        return Math.max(0, loan.loanAmount * loan.interestRate / 100 * days / 360);
+        const start=new Date(loan.startDate), mat=new Date(loan.maturityDate), today=new Date();
+        const end=today<mat?today:mat;
+        return Math.max(0, loan.loanAmount*loan.interestRate/100*Math.floor((end-start)/86400000)/360);
     };
     const calcMetrics = (loan) => {
-        const isUnsecured = loan.secured === false || loan.secured === 'false';
-        const price = prices[loan.collateralType] || 0;
-        const collVal = isUnsecured ? 0 : loan.collateralAmount * price;
-        const interest = calcInterest(loan), owed = loan.loanAmount + interest - loan.interestPaid;
-        const ratio = (!isUnsecured && collVal > 0) ? (collVal / loan.loanAmount) * 100 : 0;
-        // Unsecured loans can never be atRisk — no collateral ratio to breach
-        const atRisk = !isUnsecured && ratio <= loan.marginCallThreshold && loan.status === 'Active';
-        const mcPrice = (!isUnsecured && loan.collateralAmount > 0) ? (loan.loanAmount * loan.marginCallThreshold) / (loan.collateralAmount * 100) : 0;
-        const topUp = (!isUnsecured && price > 0) ? Math.max(0, (loan.loanAmount * (loan.originalCollateralRatio / 100) - collVal) / price) : 0;
-        return {collVal, interest, owed, ratio, atRisk, mcPrice, topUp, isUnsecured};
+        const price=prices[loan.collateralType]||0, collVal=loan.collateralAmount*price;
+        const interest=calcInterest(loan), owed=loan.loanAmount+interest-loan.interestPaid;
+        const ratio=collVal>0?(collVal/loan.loanAmount)*100:0;
+        const atRisk=ratio<=loan.marginCallThreshold&&loan.status==='Active';
+        const mcPrice=loan.collateralAmount>0?(loan.loanAmount*loan.marginCallThreshold)/(loan.collateralAmount*100):0;
+        const topUp=price>0?Math.max(0,(loan.loanAmount*(loan.originalCollateralRatio/100)-collVal)/price):0;
+        return {collVal,interest,owed,ratio,atRisk,mcPrice,topUp};
     };
-    const calcTenor = (s,m)=>!s||!m?null:Math.ceil((new Date(m)-new Date(s))/86400000);
-
-    // Normalise any date format from Sheets to plain YYYY-MM-DD.
-    // getDisplayValues() returns dates in the spreadsheet's display format which
-    // depends on the sheet locale and cell format type:
-    //   - Text cells: "2026-01-28" (what we write)
-    //   - Date cells (Singapore locale): "28/01/2026" or "1/28/2026"
-    //   - ISO strings from old getValues() path: "2025-06-29T16:00:00.000Z"
-    // All variants are normalised to YYYY-MM-DD here.
-    const normaliseDate = (raw) => {
-        if (!raw || raw === '' || raw === 'Open Term') return '';
-        const s = String(raw).trim();
-        if (!s) return '';
-        // Already ISO date YYYY-MM-DD
-        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-        // ISO datetime with T — take date portion before T
-        if (s.includes('T')) return s.split('T')[0];
-        // DD/MM/YYYY — Singapore/UK locale display format
-        const dmy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-        if (dmy) {
-            const day   = dmy[1].padStart(2,'0');
-            const month = dmy[2].padStart(2,'0');
-            const year  = dmy[3];
-            return `${year}-${month}-${day}`;
-        }
-        // M/D/YYYY — US locale display format
-        const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-        if (mdy) {
-            const month = mdy[1].padStart(2,'0');
-            const day   = mdy[2].padStart(2,'0');
-            const year  = mdy[3];
-            return `${year}-${month}-${day}`;
-        }
-        // DD-MM-YYYY or MM-DD-YYYY with dashes
-        const dmy2 = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-        if (dmy2) {
-            // Ambiguous — assume DD-MM-YYYY (Singapore default)
-            const day   = dmy2[1].padStart(2,'0');
-            const month = dmy2[2].padStart(2,'0');
-            const year  = dmy2[3];
-            return `${year}-${month}-${day}`;
-        }
-        // Long date formats: "28 Jan 2026", "January 28, 2026", etc.
-        // Use Date.parse but force UTC interpretation
-        try {
-            // Append time to force UTC parse and avoid timezone shift
-            const d = new Date(s + ' UTC');
-            if (!isNaN(d)) {
-                return d.toISOString().split('T')[0];
-            }
-            // Try without UTC suffix
-            const d2 = new Date(s);
-            if (!isNaN(d2)) {
-                // Use UTC date parts to avoid timezone shift
-                const y = d2.getUTCFullYear();
-                const m = String(d2.getUTCMonth()+1).padStart(2,'0');
-                const day = String(d2.getUTCDate()).padStart(2,'0');
-                return `${y}-${m}-${day}`;
-            }
-        } catch(e) {}
-        return s;
-    };
+    const calcTenor = (s,m)=>!s||!m?0:Math.ceil((new Date(m)-new Date(s))/86400000);
 
     const fetchSheets = async () => {
         if (!config.scriptUrl) return;
@@ -777,164 +676,30 @@ const LoanModule = ({prices}) => {
                 fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json()),
                 fetch(`${config.scriptUrl}?action=read&sheetName=Transactions`).then(r=>r.json())
             ]);
-            if (lr.success && lr.values) {
-                const today = new Date();
-                today.setHours(0,0,0,0);
-                const fetchedLoans = lr.values.filter(r=>r[0]&&r[1]).map(r=>({
-                    id:r[0], counterparty:r[1], loanAmount:+r[2], underlying:r[3],
-                    collateralAmount:+r[4], collateralType:r[5], interestRate:+r[6],
-                    interestPaid:+r[8], tenor:(r[9]===''||r[9]==='null'||r[9]===null)?null:+r[9],
-                    startDate:normaliseDate(r[10]),
-                    maturityDate:(r[11]===''||r[11]==='Open Term')?'':normaliseDate(r[11]),
-                    marginCallThreshold:+r[12], originalCollateralRatio:+r[13],
-                    status:r[14], createdAt:r[15],
-                    secured: r[16]===false||r[16]==='false'||r[16]==='Unsecured' ? false : true
-                }));
-                // Auto-mature loans whose maturity date has passed but are still marked Active
-                // Skip open-term loans (no maturityDate) — they never auto-mature
-                const toMature = fetchedLoans.filter(l => {
-                    if (l.status !== 'Active' || !l.maturityDate) return false;
-                    const mat = new Date(l.maturityDate); mat.setHours(0,0,0,0);
-                    return mat < today;
-                });
-                for (const loan of toMature) {
-                    loan.status = 'Matured';
-                    try {
-                        const rowIdx = lr.values.findIndex(r=>String(r[0]).trim()===String(loan.id).trim());
-                        if (rowIdx >= 0) {
-                            const sheetRow = rowIdx + 2;
-                            const m = calcMetrics(loan);
-                            await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
-                                loan.id, loan.counterparty, loan.loanAmount,
-                                loan.underlying, loan.collateralAmount, loan.collateralType,
-                                loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
-                                loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
-                                loan.marginCallThreshold, loan.originalCollateralRatio,
-                                loan.status, loan.createdAt||''
-                            ]))}`);
-                        }
-                    } catch(e) { console.error('Auto-mature push failed for '+loan.id+':', e.message); }
-                }
-                setLoans(fetchedLoans);
-            }
+            if (lr.success&&lr.values) setLoans(lr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],counterparty:r[1],loanAmount:+r[2],underlying:r[3],collateralAmount:+r[4],collateralType:r[5],interestRate:+r[6],interestPaid:+r[8],tenor:+r[9],startDate:r[10],maturityDate:r[11],marginCallThreshold:+r[12],originalCollateralRatio:+r[13],status:r[14],createdAt:r[15]})));
             if (tr.success&&tr.values) setTransactions(tr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],loanId:r[1],type:r[2],amount:+r[3],timestamp:r[4]})));
         } catch(e){alert('Sync error: '+e.message);}
         setLoading(false);
     };
     useEffect(()=>{ if(config.scriptUrl){fetchSheets();const t=setInterval(fetchSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
 
-    const addLoan = async (d) => {
-        const loan = {...d, id:d.loanId||`LOAN-${Date.now()}`, interestPaid:0, tenor:calcTenor(d.startDate,d.maturityDate), status:'Active', createdAt:new Date().toISOString()};
-        setLoans(p=>[...p, loan]);
-        setShowAdd(false);
-        // Append new loan row to Google Sheets
-        if (config.scriptUrl) {
-            try {
-                const m = calcMetrics(loan);
-                await fetch(`${config.scriptUrl}?action=append&sheetName=Loans&values=${encodeURIComponent(JSON.stringify([
-                    loan.id, loan.counterparty, loan.loanAmount,
-                    loan.underlying, loan.collateralAmount, loan.collateralType,
-                    loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
-                    loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
-                    loan.marginCallThreshold, loan.originalCollateralRatio,
-                    loan.status, loan.createdAt, loan.secured===false?'Unsecured':'Secured'
-                ]))}`);
-            } catch(e) { console.error('Sheets addLoan failed:', e.message); }
-        }
-    };
-    const updateLoan = async (loan) => {
-        setLoans(p=>p.map(l=>l.id===loan.id?loan:l));
-        setEditingLoan(null);
-        // Push updated loan row to Google Sheets immediately
-        if (config.scriptUrl) {
-            try {
-                const m = calcMetrics(loan);
-                const lr = await fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json());
-                if (lr.success && lr.values) {
-                    const rowIdx = lr.values.findIndex(r=>String(r[0]).trim()===String(loan.id).trim());
-                    if (rowIdx >= 0) {
-                        const sheetRow = rowIdx + 2;
-                        await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
-                            loan.id, loan.counterparty, loan.loanAmount,
-                            loan.underlying, loan.collateralAmount, loan.collateralType,
-                            loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
-                            loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
-                            loan.marginCallThreshold, loan.originalCollateralRatio,
-                            loan.status, loan.createdAt||'', loan.secured===false?'Unsecured':'Secured'
-                        ]))}`);
-                    }
-                }
-            } catch(e) { console.error('Sheets updateLoan failed:', e.message); }
-        }
-    };
-    const addTxn = async (loanId,type,amount)=>{
-        const txn = {id:`TXN-${Date.now()}`,loanId,type,amount:+amount,timestamp:new Date().toISOString()};
-        // Update local state immediately so UI reflects change at once
-        setTransactions(p=>[...p,txn]);
+    const addLoan = (d)=>{ setLoans(p=>[...p,{...d,id:d.loanId||`LOAN-${Date.now()}`,interestPaid:0,tenor:calcTenor(d.startDate,d.maturityDate),status:'Active',createdAt:new Date().toISOString()}]); setShowAdd(false); };
+    const updateLoan = (loan)=>{ setLoans(p=>p.map(l=>l.id===loan.id?loan:l)); setEditingLoan(null); };
+    const addTxn = (loanId,type,amount)=>{
+        setTransactions(p=>[...p,{id:`TXN-${Date.now()}`,loanId,type,amount:+amount,timestamp:new Date().toISOString()}]);
         const loan=loans.find(l=>l.id===loanId);
-        let updatedLoan = null;
-        if (loan){
-            const u={...loan};
-            if(type==='Collateral Top-up') u.collateralAmount+=+amount;
-            else if(type==='Loan Repayment'){u.loanAmount-=+amount;if(u.loanAmount<=0)u.status='Repaid';}
-            else if(type==='Interest Payment') u.interestPaid+=+amount;
-            updateLoan(u);
-            updatedLoan = u;
-        }
+        if (loan){const u={...loan};if(type==='Collateral Top-up')u.collateralAmount+=+amount;else if(type==='Loan Repayment'){u.loanAmount-=+amount;if(u.loanAmount<=0)u.status='Repaid';}else if(type==='Interest Payment')u.interestPaid+=+amount;updateLoan(u);}
         setShowTxn(null);
-        // Push transaction and updated loan to Google Sheets
-        // Must happen AFTER state update so Sheets reflects the latest values
-        if (config.scriptUrl) {
-            try {
-                // 1. Append transaction row to Transactions sheet
-                await fetch(`${config.scriptUrl}?action=append&sheetName=Transactions&values=${encodeURIComponent(JSON.stringify([
-                    txn.id, txn.loanId, txn.type, txn.amount, txn.timestamp
-                ]))}`);
-                // 2. Update the loan row in Loans sheet with new collateral/amount/status
-                if (updatedLoan) {
-                    const m = calcMetrics(updatedLoan);
-                    // Find row index in sheet (loans are 1-indexed, +2 for header)
-                    // Use update action with rowIndex by finding the loan's position
-                    // We append a fresh read then update — simpler: use append+dedup or find row
-                    // The existing script uses rowIndex-based update, so we need to find the row.
-                    // Fetch current loans sheet to find row number of this loan
-                    const lr = await fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json());
-                    if (lr.success && lr.values) {
-                        const rowIdx = lr.values.findIndex(r=>r[0]===updatedLoan.id);
-                        if (rowIdx >= 0) {
-                            const sheetRow = rowIdx + 2; // +1 for header, +1 for 1-indexing
-                            await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
-                                updatedLoan.id, updatedLoan.counterparty, updatedLoan.loanAmount,
-                                updatedLoan.underlying, updatedLoan.collateralAmount, updatedLoan.collateralType,
-                                updatedLoan.interestRate, m.interest.toFixed(2), updatedLoan.interestPaid,
-                                updatedLoan.tenor, normaliseDate(updatedLoan.startDate), normaliseDate(updatedLoan.maturityDate)||'',
-                                updatedLoan.marginCallThreshold, updatedLoan.originalCollateralRatio,
-                                updatedLoan.status, updatedLoan.createdAt||'', updatedLoan.secured===false?'Unsecured':'Secured'
-                            ]))}`);
-                        }
-                    }
-                }
-            } catch(e) { console.error('Sheets push failed:', e.message); }
-        }
     };
     const exportCSV = ()=>{ const rows=loans.map(l=>{const m=calcMetrics(l);return[l.id,l.counterparty,l.loanAmount,l.underlying,l.collateralAmount,l.collateralType,l.interestRate,m.interest.toFixed(2),l.interestPaid,l.tenor,l.startDate,l.maturityDate,l.status,m.ratio.toFixed(2)].join(',');}); const csv=['ID,Counterparty,Loan,Currency,Collateral,CollType,Rate%,IntAccrued,IntPaid,Tenor,Start,Maturity,Status,Ratio%',...rows].join('\n'); const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`loans-${todayUTC()}.csv`;a.click(); };
-    const filtered=loans.filter(l=>{
-        if (filterStatus==='all') return true;
-        if (filterStatus==='active') return l.status==='Active';
-        if (filterStatus==='matured') return l.status==='Matured';
-        if (filterStatus==='repaid') return l.status==='Repaid';
-        if (filterStatus==='at-risk') return calcMetrics(l).atRisk;
-        if (filterStatus==='unsecured') return l.secured===false||l.secured==='false';
-        if (filterStatus==='open-term') return !l.maturityDate||l.maturityDate==='';
-        return true;
-    });
+    const filtered=loans.filter(l=>filterStatus==='all'||(filterStatus==='active'&&l.status==='Active')||(filterStatus==='matured'&&l.status==='Matured')||(filterStatus==='repaid'&&l.status==='Repaid')||(filterStatus==='at-risk'&&calcMetrics(l).atRisk));
 
     return (
         <div>
             <LoanDashboard loans={loans} prices={prices} calcMetrics={calcMetrics}/>
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
-                    <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5"><option value="all">All</option><option value="active">Active</option><option value="at-risk">At Risk</option><option value="matured">Matured</option><option value="repaid">Repaid</option><option value="unsecured">Unsecured</option><option value="open-term">Open Term</option></Select>
+                    <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5"><option value="all">All</option><option value="active">Active</option><option value="at-risk">At Risk</option><option value="matured">Matured</option><option value="repaid">Repaid</option></Select>
                     {config.scriptUrl&&<button onClick={fetchSheets} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={loading}/> Sync</button>}
                     <button onClick={exportCSV} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Download/> Export</button>
                     <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Config</button>
@@ -987,35 +752,23 @@ const LoanModule = ({prices}) => {
                                         <div className="flex items-center gap-2 flex-wrap">
                                             <h3 className="font-bold text-lg">{loan.counterparty}</h3>
                                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${loan.status==='Active'?'badge-active':loan.status==='Matured'?'badge-matured':'badge-repaid'}`}>{loan.status}</span>
-                                            {m.isUnsecured&&<span className="px-2 py-0.5 rounded-full text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30">Unsecured</span>}
-                                            {(!loan.maturityDate||loan.maturityDate==='')&&<span className="px-2 py-0.5 rounded-full text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30">Open Term</span>}
                                             {m.atRisk&&<span className="px-2 py-0.5 rounded-full text-xs bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1"><Icon.Alert/> Margin Call</span>}
+
                                         </div>
-                                        <p className="text-xs text-slate-500 mono mt-0.5">
-                                            {loan.id} · {fmtDate(loan.startDate)} → {loan.maturityDate?fmtDate(loan.maturityDate):'Open Term'} {loan.tenor?`(${loan.tenor}d)`:''}
-                                        </p>
+                                        <p className="text-xs text-slate-500 mono mt-0.5">{loan.id} · {fmtDate(loan.startDate)} → {fmtDate(loan.maturityDate)} ({loan.tenor}d)</p>
                                     </div>
                                     <button onClick={()=>setEditingLoan(loan)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>
                                 </div>
-                                {/* Metric tiles — hide collateral/ratio/MC for unsecured loans */}
-                                <div className={`grid grid-cols-2 gap-2 mb-4 ${m.isUnsecured?'md:grid-cols-3':'md:grid-cols-3 lg:grid-cols-6'}`}>
-                                    {[
-                                        ['Loan',`$${fmt(loan.loanAmount)}`,loan.underlying,'text-white',true],
-                                        ['Interest',`$${fmt(m.interest)}`,`${loan.interestRate}% APR`,'text-yellow-400',true],
-                                        ['Total Owed',`$${fmt(m.owed)}`,`Paid: $${fmt(loan.interestPaid)}`,'text-cyan-400',true],
-                                        ['Collateral',`${fmtCrypto(loan.collateralAmount,6)} ${loan.collateralType}`,`≈$${fmt(m.collVal,0)}`,'text-white',!m.isUnsecured],
-                                        ['Ratio',`${fmt(m.ratio)}%`,`Target: ${loan.originalCollateralRatio}%`,m.atRisk?'text-red-400':'text-green-400',!m.isUnsecured],
-                                        ['MC Price',`$${fmt(m.mcPrice,0)}`,`@ ${loan.marginCallThreshold}%`,'text-orange-400',!m.isUnsecured],
-                                    ].filter(([,,,,show])=>show).map(([lbl,val,sub,cls])=>(
+                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
+                                    {[['Loan',`$${fmt(loan.loanAmount)}`,loan.underlying,'text-white'],['Interest',`$${fmt(m.interest)}`,`${loan.interestRate}% APR`,'text-yellow-400'],['Total Owed',`$${fmt(m.owed)}`,`Paid: $${fmt(loan.interestPaid)}`,'text-cyan-400'],['Collateral',`${fmtCrypto(loan.collateralAmount,6)} ${loan.collateralType}`,`≈$${fmt(m.collVal,0)}`,'text-white'],['Ratio',`${fmt(m.ratio)}%`,`Target: ${loan.originalCollateralRatio}%`,m.atRisk?'text-red-400':'text-green-400'],['MC Price',`$${fmt(m.mcPrice,0)}`,`@ ${loan.marginCallThreshold}%`,'text-orange-400']].map(([lbl,val,sub,cls])=>(
                                         <div key={lbl} className="card-inner p-3"><p className="text-xs text-slate-400 mb-1">{lbl}</p><p className={`font-bold mono text-sm ${cls}`}>{val}</p><p className="text-xs text-slate-500">{sub}</p></div>
                                     ))}
                                 </div>
                                 {m.atRisk&&<div className="bg-red-900/20 border border-red-500/30 rounded-lg p-3 mb-3 text-sm">⚠️ Top-up needed: <span className="font-bold mono text-red-300">{fmtCrypto(m.topUp,8)} {loan.collateralType}</span></div>}
                                 <div className="flex gap-2 flex-wrap">
-                                    {/* Hide Collateral Top-up button for unsecured loans */}
-                                    {!m.isUnsecured&&<button onClick={()=>setShowTxn({loanId:loan.id,type:'Collateral Top-up'})} className="px-3 py-1.5 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 rounded-lg text-xs text-green-400 flex items-center gap-1 transition-colors"><Icon.Plus/>Collateral Top-up</button>}
-                                    <button onClick={()=>setShowTxn({loanId:loan.id,type:'Loan Repayment'})} className="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/30 rounded-lg text-xs text-blue-400 flex items-center gap-1 transition-colors"><Icon.Plus/>Loan Repayment</button>
-                                    <button onClick={()=>setShowTxn({loanId:loan.id,type:'Interest Payment'})} className="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 rounded-lg text-xs text-purple-400 flex items-center gap-1 transition-colors"><Icon.Plus/>Interest Payment</button>
+                                    {[['Collateral Top-up','green'],['Loan Repayment','blue'],['Interest Payment','purple']].map(([t,c])=>(
+                                        <button key={t} onClick={()=>setShowTxn({loanId:loan.id,type:t})} className={`px-3 py-1.5 bg-${c}-600/20 hover:bg-${c}-600/40 border border-${c}-500/30 rounded-lg text-xs text-${c}-400 flex items-center gap-1 transition-colors`}><Icon.Plus/>{t}</button>
+                                    ))}
                                 </div>
                                 {txns.length>0&&<div className="mt-3 pt-3 border-t border-slate-800"><p className="text-xs text-slate-500 mb-2">Recent transactions</p>{txns.slice(-3).reverse().map(t=><div key={t.id} className="flex justify-between text-xs text-slate-400 mono"><span>{t.type}: {t.amount}</span><span>{fmtDateTimeSGT(t.timestamp)}</span></div>)}</div>}
                             </div>
@@ -1030,80 +783,29 @@ const LoanModule = ({prices}) => {
     );
 };
 const LoanFormModal = ({title,loan,onSave,onClose,calcTenor})=>{
-    const initSecured = loan ? (loan.secured !== false && loan.secured !== 'false') : true;
-    const initOpenTerm = loan ? (!loan.maturityDate || loan.maturityDate === '') : false;
-    const [form,setForm]=useState(loan||{loanId:'',counterparty:'',loanAmount:'',underlying:'USDT',collateralAmount:'',collateralType:'BTC',interestRate:'',startDate:'',maturityDate:'',marginCallThreshold:120,originalCollateralRatio:130,interestPaid:0,status:'Active',secured:true});
-    const [isSecured, setIsSecured] = useState(initSecured);
-    const [isOpenTerm, setIsOpenTerm] = useState(initOpenTerm);
-    const tenor = isOpenTerm ? null : calcTenor(form.startDate, form.maturityDate);
+    const [form,setForm]=useState(loan||{loanId:'',counterparty:'',loanAmount:'',underlying:'USDT',collateralAmount:'',collateralType:'BTC',interestRate:'',startDate:'',maturityDate:'',marginCallThreshold:120,originalCollateralRatio:130,interestPaid:0,status:'Active'});
+    const tenor=calcTenor(form.startDate,form.maturityDate);
     const f=k=>e=>setForm(p=>({...p,[k]:e.target.value}));
-    const disabledCls = 'opacity-40 pointer-events-none select-none';
-    const handleSave = () => {
-        const finalForm = {
-            ...form,
-            secured: isSecured,
-            maturityDate: isOpenTerm ? '' : form.maturityDate,
-            tenor: isOpenTerm ? null : tenor,
-            // Clear collateral fields if unsecured
-            collateralAmount: isSecured ? form.collateralAmount : 0,
-            marginCallThreshold: isSecured ? form.marginCallThreshold : 0,
-            originalCollateralRatio: isSecured ? form.originalCollateralRatio : 0,
-        };
-        onSave(finalForm);
-    };
     return(
         <Modal title={title} onClose={onClose} wide>
-            {/* Secured / Unsecured toggle */}
-            <div className="flex gap-3 mb-5 p-1 bg-slate-800 rounded-lg">
-                <button onClick={()=>setIsSecured(true)}
-                    className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${isSecured?'bg-cyan-600 text-white':'text-slate-400 hover:text-slate-200'}`}>
-                    🔒 Secured
-                </button>
-                <button onClick={()=>setIsSecured(false)}
-                    className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${!isSecured?'bg-purple-600 text-white':'text-slate-400 hover:text-slate-200'}`}>
-                    📋 Unsecured
-                </button>
-            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {!loan&&<div className="md:col-span-2"><Field label="Loan ID"><Input value={form.loanId} onChange={f('loanId')} placeholder="LOAN-001"/></Field></div>}
                 <div className="md:col-span-2"><Field label="Counterparty"><Input value={form.counterparty} onChange={f('counterparty')}/></Field></div>
                 <Field label="Loan Amount"><Input type="number" value={form.loanAmount} onChange={f('loanAmount')} step="0.01"/></Field>
                 <Field label="Currency"><Select value={form.underlying} onChange={f('underlying')}><option>USDT</option><option>USDC</option></Select></Field>
-                {/* Collateral fields — greyed out when unsecured */}
-                <div className={isSecured?'':''+disabledCls}>
-                    <Field label="Collateral Amount"><Input type="number" value={isSecured?form.collateralAmount:''} onChange={f('collateralAmount')} step="0.00000001" disabled={!isSecured} placeholder={!isSecured?'N/A — unsecured':''}/></Field>
-                </div>
-                <div className={isSecured?'':''+disabledCls}>
-                    <Field label="Collateral Type"><Select value={form.collateralType} onChange={f('collateralType')} disabled={!isSecured}><option>BTC</option><option>ETH</option></Select></Field>
-                </div>
+                <Field label="Collateral Amount"><Input type="number" value={form.collateralAmount} onChange={f('collateralAmount')} step="0.00000001"/></Field>
+                <Field label="Collateral Type"><Select value={form.collateralType} onChange={f('collateralType')}><option>BTC</option><option>ETH</option></Select></Field>
                 <Field label="Interest Rate (% APR)"><Input type="number" value={form.interestRate} onChange={f('interestRate')} step="0.01"/></Field>
                 {loan&&<Field label="Interest Paid"><Input type="number" value={form.interestPaid} onChange={f('interestPaid')} step="0.01"/></Field>}
                 <Field label="Start Date"><Input type="date" value={form.startDate} onChange={f('startDate')}/></Field>
-                {/* Maturity Date — with Open Term toggle */}
-                <div>
-                    <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs text-slate-400">Maturity Date</label>
-                        <label className="flex items-center gap-1.5 cursor-pointer text-xs text-blue-400">
-                            <input type="checkbox" checked={isOpenTerm} onChange={e=>setIsOpenTerm(e.target.checked)} className="accent-blue-500"/>
-                            Open Term
-                        </label>
-                    </div>
-                    <Input type="date" value={isOpenTerm?'':form.maturityDate} onChange={f('maturityDate')} disabled={isOpenTerm} placeholder={isOpenTerm?'Open Term':''}
-                        className={isOpenTerm?disabledCls:''}/>
-                </div>
+                <Field label="Maturity Date"><Input type="date" value={form.maturityDate} onChange={f('maturityDate')}/></Field>
                 {tenor>0&&<div className="md:col-span-2 bg-cyan-900/20 border border-cyan-500/20 rounded-lg p-3 text-xs text-cyan-300">Tenor: {tenor} days</div>}
-                {isOpenTerm&&<div className="md:col-span-2 bg-blue-900/20 border border-blue-500/20 rounded-lg p-3 text-xs text-blue-300">Open Term — interest accrues until manually set to Matured or Repaid.</div>}
-                {/* MC fields — greyed out when unsecured */}
-                <div className={isSecured?'':''+disabledCls}>
-                    <Field label="Margin Call Threshold (%)"><Input type="number" value={isSecured?form.marginCallThreshold:''} onChange={f('marginCallThreshold')} disabled={!isSecured} placeholder={!isSecured?'N/A':''}/></Field>
-                </div>
-                <div className={isSecured?'':''+disabledCls}>
-                    <Field label="Original Collateral Ratio (%)"><Input type="number" value={isSecured?form.originalCollateralRatio:''} onChange={f('originalCollateralRatio')} disabled={!isSecured} placeholder={!isSecured?'N/A':''}/></Field>
-                </div>
+                <Field label="Margin Call Threshold (%)"><Input type="number" value={form.marginCallThreshold} onChange={f('marginCallThreshold')}/></Field>
+                <Field label="Original Collateral Ratio (%)"><Input type="number" value={form.originalCollateralRatio} onChange={f('originalCollateralRatio')}/></Field>
                 {loan&&<Field label="Status"><Select value={form.status} onChange={f('status')}><option>Active</option><option>Matured</option><option>Repaid</option><option>Defaulted</option></Select></Field>}
             </div>
             <div className="flex gap-2 mt-5">
-                <button onClick={handleSave} className="btn-primary flex-1 px-4 py-2 rounded-lg font-semibold text-sm">{loan?'Update':'Create'} Loan</button>
+                <button onClick={()=>onSave(form)} className="btn-primary flex-1 px-4 py-2 rounded-lg font-semibold text-sm">{loan?'Update':'Create'} Loan</button>
                 <button onClick={onClose} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
             </div>
         </Modal>
@@ -2037,294 +1739,207 @@ const SSPSFormModal = ({onSave, onClose}) => {
 // ROOT APP — Bybit live prices via /v5/market/tickers, every 60s
 // ═══════════════════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════════════════════
-// FCN MODULE — Fixed Coupon Note
+// ACCUMULATOR MODULE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const FCN_CURRENCIES = ['BTC','ETH','ADA','USDT','USDC'];
-const FCN_CRYPTO = ['BTC','ETH','ADA'];
-const FCN_STABLE = ['USDT','USDC'];
-const isCrypto = (ccy) => FCN_CRYPTO.includes(ccy);
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-// Format notional/coupon values
-const fmtFCN = (val, ccy) => {
-    if (val === null || val === undefined || isNaN(val)) return '—';
-    return isCrypto(ccy)
-        ? Number(val).toFixed(8)
-        : Number(val).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-};
-const fmtFCNCompact = (val, ccy) => {
-    if (val === null || val === undefined || isNaN(val)) return '—';
-    return isCrypto(ccy)
-        ? Number(val).toFixed(4)
-        : '$' + Number(val).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
-};
+const ACC_UNDERLYING_SYMBOLS = { 'BTC/USDT':'BTCUSDT','BTC/USDC':'BTCUSDC','ETH/USDT':'ETHUSDT','ETH/USDC':'ETHUSDC','ADA/USDT':'ADAUSDT','ADA/USDC':'ADAUSDC' };
+const ACC_PAIRS = Object.keys(ACC_UNDERLYING_SYMBOLS);
+const accBaseAsset = (pair) => (pair||'').split('/')[0]; // BTC/USDT → BTC
 
-// Build settlement schedule
-const buildFCNSchedule = (trade) => {
+// Build settlement schedule for an accumulator
+const buildAccSchedule = (trade) => {
     if (!trade.tradeDate || !trade.maturityDate) return [];
     const dates = [];
-    const maturity = new Date(trade.maturityDate + 'T00:00:00Z');
     let current = new Date(trade.tradeDate + 'T00:00:00Z');
+    const maturity = new Date(trade.maturityDate + 'T00:00:00Z');
     const isWeekly = trade.tenorUnit === 'weeks';
     while (true) {
         if (isWeekly) current = new Date(current.getTime() + 7*86400000);
-        else { const d = new Date(current); d.setUTCMonth(d.getUTCMonth()+1); current = d; }
-        if (current >= maturity) { dates.push({date:trade.maturityDate,isMaturity:true}); break; }
-        dates.push({date:current.toISOString().split('T')[0],isMaturity:false});
+        else { const d = new Date(current); d.setUTCMonth(d.getUTCMonth()+1); current=d; }
+        if (current > maturity) break;
+        dates.push(current.toISOString().split('T')[0]);
     }
     return dates;
 };
 
-// Coupon per period — always on original notional
-// For crypto notional + stablecoin coupon: convert at first underlying's spotRef
-const calcFCNCoupon = (trade) => {
-    const notional = parseFloat(trade.notionalAmount) || 0;
-    const rate = parseFloat(trade.couponRate) || 0;
-    const divisor = trade.tenorUnit === 'weeks' ? 52 : 12;
-    let base = notional;
-    const underlyings = trade.underlyings || [];
-    if (isCrypto(trade.notionalCurrency) && !isCrypto(trade.couponCurrency) && underlyings.length > 0) {
-        base = notional * (parseFloat(underlyings[0].spotRef) || 0);
+// Determine scenario for a fixing
+// Returns: 'above' | 'inzone' | 'below' | 'knockout'
+const accScenario = (trade, fixingPrice) => {
+    const strike  = parseFloat(trade.strikePrice);
+    const koPrice = trade.knockOutEnabled ? parseFloat(trade.knockOutPrice) : null;
+    const buf     = trade.bufferEnabled  ? parseFloat(trade.bufferPrice)  : null;
+    if (koPrice && fixingPrice >= koPrice) return 'knockout';
+    // Above both strike and buffer (or just strike if no buffer)
+    if (buf !== null) {
+        const zoneMin = Math.min(strike, buf);
+        const zoneMax = Math.max(strike, buf);
+        if (fixingPrice >= zoneMax) return 'above';
+        if (fixingPrice >= zoneMin && fixingPrice < zoneMax) return 'inzone';
+        return 'below';
     }
-    return base * rate / 100 / divisor;
+    return fixingPrice >= strike ? 'above' : 'below';
 };
 
-const isWeekend = (dateStr) => { const d = new Date(dateStr+'T00:00:00Z'); const day=d.getUTCDay(); return day===0||day===6; };
-const dayName  = (dateStr) => ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date(dateStr+'T00:00:00Z').getUTCDay()];
+// Calculate amounts for a given scenario
+const accAmounts = (trade, scenario) => {
+    const amount1 = parseFloat(trade.amount1);
+    const amount2 = parseFloat(trade.amount2);
+    const strike  = parseFloat(trade.strikePrice);
+    const base    = accBaseAsset(trade.underlyingPair);
+    const notionalCcy = trade.notionalCurrency;
+    switch (scenario) {
+        case 'above':
+            return {
+                cryptoQty: amount1 / strike,
+                cryptoCcy: base,
+                baseAmount: amount1,
+                baseCcy: notionalCcy,
+                label: 'Amount 1 crypto + Amount 1 base returned',
+                totalUsed: amount2,
+            };
+        case 'inzone':
+            return {
+                cryptoQty: 0,
+                cryptoCcy: base,
+                baseAmount: amount2,
+                baseCcy: notionalCcy,
+                label: 'In zone — Amount 2 base returned',
+                totalUsed: amount2,
+            };
+        case 'below':
+            return {
+                cryptoQty: amount2 / strike,
+                cryptoCcy: base,
+                baseAmount: 0,
+                baseCcy: notionalCcy,
+                label: 'Amount 2 crypto purchased at strike',
+                totalUsed: amount2,
+            };
+        case 'knockout':
+            return {
+                cryptoQty: 0,
+                cryptoCcy: base,
+                baseAmount: 0,
+                baseCcy: notionalCcy,
+                label: 'KO — final settlement + remaining balance returned',
+                totalUsed: amount2,
+            };
+        default: return { cryptoQty:0, baseAmount:0, totalUsed:0, label:'—' };
+    }
+};
 
-const FCN_STATUS_BADGE = {
+const ACC_SCENARIO_STYLE = {
+    'above':    { bg:'bg-green-900/20', border:'border-green-500/30', text:'text-green-400',  label:'ABOVE STRIKE' },
+    'inzone':   { bg:'bg-blue-900/20',  border:'border-blue-500/30',  text:'text-blue-400',   label:'IN ZONE' },
+    'below':    { bg:'bg-red-900/20',   border:'border-red-500/30',   text:'text-red-400',    label:'BELOW STRIKE' },
+    'knockout': { bg:'bg-orange-900/20',border:'border-orange-500/30',text:'text-orange-400', label:'KNOCK OUT' },
+};
+
+const ACC_STATUS_BADGE = {
     'Active':      'bg-green-500/15 text-green-400 border-green-500/30',
     'Knocked Out': 'bg-orange-500/15 text-orange-400 border-orange-500/30',
-    'Exercised':   'bg-purple-500/15 text-purple-400 border-purple-500/30',
     'Matured':     'bg-blue-500/15 text-blue-400 border-blue-500/30',
 };
 
-// Get live price for an underlying pair (e.g. "BTC/USDT" → prices["BTC"])
-const getPriceForPair = (pair, prices) => {
-    if (!pair) return 0;
-    const base = pair.split('/')[0];
-    return prices[base] || 0;
-};
-
-// Barrier check logic — returns updated trade or same trade
-const checkBarriers = (trade, prices, todayStr, isSettlementToday, isMaturityToday) => {
-    if (trade.status !== 'Active' || !isSettlementToday) return trade;
-    const underlyings = trade.underlyings || [];
-    if (!underlyings.length) return trade;
-    const isStable = !isCrypto(trade.notionalCurrency);
-    let updated = {...trade};
-
-    if (isStable) {
-        // Variant B/C: stablecoin notional
-        // KO: ANY underlying price ABOVE its own koPrice → knocked out
-        if (underlyings.some(u => u.koEnabled)) {
-            for (const u of underlyings) {
-                if (!u.koEnabled) continue;
-                const price = getPriceForPair(u.pair, prices);
-                if (price > 0 && price > parseFloat(u.koPrice)) {
-                    updated.status = 'Knocked Out';
-                    return updated;
-                }
-            }
-        }
-        // Maturity checks
-        if (isMaturityToday) {
-            // Find any underlying below its strike
-            const belowStrike = underlyings.filter(u => {
-                const price = getPriceForPair(u.pair, prices);
-                return price > 0 && price < parseFloat(u.strikePrice);
-            });
-            if (belowStrike.length > 0) {
-                // Worst-off: largest % below its own strike
-                const worstOff = belowStrike.reduce((worst, u) => {
-                    const price = getPriceForPair(u.pair, prices);
-                    const pct = (parseFloat(u.strikePrice) - price) / parseFloat(u.strikePrice);
-                    const worstPct = (parseFloat(worst.strikePrice) - getPriceForPair(worst.pair, prices)) / parseFloat(worst.strikePrice);
-                    return pct > worstPct ? u : worst;
-                });
-                updated.status = 'Exercised';
-                updated.worstOffPair = worstOff.pair;
-                updated.worstOffStrike = worstOff.strikePrice;
-            } else {
-                updated.status = 'Matured';
-            }
-        }
-    } else {
-        // Variant A: crypto notional
-        const u = underlyings[0];
-        if (!u) return trade;
-        const price = getPriceForPair(u.pair, prices);
-        if (!price) return trade;
-        // KO: price BELOW koPrice
-        if (u.koEnabled) {
-            if (price < parseFloat(u.koPrice)) { updated.status = 'Knocked Out'; return updated; }
-        }
-        // KI check
-        if (trade.knockInEnabled && !trade.knockInTriggered) {
-            if (price < parseFloat(trade.knockInPrice)) updated.knockInTriggered = true;
-        }
-        // Maturity
-        if (isMaturityToday) {
-            if (price > parseFloat(u.strikePrice) && trade.knockInTriggered) updated.status = 'Exercised';
-            else updated.status = 'Matured';
-        }
-    }
-    return updated;
-};
-
 // Sheets call
-const fcnSheetsCall = async (url, payload) => {
+const accSheetsCall = async (url, payload) => {
     const qs = Object.entries(payload).map(([k,v])=>`${k}=${encodeURIComponent(typeof v==='object'?JSON.stringify(v):v)}`).join('&');
     const res = await fetch(`${url}?${qs}`);
     const data = await res.json();
-    if (!data.success) throw new Error(data.error||'FCN Sheets error');
+    if (!data.success) throw new Error(data.error||'Accumulator Sheets error');
     return data;
 };
 
-// Serialize trade for Sheets (underlyings as JSON string in one column)
-const tradToRow = (trade) => [
-    trade.id, trade.clientName, trade.tradeDate, trade.tenorValue, trade.tenorUnit,
-    trade.maturityDate, trade.notionalCurrency, trade.notionalAmount,
-    trade.couponCurrency, trade.couponRate, trade.settlementFrequency,
-    JSON.stringify(trade.underlyings||[]),
-    trade.knockInEnabled?'YES':'NO', trade.knockInPrice||'',
-    trade.status, trade.knockInTriggered?'YES':'NO',
-    (trade.paidSettlements||[]).join('|'),
-    trade.worstOffPair||'', trade.worstOffStrike||'',
-    trade.createdAt||new Date().toISOString()
+const accTradeToRow = (t) => [
+    t.id, t.clientName, t.tradeDate, t.tenorValue, t.tenorUnit, t.maturityDate,
+    t.notionalCurrency, t.notionalAmount, t.underlyingPair, t.spotReferencePrice,
+    t.strikePrice,
+    t.knockOutEnabled?'YES':'NO', t.knockOutPrice||'',
+    t.bufferEnabled?'YES':'NO', t.bufferPrice||'',
+    t.amount1, t.amount2,
+    t.upfrontFee||0, t.upfrontAmount||0,
+    t.status,
+    JSON.stringify(t.fixings||[]),
+    t.createdAt||new Date().toISOString()
 ];
 
-// Deserialize trade from Sheets row
-const rowToTrade = (r) => ({
+const accRowToTrade = (r) => ({
     id:r[0], clientName:r[1], tradeDate:r[2],
     tenorValue:r[3], tenorUnit:r[4], maturityDate:r[5],
     notionalCurrency:r[6], notionalAmount:r[7],
-    couponCurrency:r[8], couponRate:r[9], settlementFrequency:r[10],
-    underlyings: (() => { try { return JSON.parse(r[11]||'[]'); } catch { return []; } })(),
-    knockInEnabled:r[12]==='YES', knockInPrice:r[13],
-    status:r[14], knockInTriggered:r[15]==='YES',
-    paidSettlements:r[16]?String(r[16]).split('|').filter(Boolean):[],
-    worstOffPair:r[17]||'', worstOffStrike:r[18]||'',
-    createdAt:r[19],
+    underlyingPair:r[8], spotReferencePrice:r[9], strikePrice:r[10],
+    knockOutEnabled:r[11]==='YES', knockOutPrice:r[12],
+    bufferEnabled:r[13]==='YES', bufferPrice:r[14],
+    amount1:r[15], amount2:r[16],
+    upfrontFee:r[17]||0, upfrontAmount:r[18]||0,
+    status:r[19],
+    fixings: (() => { try { return JSON.parse(r[20]||'[]'); } catch { return []; } })(),
+    createdAt:r[21],
 });
 
-// ─── FCN DASHBOARD ────────────────────────────────────────────────────────────
-const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
+// ─── ACCUMULATOR DASHBOARD ────────────────────────────────────────────────────
+const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
     const today = todayUTC();
     const in7 = new Date(new Date().getTime()+7*86400000).toISOString().split('T')[0];
     const activeTrades = trades.filter(t=>t.status==='Active');
 
-    // Portfolio by notional currency
-    const currencyGroups = {};
+    // Portfolio totals — remaining notional per currency
+    const portfolioTotals = {};
     activeTrades.forEach(t => {
-        if (!currencyGroups[t.notionalCurrency]) currencyGroups[t.notionalCurrency]=0;
-        currencyGroups[t.notionalCurrency]+=parseFloat(t.notionalAmount)||0;
+        const sched = buildAccSchedule(t);
+        const confirmedCount = (t.fixings||[]).filter(f=>f.confirmed).length;
+        const remaining = Math.max(0, parseFloat(t.notionalAmount) - confirmedCount * parseFloat(t.amount2));
+        const ccy = t.notionalCurrency;
+        if (!portfolioTotals[ccy]) portfolioTotals[ccy] = {original:0, remaining:0};
+        portfolioTotals[ccy].original  += parseFloat(t.notionalAmount);
+        portfolioTotals[ccy].remaining += remaining;
     });
 
-    // Live prices — show crypto underlyings actually referenced in active trades
-    const liveSymbols = [...new Set(
-        activeTrades.flatMap(t=>(t.underlyings||[]).map(u=>(u.pair||'').split('/')[0]).filter(s=>FCN_CRYPTO.includes(s)))
-    )];
-
-    // Upcoming settlements next 7 days
+    // Upcoming settlements in next 7 days
     const upcoming = [];
     trades.forEach(trade => {
-        if (!['Active','Knocked Out','Exercised','Matured'].includes(trade.status)) return;
-        const sched = buildFCNSchedule(trade);
-        const coupon = calcFCNCoupon(trade);
-        sched.forEach(({date,isMaturity}) => {
-            if (date>=today && date<=in7 && !(trade.paidSettlements||[]).includes(date)) {
-                upcoming.push({trade,date,isMaturity,coupon,weekend:isWeekend(date)});
-            }
+        if (!['Active','Knocked Out'].includes(trade.status)) return;
+        const sched = buildAccSchedule(trade);
+        sched.forEach(date => {
+            if (date < today || date > in7) return;
+            const existing = (trade.fixings||[]).find(f=>f.date===date);
+            if (existing?.confirmed) return;
+            const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<date).length;
+            const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * parseFloat(trade.amount2));
+            upcoming.push({trade, date, existing, remaining, weekend:isWeekend(date)});
         });
     });
     upcoming.sort((a,b)=>a.date.localeCompare(b.date));
-
-    // Monthly coupon totals
-    const now = new Date();
-    const prevMo = now.getMonth()===0?11:now.getMonth()-1;
-    const prevYr = now.getMonth()===0?now.getFullYear()-1:now.getFullYear();
-    const calcPeriodCoupons = (yr, mo) => {
-        const ps=new Date(yr,mo,1), pe=new Date(yr,mo+1,1), total={};
-        activeTrades.forEach(t => {
-            const coupon=calcFCNCoupon(t);
-            buildFCNSchedule(t).forEach(({date})=>{
-                const d=new Date(date+'T00:00:00Z');
-                if (d>=ps&&d<pe) total[t.couponCurrency]=(total[t.couponCurrency]||0)+coupon;
-            });
-        });
-        return total;
-    };
-    const prevCoupons = calcPeriodCoupons(prevYr,prevMo);
-    const currCoupons = calcPeriodCoupons(now.getFullYear(),now.getMonth());
-    const prevMonthName = new Date(prevYr,prevMo,1).toLocaleString('en-SG',{month:'long',year:'numeric'});
-    const currMonthName = now.toLocaleString('en-SG',{month:'long',year:'numeric'});
 
     return (
         <div className="mb-6">
             <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"/>FCN Dashboard
+                    <span className="w-2 h-2 rounded-full bg-violet-400 inline-block"/>
+                    Accumulator Dashboard
                 </h2>
             </div>
 
-            {/* Live prices for underlying crypto */}
-            {liveSymbols.length>0&&(
-                <div className={`grid grid-cols-${Math.min(liveSymbols.length,3)} gap-2 mb-3`}>
-                    {liveSymbols.map(sym=>(
-                        <div key={sym} className="card p-3 flex items-center justify-between">
-                            <div>
-                                <p className="text-xs text-slate-400">{sym} · Live</p>
-                                <p className="text-lg font-bold mono">{prices[sym]?`$${fmt(prices[sym],2)}`:'—'}</p>
+            {/* Portfolio summary */}
+            {Object.keys(portfolioTotals).length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                    {Object.entries(portfolioTotals).map(([ccy,{original,remaining}])=>(
+                        <div key={ccy} className="card p-4">
+                            <p className="text-xs text-slate-400 mb-1 font-medium">Active Notional — {ccy}</p>
+                            <p className="text-xl font-bold mono text-white">{ccy} {fmt(remaining,2)}</p>
+                            <div className="mt-2 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                <div className="h-full bg-violet-500 rounded-full" style={{width:`${Math.min(100,(remaining/original)*100)}%`}}/>
                             </div>
-                            <span className="text-2xl opacity-40">{sym==='BTC'?'₿':sym==='ETH'?'Ξ':'◈'}</span>
+                            <p className="text-xs text-slate-500 mt-1">{fmt((remaining/original)*100,1)}% remaining of {ccy} {fmt(original,2)} original · {activeTrades.filter(t=>t.notionalCurrency===ccy).length} trade(s)</p>
                         </div>
                     ))}
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-                {/* Active notional */}
-                <div className="card p-4">
-                    <p className="text-xs text-slate-400 mb-2 font-medium">Active FCN Notional</p>
-                    <p className="text-xl font-bold mono text-white mb-2">{activeTrades.length} trade{activeTrades.length!==1?'s':''}</p>
-                    <div className="space-y-1.5">
-                        {Object.entries(currencyGroups).map(([ccy,total])=>(
-                            <div key={ccy} className="flex justify-between text-xs">
-                                <span className="text-slate-400">{ccy}</span>
-                                <span className="mono text-white">{fmtFCN(total,ccy)} {ccy}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-
-                {/* Previous month coupon */}
-                <div className="card p-4">
-                    <p className="text-xs text-slate-400 mb-0.5 font-medium">Coupon — {prevMonthName}</p>
-                    <p className="text-[10px] text-slate-600 mb-2">All settlements falling in this month</p>
-                    {Object.keys(prevCoupons).length===0
-                        ?<p className="text-sm text-slate-500">No settlements</p>
-                        :Object.entries(prevCoupons).map(([ccy,amt])=>(
-                            <p key={ccy} className="text-xl font-bold mono text-yellow-400">{fmtFCNCompact(amt,ccy)} {ccy}</p>
-                        ))
-                    }
-                </div>
-
-                {/* Current month coupon */}
-                <div className="card p-4">
-                    <p className="text-xs text-slate-400 mb-0.5 font-medium">Coupon — {currMonthName} (MTD)</p>
-                    <p className="text-[10px] text-slate-600 mb-2">All settlements falling in this month</p>
-                    {Object.keys(currCoupons).length===0
-                        ?<p className="text-sm text-slate-500">No settlements</p>
-                        :Object.entries(currCoupons).map(([ccy,amt])=>(
-                            <p key={ccy} className="text-xl font-bold mono text-yellow-400">{fmtFCNCompact(amt,ccy)} {ccy}</p>
-                        ))
-                    }
-                </div>
-            </div>
-
-            {/* Settlements due table */}
-            {upcoming.length>0&&(
+            {/* Upcoming settlements */}
+            {upcoming.length > 0 ? (
                 <div className="card overflow-hidden">
                     <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
                         <p className="text-sm font-semibold text-slate-300">Settlements Due (Next 7 Days)</p>
@@ -2334,69 +1949,49 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
                         <table className="w-full text-xs">
                             <thead>
                                 <tr className="border-b border-slate-800 bg-slate-900/40">
-                                    {['Client','Date','Day','Coupon','CCY','Underlying(s) — KO / Strike','Type','Action'].map(h=>(
+                                    {['Client','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Strike','Remaining','Action'].map(h=>(
                                         <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
                                     ))}
                                 </tr>
                             </thead>
                             <tbody>
                                 {upcoming.map((s,i)=>{
-                                    const underlyings = s.trade.underlyings||[];
-                                    return(
-                                        <tr key={i} className={`border-b border-slate-800/50 ${s.weekend?'bg-amber-900/10':''} ${s.isMaturity?'bg-cyan-900/10':''}`}>
+                                    const f = s.existing;
+                                    const scenario = f?.fixingPrice ? accScenario(s.trade, parseFloat(f.fixingPrice)) : null;
+                                    const amounts  = scenario ? accAmounts(s.trade, scenario) : null;
+                                    const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
+                                    const isKO = scenario === 'knockout';
+                                    return (
+                                        <tr key={i} className={`border-b border-slate-800/50 ${s.weekend?'bg-amber-900/10':''} ${isKO?'bg-orange-900/10':''}`}>
                                             <td className="px-3 py-2.5 font-medium text-slate-200">{s.trade.clientName}</td>
-                                            <td className={`px-3 py-2.5 mono ${s.weekend?'text-amber-400':s.isMaturity?'text-cyan-400':'text-slate-300'}`}>
+                                            <td className={`px-3 py-2.5 mono ${s.weekend?'text-amber-400':'text-slate-300'}`}>
                                                 {s.date}{s.weekend&&<span className="ml-1 text-[10px] text-amber-500">WE</span>}
                                             </td>
                                             <td className="px-3 py-2.5 text-slate-400">{dayName(s.date)}</td>
-                                            <td className="px-3 py-2.5 mono text-yellow-400 font-medium">
-                                                {s.isMaturity
-                                                    ?<span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-slate-500">+ notional</span></span>
-                                                    :fmtFCNCompact(s.coupon,s.trade.couponCurrency)
-                                                }
-                                            </td>
-                                            <td className="px-3 py-2.5 text-slate-400">{s.trade.couponCurrency}</td>
-                                            {/* Show all underlying KO or Strike prices */}
-                                            <td className="px-3 py-2.5">
-                                                <div className="space-y-0.5">
-                                                    {underlyings.map((u,ui)=>{
-                                                        const liveP = getPriceForPair(u.pair,prices);
-                                                        if (s.isMaturity) {
-                                                            const strike=parseFloat(u.strikePrice)||0;
-                                                            const isBelow=liveP>0&&liveP<strike;
-                                                            return(
-                                                                <div key={ui} className="flex items-center gap-1.5">
-                                                                    <span className="text-slate-500">{u.pair}</span>
-                                                                    <span className={`mono ${isBelow?'text-red-400':'text-purple-400'}`}>${fmt(strike,2)}</span>
-                                                                    <span className="text-slate-600 text-[10px]">STRIKE</span>
-                                                                    {liveP>0&&<span className="text-slate-500 text-[10px]">live:${fmt(liveP,2)}</span>}
-                                                                </div>
-                                                            );
-                                                        } else {
-                                                            const ko=u.koEnabled?parseFloat(u.koPrice):null;
-                                                            const isAbove=ko&&liveP>0&&liveP>ko;
-                                                            return(
-                                                                <div key={ui} className="flex items-center gap-1.5">
-                                                                    <span className="text-slate-500">{u.pair}</span>
-                                                                    {ko?<><span className={`mono ${isAbove?'text-red-400':'text-orange-400'}`}>${fmt(ko,2)}</span><span className="text-slate-600 text-[10px]">KO</span></>:<span className="text-slate-600">no KO</span>}
-                                                                    {liveP>0&&<span className="text-slate-500 text-[10px]">live:${fmt(liveP,2)}</span>}
-                                                                </div>
-                                                            );
-                                                        }
-                                                    })}
-                                                </div>
+                                            <td className="px-3 py-2.5 mono text-slate-300">
+                                                {f?.fixingPrice ? `$${fmt(parseFloat(f.fixingPrice),2)}` : <span className="text-slate-600">—</span>}
                                             </td>
                                             <td className="px-3 py-2.5">
-                                                {s.isMaturity
-                                                    ?<span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-[10px]">MATURITY</span>
-                                                    :<span className="px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded text-[10px]">COUPON</span>
-                                                }
+                                                {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${ss.bg} ${ss.text}`}>{ss.label}</span> : <span className="text-slate-600">—</span>}
                                             </td>
+                                            <td className="px-3 py-2.5 mono text-cyan-400">
+                                                {amounts?.cryptoQty > 0 ? `${amounts.cryptoQty.toFixed(8)} ${amounts.cryptoCcy}` : '—'}
+                                            </td>
+                                            <td className="px-3 py-2.5 mono text-yellow-400">
+                                                {amounts?.baseAmount > 0 ? `${s.trade.notionalCurrency} ${fmt(amounts.baseAmount,2)}` : isKO ? `${s.trade.notionalCurrency} ${fmt(s.remaining,2)} (remaining)` : '—'}
+                                            </td>
+                                            <td className="px-3 py-2.5 mono text-orange-400">
+                                                {s.trade.knockOutEnabled ? `$${fmt(parseFloat(s.trade.knockOutPrice),2)}` : '—'}
+                                            </td>
+                                            <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
+                                            <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.remaining,2)}</td>
                                             <td className="px-3 py-2.5">
-                                                <button onClick={()=>onConfirmPayment(s.trade.id,s.date)}
-                                                    className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 rounded text-green-400 text-[10px] transition-colors">
-                                                    ✓ Confirm
-                                                </button>
+                                                {f?.fixingPrice ? (
+                                                    <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
+                                                        className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 rounded text-green-400 text-[10px] transition-colors whitespace-nowrap">
+                                                        ✓ Confirm
+                                                    </button>
+                                                ) : <span className="text-slate-600 text-[10px]">Enter price first</span>}
                                             </td>
                                         </tr>
                                     );
@@ -2405,41 +2000,60 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
                         </table>
                     </div>
                 </div>
-            )}
-            {upcoming.length===0&&(
+            ) : (
                 <div className="card p-6 text-center text-slate-500 text-sm">No settlements due in the next 7 days.</div>
             )}
         </div>
     );
 };
 
-// ─── FCN ORDER CARD ───────────────────────────────────────────────────────────
-const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
-    const [expanded,setExpanded]=useState(false);
-    const couponPerPeriod=calcFCNCoupon(trade);
-    const schedule=buildFCNSchedule(trade);
-    const today=todayUTC();
-    const paidSettlements=trade.paidSettlements||[];
-    const underlyings=trade.underlyings||[];
-    const isStable=!isCrypto(trade.notionalCurrency);
+// ─── ACCUMULATOR ORDER CARD ───────────────────────────────────────────────────
+const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmFixing}) => {
+    const [expanded, setExpanded] = useState(false);
+    const [fetchingDate, setFetchingDate] = useState(null);
+    const [manualDate, setManualDate] = useState(null);
+    const [manualPrice, setManualPrice] = useState('');
+    const today = todayUTC();
 
-    const nextSettlement=schedule.find(s=>s.date>=today&&!paidSettlements.includes(s.date));
-    const couponsCollected=paidSettlements.length*couponPerPeriod;
-    const statusCls=FCN_STATUS_BADGE[trade.status]||FCN_STATUS_BADGE['Active'];
+    const schedule    = buildAccSchedule(trade);
+    const fixings     = trade.fixings || [];
+    const confirmed   = fixings.filter(f=>f.confirmed);
+    const amount1     = parseFloat(trade.amount1);
+    const amount2     = parseFloat(trade.amount2);
+    const notional    = parseFloat(trade.notionalAmount);
+    const remaining   = Math.max(0, notional - confirmed.length * amount2);
+    const pctUsed     = notional > 0 ? ((notional-remaining)/notional)*100 : 0;
+    const statusCls   = ACC_STATUS_BADGE[trade.status] || ACC_STATUS_BADGE['Active'];
+    const livePrice   = prices[accBaseAsset(trade.underlyingPair)] || 0;
+    const bybitSymbol = ACC_UNDERLYING_SYMBOLS[trade.underlyingPair] || '';
 
-    // Worst-of exercised info
-    const wasExercised=trade.status==='Exercised'&&trade.worstOffPair;
+    // Fetch fixing price for a date
+    const fetchFixing = async (date) => {
+        setFetchingDate(date);
+        try {
+            const price = await fetchBybitFixing(bybitSymbol, date);
+            onSaveFix(trade.id, date, price.toFixed(2));
+        } catch(e) { alert('Failed to fetch price for '+date+': '+e.message); }
+        setFetchingDate(null);
+    };
+
+    const saveManual = (date) => {
+        const p = parseFloat(manualPrice);
+        if (!p || p <= 0) return alert('Enter a valid price');
+        onSaveFix(trade.id, date, p.toFixed(2));
+        setManualDate(null); setManualPrice('');
+    };
 
     return (
         <div className={`card p-5 ${trade.status!=='Active'?'opacity-80':''}`}>
+            {/* Header */}
             <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
                 <div>
                     <div className="flex items-center gap-2 flex-wrap mb-1">
                         <h3 className="font-bold text-lg">{trade.clientName}</h3>
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusCls}`}>{trade.status}</span>
-                        {trade.knockInTriggered&&<span className="px-2 py-0.5 rounded-full text-xs bg-red-500/20 text-red-400 border border-red-500/30">⚡ KI Triggered</span>}
-                        {wasExercised&&<span className="px-2 py-0.5 rounded-full text-xs bg-purple-500/20 text-purple-400 border border-purple-500/30">Worst-of: {trade.worstOffPair}</span>}
-                        {isStable&&underlyings.length>1&&<span className="px-2 py-0.5 rounded-full text-xs bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">Worst-of ({underlyings.length} underlyings)</span>}
+                        {trade.bufferEnabled && <span className="px-2 py-0.5 rounded-full text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30">Buffered</span>}
+                        {trade.knockOutEnabled && <span className="px-2 py-0.5 rounded-full text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30">KO</span>}
                     </div>
                     <p className="text-xs text-slate-500 mono">{trade.id} · {fmtDate(trade.tradeDate)} → {fmtDate(trade.maturityDate)} · {trade.tenorValue} {trade.tenorUnit}</p>
                 </div>
@@ -2450,17 +2064,19 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
                 </div>
             </div>
 
-            {/* Metric cards */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-3">
+            {/* Key metrics */}
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 mb-3">
                 {[
-                    ['Notional',`${fmtFCN(trade.notionalAmount,trade.notionalCurrency)} ${trade.notionalCurrency}`,underlyings.map(u=>u.pair).join(', ')||'—','text-white'],
-                    ['Coupon Rate',`${parseFloat(trade.couponRate||0).toFixed(2)}% APR`,`${trade.settlementFrequency} · ${trade.couponCurrency}`,'text-yellow-400'],
-                    ['Per Period',fmtFCNCompact(couponPerPeriod,trade.couponCurrency),trade.couponCurrency,'text-yellow-300'],
-                    ['P&L Collected',fmtFCNCompact(couponsCollected,trade.couponCurrency),`${paidSettlements.length}/${schedule.length} paid`,'text-cyan-400'],
-                    ['Next Settlement',nextSettlement?nextSettlement.date:'None',nextSettlement?dayName(nextSettlement.date):'—',(isWeekend(nextSettlement?.date||'2000-01-01')&&nextSettlement)?'text-amber-400':'text-slate-300'],
-                    ['Settlement Freq',trade.settlementFrequency,`${schedule.length} total`,'text-slate-300'],
+                    ['Notional', `${trade.notionalCurrency} ${fmt(notional,2)}`, trade.underlyingPair, 'text-white'],
+                    ['Remaining', `${trade.notionalCurrency} ${fmt(remaining,2)}`, `${fmt(pctUsed,1)}% deployed`, remaining < amount2*2?'text-amber-400':'text-slate-300'],
+                    ['Amount 1', `${trade.notionalCurrency} ${fmt(amount1,2)}`, 'per above-strike', 'text-green-400'],
+                    ['Amount 2', `${trade.notionalCurrency} ${fmt(amount2,2)}`, 'per period', 'text-cyan-400'],
+                    ['Strike', `$${fmt(parseFloat(trade.strikePrice),2)}`, trade.underlyingPair, 'text-purple-400'],
+                    ['KO Price', trade.knockOutEnabled?`$${fmt(parseFloat(trade.knockOutPrice),2)}`:'—', trade.knockOutEnabled?'knockout level':'no KO', 'text-orange-400'],
+                    ['Buffer', trade.bufferEnabled?`$${fmt(parseFloat(trade.bufferPrice),2)}`:'—', trade.bufferEnabled?'buffer level':'no buffer', 'text-blue-400'],
+                    ['Progress', `${confirmed.length}/${schedule.length}`, `fixings confirmed`, 'text-slate-300'],
                 ].map(([lbl,val,sub,cls])=>(
-                    <div key={lbl} className="card-inner p-3">
+                    <div key={lbl} className="card-inner p-2.5">
                         <p className="text-xs text-slate-400 mb-1 truncate">{lbl}</p>
                         <p className={`font-bold mono text-xs ${cls} truncate`}>{val}</p>
                         <p className="text-xs text-slate-500 truncate">{sub}</p>
@@ -2468,65 +2084,105 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
                 ))}
             </div>
 
-            {/* Underlying pairs barrier strip */}
-            <div className="space-y-1.5 mb-3">
-                {underlyings.map((u,i)=>{
-                    const liveP=getPriceForPair(u.pair,prices);
-                    const koP=u.koEnabled?parseFloat(u.koPrice):null;
-                    const strikeP=parseFloat(u.strikePrice)||0;
-                    const spotRef=parseFloat(u.spotRef)||0;
-                    // KI for Variant A
-                    const kiP=!isStable&&trade.knockInEnabled?parseFloat(trade.knockInPrice):null;
-                    // Buffer calcs
-                    const koBuf=koP&&liveP?isStable?(koP-liveP)/liveP*100:(liveP-koP)/liveP*100:null;
-                    const kiBuf=kiP&&liveP?(liveP-kiP)/liveP*100:null;
-                    const koClose=koBuf!==null&&Math.abs(koBuf)<10;
-                    return(
-                        <div key={i} className={`rounded-lg px-3 py-2 text-xs border flex flex-wrap items-center gap-3 ${koClose?'bg-amber-900/20 border-amber-500/30':'bg-slate-800/50 border-slate-700'}`}>
-                            <span className="font-medium text-slate-300">{u.pair}</span>
-                            <span className="text-slate-500">Spot Ref: <span className="mono text-slate-300">${fmt(spotRef,2)}</span></span>
-                            {koP&&<span className={koClose?'text-amber-400':'text-orange-400'}>KO: <span className="mono">${fmt(koP,2)}</span>{liveP>0&&<span className="text-slate-500 ml-1">(buf: {fmt(Math.abs(koBuf),1)}%)</span>}</span>}
-                            <span className="text-purple-400">Strike: <span className="mono">${fmt(strikeP,2)}</span></span>
-                            {kiP&&!isStable&&<span className={kiBuf!==null&&kiBuf<10?'text-red-400':'text-slate-400'}>KI: <span className="mono">${fmt(kiP,2)}</span>{kiBuf!==null&&<span className="ml-1">({fmt(kiBuf,1)}% buf)</span>}</span>}
-                            {liveP>0&&<span className="text-slate-400 ml-auto">Live: <span className="mono text-white">${fmt(liveP,2)}</span></span>}
-                        </div>
-                    );
-                })}
+            {/* Upfront fee strip */}
+            {(trade.upfrontFee > 0) && (
+                <div className="flex gap-4 text-xs text-slate-500 mb-3">
+                    <span>Upfront Fee: <span className="mono text-slate-300">{fmt(parseFloat(trade.upfrontFee),2)}%</span></span>
+                    <span>Upfront Amount: <span className="mono text-slate-300">{trade.notionalCurrency} {fmt(parseFloat(trade.upfrontAmount),2)}</span></span>
+                    <span>Spot Ref: <span className="mono text-slate-300">${fmt(parseFloat(trade.spotReferencePrice),2)}</span></span>
+                </div>
+            )}
+
+            {/* Progress bar */}
+            <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden mb-3">
+                <div className="h-full bg-violet-500 rounded-full transition-all" style={{width:`${pctUsed}%`}}/>
             </div>
 
             {/* Settlement schedule */}
-            {expanded&&(
+            {expanded && (
                 <div className="border-t border-slate-800 pt-3 overflow-x-auto">
+                    {manualDate && (
+                        <div className="card-inner p-3 mb-3 flex items-center gap-3">
+                            <span className="text-xs text-slate-400">Manual price for {manualDate}:</span>
+                            <Input type="number" value={manualPrice} onChange={e=>setManualPrice(e.target.value)} step="0.01" placeholder="e.g. 56000.00" className="w-40"/>
+                            <button onClick={()=>saveManual(manualDate)} className="btn-primary px-3 py-1 rounded text-xs">Save</button>
+                            <button onClick={()=>{setManualDate(null);setManualPrice('');}} className="btn-secondary px-3 py-1 rounded text-xs">Cancel</button>
+                        </div>
+                    )}
                     <table className="w-full text-xs">
                         <thead>
                             <tr className="border-b border-slate-800 text-slate-400">
-                                {['#','Date','Day','Coupon','Type','Status'].map(h=><th key={h} className="text-left pb-2 pr-3">{h}</th>)}
+                                {['#','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','Remaining After','Status','Actions'].map(h=>(
+                                    <th key={h} className="text-left pb-2 pr-3 whitespace-nowrap">{h}</th>
+                                ))}
                             </tr>
                         </thead>
                         <tbody>
-                            {schedule.map(({date,isMaturity},i)=>{
-                                const isPast=date<today,isPaid=paidSettlements.includes(date),weekend=isWeekend(date);
-                                return(
-                                    <tr key={date} className={`border-b border-slate-800/40 ${weekend?'bg-amber-900/10':''} ${isMaturity?'bg-cyan-900/10':''} ${isPast&&!isPaid?'opacity-50':''}`}>
-                                        <td className="py-1.5 pr-3 text-slate-500">{i+1}</td>
-                                        <td className={`py-1.5 pr-3 mono ${weekend?'text-amber-400':isMaturity?'text-cyan-400':'text-slate-300'}`}>
+                            {schedule.map((date, i) => {
+                                const fixing = fixings.find(f=>f.date===date);
+                                const fp = fixing?.fixingPrice ? parseFloat(fixing.fixingPrice) : null;
+                                const scenario = fp !== null ? accScenario(trade, fp) : null;
+                                const amounts  = scenario ? accAmounts(trade, scenario) : null;
+                                const ss       = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
+                                const isPast   = date < today;
+                                const isConf   = fixing?.confirmed;
+                                const weekend  = isWeekend(date);
+                                const isFuture = date > today;
+                                // Remaining notional after this fixing
+                                const confirmedBefore = fixings.filter(f=>f.confirmed&&f.date<=date).length;
+                                const notionalAfter = Math.max(0, notional - confirmedBefore * amount2);
+                                const isKO = scenario === 'knockout';
+                                return (
+                                    <tr key={date} className={`border-b border-slate-800/40 ${weekend?'bg-amber-900/10':''} ${isKO?'bg-orange-900/10':''} ${isFuture?'opacity-50':''}`}>
+                                        <td className="py-2 pr-3 text-slate-500">{i+1}</td>
+                                        <td className={`py-2 pr-3 mono ${weekend?'text-amber-400':'text-slate-300'}`}>
                                             {date}{weekend&&<span className="ml-1 text-[9px] text-amber-500">WE</span>}
                                         </td>
-                                        <td className="py-1.5 pr-3 text-slate-400">{dayName(date)}</td>
-                                        <td className="py-1.5 pr-3 mono text-yellow-400">
-                                            {isMaturity
-                                                ?<span>{fmtFCNCompact(couponPerPeriod,trade.couponCurrency)} + <span className="text-slate-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency}</span></span>
-                                                :fmtFCNCompact(couponPerPeriod,trade.couponCurrency)
-                                            }
+                                        <td className="py-2 pr-3 text-slate-400">{dayName(date)}</td>
+                                        <td className="py-2 pr-3 mono text-white">
+                                            {fp !== null ? `$${fmt(fp,2)}` : <span className="text-slate-600">—</span>}
                                         </td>
-                                        <td className="py-1.5 pr-3">
-                                            {isMaturity
-                                                ?<span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-[10px]">MATURITY</span>
-                                                :<span className="px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded text-[10px]">COUPON</span>
-                                            }
+                                        <td className="py-2 pr-3">
+                                            {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] ${ss.bg} ${ss.text}`}>{ss.label}</span> : <span className="text-slate-600">—</span>}
                                         </td>
-                                        <td className="py-1.5">
-                                            {isPaid?<span className="text-green-400">✓ Paid</span>:isPast?<span className="text-red-400">Unpaid</span>:<span className="text-slate-500">Pending</span>}
+                                        <td className="py-2 pr-3 mono text-cyan-400">
+                                            {amounts?.cryptoQty > 0 ? `${amounts.cryptoQty.toFixed(8)} ${amounts.cryptoCcy}` : '—'}
+                                        </td>
+                                        <td className="py-2 pr-3 mono text-yellow-400">
+                                            {amounts?.baseAmount > 0 ? `${trade.notionalCurrency} ${fmt(amounts.baseAmount,2)}` : isKO ? `${trade.notionalCurrency} ${fmt(notionalAfter,2)}` : '—'}
+                                        </td>
+                                        <td className="py-2 pr-3 mono text-slate-400">
+                                            {isConf ? `${trade.notionalCurrency} ${fmt(notionalAfter,2)}` : '—'}
+                                        </td>
+                                        <td className="py-2 pr-3">
+                                            {isConf ? <span className="text-green-400">✓ Confirmed</span>
+                                                : isPast ? <span className="text-red-400">Pending</span>
+                                                : <span className="text-slate-500">Upcoming</span>}
+                                        </td>
+                                        <td className="py-2 flex gap-1.5">
+                                            {!isConf && !isFuture && (
+                                                <>
+                                                    <button onClick={()=>fetchFixing(date)} disabled={!!fetchingDate}
+                                                        className="px-2 py-0.5 bg-cyan-900/30 border border-cyan-500/30 rounded text-cyan-400 text-[10px] hover:bg-cyan-900/50 flex items-center gap-1">
+                                                        <Icon.Refresh spin={fetchingDate===date}/> Fetch
+                                                    </button>
+                                                    <button onClick={()=>{setManualDate(date);setManualPrice(fp?fp.toFixed(2):'');}}
+                                                        className="px-2 py-0.5 bg-slate-700 border border-slate-600 rounded text-slate-300 text-[10px] hover:bg-slate-600">
+                                                        Enter
+                                                    </button>
+                                                    {fp !== null && (
+                                                        <button onClick={()=>onConfirmFixing(trade.id, date)}
+                                                            className="px-2 py-0.5 bg-green-900/30 border border-green-500/30 rounded text-green-400 text-[10px] hover:bg-green-900/50">
+                                                            ✓
+                                                        </button>
+                                                    )}
+                                                </>
+                                            )}
+                                            {isFuture && livePrice > 0 && (
+                                                <span className={`text-[10px] mono ${accScenario(trade,livePrice)==='knockout'?'text-orange-400':accScenario(trade,livePrice)==='above'?'text-green-400':accScenario(trade,livePrice)==='inzone'?'text-blue-400':'text-red-400'}`}>
+                                                    live: ${fmt(livePrice,0)} → {ACC_SCENARIO_STYLE[accScenario(trade,livePrice)]?.label}
+                                                </span>
+                                            )}
                                         </td>
                                     </tr>
                                 );
@@ -2539,304 +2195,330 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
     );
 };
 
-// ─── FCN FORM MODAL ───────────────────────────────────────────────────────────
-const FCNFormModal = ({trade,onSave,onClose}) => {
-    const isStable = (ccy) => FCN_STABLE.includes(ccy);
-
-    const defaultUnderlying = (notionalCcy='BTC') => ({
-        pair: `${notionalCcy}/USDT`,
-        spotRef: '',
-        koEnabled: false,
-        koPrice: '',
-        strikePrice: '',
+// ─── ACCUMULATOR FORM MODAL ───────────────────────────────────────────────────
+const AccumulatorFormModal = ({trade, onSave, onClose}) => {
+    const [form, setForm] = useState(trade || {
+        clientName:'', tradeDate:todayLocal(), tenorValue:52, tenorUnit:'weeks',
+        notionalCurrency:'USDT', notionalAmount:'',
+        underlyingPair:'BTC/USDT', spotReferencePrice:'',
+        strikePrice:'', knockOutEnabled:false, knockOutPrice:'',
+        bufferEnabled:false, bufferPrice:'',
+        upfrontFee:'0.00', status:'Active',
     });
+    const f  = k => e => setForm(p=>({...p,[k]:e.target.value}));
+    const fb = k => e => setForm(p=>({...p,[k]:e.target.checked}));
 
-    const initUnderlyings = trade?.underlyings?.length ? trade.underlyings : [defaultUnderlying(trade?.notionalCurrency||'BTC')];
-
-    const [form,setForm]=useState(trade||{
-        clientName:'',tradeDate:todayLocal(),tenorValue:3,tenorUnit:'months',
-        notionalCurrency:'BTC',notionalAmount:'',
-        couponCurrency:'USDT',couponSameAsNotional:false,
-        couponRate:'',settlementFrequency:'Monthly',
-        knockInEnabled:false,knockInPrice:'',
-        status:'Active',knockInTriggered:false,
-    });
-    const [underlyings,setUnderlyings]=useState(initUnderlyings);
-    const f=k=>e=>setForm(p=>({...p,[k]:e.target.value}));
-    const fb=k=>e=>setForm(p=>({...p,[k]:e.target.checked}));
-
-    const notionalIsStable=isStable(form.notionalCurrency);
-
-    // Auto-maturity
-    const computeMaturity=()=>{
-        if(!form.tradeDate||!form.tenorValue) return '';
-        const start=new Date(form.tradeDate+'T00:00:00Z');
-        const val=parseInt(form.tenorValue)||0;
-        if(form.tenorUnit==='weeks') return new Date(start.getTime()+val*7*86400000).toISOString().split('T')[0];
-        const d=new Date(start); d.setUTCMonth(d.getUTCMonth()+val); return d.toISOString().split('T')[0];
+    // Auto maturity
+    const computeMaturity = () => {
+        if (!form.tradeDate || !form.tenorValue) return '';
+        const start = new Date(form.tradeDate+'T00:00:00Z');
+        const val = parseInt(form.tenorValue)||0;
+        if (form.tenorUnit==='weeks') return new Date(start.getTime()+val*7*86400000).toISOString().split('T')[0];
+        const d = new Date(start); d.setUTCMonth(d.getUTCMonth()+val); return d.toISOString().split('T')[0];
     };
-    const maturityDate=computeMaturity();
+    const maturityDate = computeMaturity();
 
-    // Auto settlement freq from tenor unit
-    useEffect(()=>setForm(p=>({...p,settlementFrequency:p.tenorUnit==='weeks'?'Weekly':'Monthly'})),[form.tenorUnit]);
+    // Auto-calculate amounts
+    const periods = parseInt(form.tenorValue)||1;
+    const notional = parseFloat(form.notionalAmount)||0;
+    const amount2 = notional > 0 ? (notional / periods) : 0;
+    const amount1 = amount2 / 2;
 
-    // Auto coupon currency
-    useEffect(()=>{if(form.couponSameAsNotional)setForm(p=>({...p,couponCurrency:p.notionalCurrency}));},[form.couponSameAsNotional,form.notionalCurrency]);
+    // Auto-calculate upfront amount
+    const upfrontFee = parseFloat(form.upfrontFee)||0;
+    const upfrontAmount = notional * upfrontFee / 100;
 
-    // Auto-set first underlying pair when notional currency changes
-    useEffect(()=>{
-        setUnderlyings(prev=>{
-            const updated=[...prev];
-            if(updated.length>0){
-                const base=form.notionalCurrency;
-                const quote=isStable(form.couponCurrency)?form.couponCurrency:FCN_STABLE.includes(updated[0].pair.split('/')[1])?updated[0].pair.split('/')[1]:'USDT';
-                updated[0]={...updated[0],pair:`${isCrypto(base)?base:updated[0].pair.split('/')[0]}/${quote}`};
-            }
-            return updated;
+    const disabledCls = 'opacity-40 pointer-events-none';
+
+    const handleSave = () => {
+        if (!form.clientName) return alert('Client Name required');
+        if (!form.notionalAmount) return alert('Notional Amount required');
+        if (!form.strikePrice) return alert('Strike Price required');
+        if (!form.spotReferencePrice) return alert('Spot Reference Price required');
+        if (form.knockOutEnabled && !form.knockOutPrice) return alert('KO Price required when KO is enabled');
+        if (form.bufferEnabled && !form.bufferPrice) return alert('Buffer Price required when Buffer is enabled');
+        const id = trade ? trade.id : `ACC-${Date.now()}`;
+        onSave({
+            ...form, id, maturityDate,
+            amount1: amount1.toFixed(2),
+            amount2: amount2.toFixed(2),
+            upfrontAmount: upfrontAmount.toFixed(2),
+            fixings: trade?.fixings || [],
+            createdAt: trade?.createdAt || new Date().toISOString(),
         });
-    },[form.notionalCurrency,form.couponCurrency]);
-
-    const addUnderlying=()=>setUnderlyings(p=>[...p,defaultUnderlying('BTC')]);
-    const removeUnderlying=(i)=>setUnderlyings(p=>p.filter((_,j)=>j!==i));
-    const setU=(i,k,v)=>setUnderlyings(p=>p.map((u,j)=>j===i?{...u,[k]:v}:u));
-    const setUBool=(i,k,v)=>setUnderlyings(p=>p.map((u,j)=>j===i?{...u,[k]:v}:u));
-
-    const disabledCls='opacity-40 pointer-events-none';
-
-    const handleSave=()=>{
-        if(!form.clientName) return alert('Client Name required');
-        if(!form.notionalAmount) return alert('Notional Amount required');
-        if(!form.couponRate) return alert('Coupon Rate required');
-        if(!underlyings.length) return alert('At least one underlying pair required');
-        if(underlyings.some(u=>!u.pair||!u.spotRef||!u.strikePrice)) return alert('Each underlying needs pair, spot ref and strike price');
-        const id=trade?trade.id:`FCN-${Date.now()}`;
-        onSave({...form,id,maturityDate,underlyings,paidSettlements:trade?.paidSettlements||[],createdAt:trade?.createdAt||new Date().toISOString()});
     };
 
-    const notionalDp=isCrypto(form.notionalCurrency)?8:2;
-    const sampleTrade={...form,maturityDate,underlyings};
-    const couponPreview=maturityDate&&form.notionalAmount&&form.couponRate?calcFCNCoupon(sampleTrade):null;
-    const schedPreview=maturityDate?buildFCNSchedule(sampleTrade):[];
+    const schedPreview = maturityDate ? buildAccSchedule({...form,maturityDate}).length : 0;
 
-    return(
-        <Modal title={trade?`Edit: ${trade.id}`:'New FCN Trade'} onClose={onClose} wide>
+    return (
+        <Modal title={trade?`Edit: ${trade.id}`:'New Accumulator Trade'} onClose={onClose} wide>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2"><Field label="Client Name"><Input value={form.clientName} onChange={f('clientName')} placeholder="Client name"/></Field></div>
+                <div className="md:col-span-2">
+                    <Field label="Client Name"><Input value={form.clientName} onChange={f('clientName')} placeholder="Client name"/></Field>
+                </div>
                 <Field label="Trade Date"><Input type="date" value={form.tradeDate} onChange={f('tradeDate')}/></Field>
                 <Field label="Tenor">
                     <div className="flex gap-2">
                         <Input type="number" value={form.tenorValue} onChange={f('tenorValue')} min="1" style={{width:'80px'}}/>
-                        <Select value={form.tenorUnit} onChange={f('tenorUnit')}><option value="weeks">Weeks</option><option value="months">Months</option></Select>
-                    </div>
-                </Field>
-                <Field label="Maturity Date (auto)"><div className="card-inner px-3 py-2 mono text-cyan-400 text-sm">{maturityDate||'—'}</div></Field>
-                <Field label="Settlement Frequency"><div className="card-inner px-3 py-2 text-slate-300 text-sm">{form.settlementFrequency} (from tenor)</div></Field>
-                <Field label="Notional Currency">
-                    <Select value={form.notionalCurrency} onChange={f('notionalCurrency')}>
-                        {FCN_CURRENCIES.map(c=><option key={c}>{c}</option>)}
-                    </Select>
-                </Field>
-                <Field label={`Notional Amount (${notionalDp}dp)`}>
-                    <Input type="number" value={form.notionalAmount} onChange={f('notionalAmount')} step={isCrypto(form.notionalCurrency)?'0.00000001':'0.01'}/>
-                </Field>
-                <div className="md:col-span-2">
-                    <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs text-slate-400">Coupon Currency</label>
-                        <label className="flex items-center gap-1.5 cursor-pointer text-xs text-cyan-400">
-                            <input type="checkbox" checked={form.couponSameAsNotional} onChange={fb('couponSameAsNotional')} className="accent-cyan-500"/>
-                            Same as Notional
-                        </label>
-                    </div>
-                    <div className={form.couponSameAsNotional?disabledCls:''}>
-                        <Select value={form.couponCurrency} onChange={f('couponCurrency')} disabled={form.couponSameAsNotional}>
-                            {FCN_CURRENCIES.map(c=><option key={c}>{c}</option>)}
+                        <Select value={form.tenorUnit} onChange={f('tenorUnit')}>
+                            <option value="weeks">Weeks</option>
+                            <option value="months">Months</option>
                         </Select>
                     </div>
-                </div>
-                <Field label="Coupon Rate (% APR)"><Input type="number" value={form.couponRate} onChange={f('couponRate')} step="0.01" placeholder="e.g. 12.00"/></Field>
-                {/* KI — Variant A only */}
-                {!notionalIsStable&&(
-                    <div>
-                        <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-slate-400">Knock-In Price (2dp)</label>
-                            <label className="flex items-center gap-1.5 cursor-pointer text-xs text-red-400">
-                                <input type="checkbox" checked={form.knockInEnabled} onChange={fb('knockInEnabled')} className="accent-red-500"/>Enable KI
-                            </label>
-                        </div>
-                        <div className={!form.knockInEnabled?disabledCls:''}>
-                            <Input type="number" value={form.knockInPrice} onChange={f('knockInPrice')} step="0.01" disabled={!form.knockInEnabled} placeholder={!form.knockInEnabled?'Disabled':'e.g. 50000.00'}/>
-                        </div>
+                </Field>
+                <Field label="Maturity Date (auto)">
+                    <div className="card-inner px-3 py-2 mono text-cyan-400 text-sm">{maturityDate||'—'}</div>
+                </Field>
+                <Field label="Settlement Frequency">
+                    <div className="card-inner px-3 py-2 text-slate-300 text-sm">{form.tenorUnit==='weeks'?'Weekly':'Monthly'} (from tenor)</div>
+                </Field>
+                <Field label="Notional Currency">
+                    <Select value={form.notionalCurrency} onChange={f('notionalCurrency')}>
+                        <option>USDT</option><option>USDC</option>
+                    </Select>
+                </Field>
+                <Field label="Notional Amount (2dp)">
+                    <Input type="number" value={form.notionalAmount} onChange={f('notionalAmount')} step="0.01"/>
+                </Field>
+                <Field label="Underlying Pair">
+                    <Select value={form.underlyingPair} onChange={f('underlyingPair')}>
+                        {ACC_PAIRS.map(p=><option key={p}>{p}</option>)}
+                    </Select>
+                </Field>
+                <Field label="Spot Reference Price (2dp)">
+                    <Input type="number" value={form.spotReferencePrice} onChange={f('spotReferencePrice')} step="0.01" placeholder="e.g. 56000.00"/>
+                </Field>
+                <Field label="Strike Price (2dp)">
+                    <Input type="number" value={form.strikePrice} onChange={f('strikePrice')} step="0.01"/>
+                </Field>
+
+                {/* Knock-Out */}
+                <div>
+                    <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs text-slate-400">Knock-Out Price (2dp)</label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs text-orange-400">
+                            <input type="checkbox" checked={form.knockOutEnabled} onChange={fb('knockOutEnabled')} className="accent-orange-500"/>Enable KO
+                        </label>
                     </div>
+                    <div className={!form.knockOutEnabled?disabledCls:''}>
+                        <Input type="number" value={form.knockOutPrice} onChange={f('knockOutPrice')} step="0.01" disabled={!form.knockOutEnabled} placeholder={!form.knockOutEnabled?'Disabled':'e.g. 84000.00'}/>
+                    </div>
+                </div>
+
+                {/* Buffer */}
+                <div>
+                    <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs text-slate-400">Buffer Price (2dp)</label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs text-blue-400">
+                            <input type="checkbox" checked={form.bufferEnabled} onChange={fb('bufferEnabled')} className="accent-blue-500"/>Enable Buffer
+                        </label>
+                    </div>
+                    <div className={!form.bufferEnabled?disabledCls:''}>
+                        <Input type="number" value={form.bufferPrice} onChange={f('bufferPrice')} step="0.01" disabled={!form.bufferEnabled} placeholder={!form.bufferEnabled?'Disabled':'e.g. 50000.00'}/>
+                    </div>
+                </div>
+
+                {/* Upfront Fee */}
+                <Field label="Upfront Fee (% — bookkeeping only)">
+                    <Input type="number" value={form.upfrontFee} onChange={f('upfrontFee')} step="0.01" placeholder="0.00"/>
+                </Field>
+                <Field label="Upfront Amount (auto)">
+                    <div className="card-inner px-3 py-2 mono text-slate-300 text-sm">
+                        {notional > 0 ? `${form.notionalCurrency} ${fmt(upfrontAmount,2)}` : '—'}
+                    </div>
+                </Field>
+
+                {trade && (
+                    <Field label="Status">
+                        <Select value={form.status} onChange={f('status')}>
+                            <option>Active</option><option>Knocked Out</option><option>Matured</option>
+                        </Select>
+                    </Field>
                 )}
-                {trade&&<Field label="Status"><Select value={form.status} onChange={f('status')}><option>Active</option><option>Knocked Out</option><option>Exercised</option><option>Matured</option></Select></Field>}
             </div>
 
-            {/* Underlying Pairs section */}
-            <div className="mt-5 border-t border-slate-700 pt-4">
-                <div className="flex items-center justify-between mb-3">
-                    <p className="text-sm font-semibold text-slate-300">
-                        Underlying Pair{underlyings.length>1?'s':''}{notionalIsStable&&underlyings.length>1&&<span className="ml-2 text-xs text-cyan-400 font-normal">Worst-of structure</span>}
-                    </p>
-                    <button onClick={addUnderlying} className="btn-secondary px-3 py-1 rounded-lg text-xs flex items-center gap-1">
-                        <Icon.Plus/> Add Pair
-                    </button>
+            {/* Auto-calculated amounts preview */}
+            {notional > 0 && periods > 0 && (
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div className="bg-cyan-900/20 border border-cyan-500/20 rounded-lg p-3 text-xs">
+                        <p className="text-slate-400 mb-1">{form.tenorUnit==='weeks'?'Weekly':'Monthly'} Amount 2 (auto)</p>
+                        <p className="text-white font-bold mono text-sm">{form.notionalCurrency} {fmt(amount2,2)}</p>
+                        <p className="text-slate-500">{form.notionalCurrency} {fmt(notional,2)} ÷ {periods} periods</p>
+                    </div>
+                    <div className="bg-green-900/20 border border-green-500/20 rounded-lg p-3 text-xs">
+                        <p className="text-slate-400 mb-1">{form.tenorUnit==='weeks'?'Weekly':'Monthly'} Amount 1 (auto)</p>
+                        <p className="text-white font-bold mono text-sm">{form.notionalCurrency} {fmt(amount1,2)}</p>
+                        <p className="text-slate-500">Amount 2 ÷ 2</p>
+                    </div>
                 </div>
-                <div className="space-y-3">
-                    {underlyings.map((u,i)=>(
-                        <div key={i} className="card-inner p-3 space-y-3">
-                            <div className="flex items-center justify-between">
-                                <span className="text-xs font-medium text-slate-300">Underlying {i+1}</span>
-                                {underlyings.length>1&&(
-                                    <button onClick={()=>removeUnderlying(i)} className="text-red-400 hover:text-red-300 text-xs">✕ Remove</button>
-                                )}
-                            </div>
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                                <Field label="Pair (e.g. BTC/USDT)">
-                                    <Input value={u.pair} onChange={e=>setU(i,'pair',e.target.value)} placeholder="BTC/USDT"/>
-                                </Field>
-                                <Field label="Spot Reference (2dp)">
-                                    <Input type="number" value={u.spotRef} onChange={e=>setU(i,'spotRef',e.target.value)} step="0.01" placeholder="e.g. 71000.00"/>
-                                </Field>
-                                <Field label="Strike Price (2dp)">
-                                    <Input type="number" value={u.strikePrice} onChange={e=>setU(i,'strikePrice',e.target.value)} step="0.01"/>
-                                </Field>
-                                <div className="md:col-span-3">
-                                    <div className="flex items-center justify-between mb-1">
-                                        <label className="text-xs text-slate-400">Knock-Out Price (2dp)</label>
-                                        <label className="flex items-center gap-1.5 cursor-pointer text-xs text-orange-400">
-                                            <input type="checkbox" checked={!!u.koEnabled} onChange={e=>setUBool(i,'koEnabled',e.target.checked)} className="accent-orange-500"/>
-                                            {notionalIsStable?'Enable KO (price above triggers KO)':'Enable KO (price below triggers KO)'}
-                                        </label>
-                                    </div>
-                                    <div className={!u.koEnabled?disabledCls:''}>
-                                        <Input type="number" value={u.koPrice||''} onChange={e=>setU(i,'koPrice',e.target.value)} step="0.01" disabled={!u.koEnabled} placeholder={!u.koEnabled?'Disabled':'e.g. 80000.00'}/>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </div>
+            )}
 
-            {/* Preview */}
-            {maturityDate&&form.notionalAmount&&form.couponRate&&underlyings[0]?.spotRef&&(
-                <div className="mt-4 bg-cyan-900/20 border border-cyan-500/20 rounded-lg p-3 text-xs text-cyan-300 space-y-1">
+            {maturityDate && notional > 0 && (
+                <div className="mt-3 bg-violet-900/20 border border-violet-500/20 rounded-lg p-3 text-xs text-violet-300 space-y-1">
                     <p className="font-medium">Trade Preview</p>
-                    <p>Maturity: {maturityDate} · {form.settlementFrequency} · {schedPreview.length} settlement{schedPreview.length!==1?'s':''}</p>
-                    {couponPreview!==null&&<p>Coupon per period: {fmtFCNCompact(couponPreview,form.couponCurrency)} {form.couponCurrency}</p>}
-                    {notionalIsStable&&underlyings.length>1&&<p className="text-amber-300">⚠ Worst-of: {underlyings.length} underlyings — KO/Strike checked on ALL pairs</p>}
+                    <p>Maturity: {maturityDate} · {schedPreview} {form.tenorUnit==='weeks'?'weekly':'monthly'} fixing{schedPreview!==1?'s':''}</p>
+                    {form.bufferEnabled && form.bufferPrice && form.strikePrice && (
+                        <p>In-zone: between ${fmt(Math.min(parseFloat(form.strikePrice),parseFloat(form.bufferPrice)),2)} and ${fmt(Math.max(parseFloat(form.strikePrice),parseFloat(form.bufferPrice)),2)}</p>
+                    )}
                 </div>
             )}
 
             <div className="flex gap-2 mt-5">
-                <button onClick={handleSave} className="btn-primary flex-1 px-4 py-2 rounded-lg font-semibold text-sm">{trade?'Update Trade':'Create Trade'}</button>
+                <button onClick={handleSave} className="btn-primary flex-1 px-4 py-2 rounded-lg font-semibold text-sm">
+                    {trade?'Update Trade':'Create Trade'}
+                </button>
                 <button onClick={onClose} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
             </div>
         </Modal>
     );
 };
 
-// ─── FCN MODULE ───────────────────────────────────────────────────────────────
-const FCNModule = ({prices}) => {
-    const [trades,setTrades]=useState(()=>{try{return JSON.parse(localStorage.getItem('cpb_fcn_trades')||'[]');}catch{return[];}});
-    const [config,setConfig]=useState(()=>{try{return JSON.parse(localStorage.getItem('cpb_fcn_config')||'{}');}catch{return{};}});
-    const [showAdd,setShowAdd]=useState(false);
-    const [editingTrade,setEditingTrade]=useState(null);
-    const [showSettings,setShowSettings]=useState(false);
-    const [filterStatus,setFilterStatus]=useState('all');
-    const [sheetsLoading,setSheetsLoading]=useState(false);
+// ─── ACCUMULATOR MODULE ───────────────────────────────────────────────────────
+const AccumulatorModule = ({prices}) => {
+    const [trades, setTrades] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_acc_trades')||'[]');}catch{return[];} });
+    const [config, setConfig] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_acc_config')||'{}');}catch{return{};} });
+    const [showAdd, setShowAdd] = useState(false);
+    const [editingTrade, setEditingTrade] = useState(null);
+    const [showSettings, setShowSettings] = useState(false);
+    const [filterStatus, setFilterStatus] = useState('all');
+    const [sheetsLoading, setSheetsLoading] = useState(false);
 
-    useEffect(()=>{localStorage.setItem('cpb_fcn_trades',JSON.stringify(trades));},[trades]);
-    useEffect(()=>{localStorage.setItem('cpb_fcn_config',JSON.stringify(config));},[config]);
+    useEffect(()=>{ localStorage.setItem('cpb_acc_trades', JSON.stringify(trades)); }, [trades]);
+    useEffect(()=>{ localStorage.setItem('cpb_acc_config', JSON.stringify(config)); }, [config]);
 
-    // Barrier check at 4pm SGT on settlement dates
-    useEffect(()=>{
-        const nowSGT=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
-        if(nowSGT.getHours()<16) return;
-        const todayStr=todayUTC();
-        setTrades(prev=>prev.map(trade=>{
-            if(trade.status!=='Active') return trade;
-            const sched=buildFCNSchedule(trade);
-            const isSettlementToday=sched.some(s=>s.date===todayStr);
-            const isMaturityToday=sched.some(s=>s.date===todayStr&&s.isMaturity);
-            return checkBarriers(trade,prices,todayStr,isSettlementToday,isMaturityToday);
-        }));
-    },[prices]);
-
-    const pushTrade=async(trade)=>{
-        if(!config.scriptUrl) return;
+    const pushTrade = async (trade) => {
+        if (!config.scriptUrl) return;
         try {
-            await fcnSheetsCall(config.scriptUrl,{action:'upsertFCNOrder',values:JSON.stringify(tradToRow(trade))});
-        } catch(e){console.error('FCN push failed:',e.message);}
+            await accSheetsCall(config.scriptUrl, {action:'upsertAccOrder', values:JSON.stringify(accTradeToRow(trade))});
+        } catch(e) { console.error('Acc Sheets push failed:', e.message); }
     };
 
-    const addTrade=async(t)=>{ const trade={...t,createdAt:new Date().toISOString()}; setTrades(p=>[...p,trade]); setShowAdd(false); await pushTrade(trade); };
-    const updateTrade=async(t)=>{ setTrades(p=>p.map(x=>x.id===t.id?t:x)); setEditingTrade(null); await pushTrade(t); };
-    const deleteTrade=(id)=>{ if(confirm('Delete this FCN trade?')) setTrades(p=>p.filter(t=>t.id!==id)); };
-    const confirmPayment=async(tradeId,date)=>{
-        setTrades(prev=>{
-            const updated=prev.map(t=>{
-                if(t.id!==tradeId) return t;
-                const paid=[...(t.paidSettlements||[])];
-                if(!paid.includes(date)) paid.push(date);
-                const u={...t,paidSettlements:paid};
-                pushTrade(u);
-                return u;
+    const addTrade = async (t) => {
+        setTrades(p=>[...p, t]); setShowAdd(false); await pushTrade(t);
+    };
+    const updateTrade = async (t) => {
+        setTrades(p=>p.map(x=>x.id===t.id?t:x)); setEditingTrade(null); await pushTrade(t);
+    };
+    const deleteTrade = (id) => {
+        if (confirm('Delete this Accumulator trade?')) setTrades(p=>p.filter(t=>t.id!==id));
+    };
+
+    // Save a fixing price for a date
+    const saveFixing = async (tradeId, date, fixingPrice) => {
+        setTrades(prev => {
+            const updated = prev.map(trade => {
+                if (trade.id !== tradeId) return trade;
+                const fixings = [...(trade.fixings||[])];
+                const idx = fixings.findIndex(f=>f.date===date);
+                if (idx >= 0) fixings[idx] = {...fixings[idx], fixingPrice, confirmed:false};
+                else fixings.push({date, fixingPrice, confirmed:false});
+                const updated = {...trade, fixings};
+                pushTrade(updated);
+                return updated;
             });
             return updated;
         });
     };
 
-    const fetchFromSheets=async()=>{
-        if(!config.scriptUrl) return;
+    // Confirm a fixing — update status if KO or final period
+    const confirmFixing = async (tradeId, date) => {
+        setTrades(prev => {
+            const updated = prev.map(trade => {
+                if (trade.id !== tradeId) return trade;
+                const fixings = [...(trade.fixings||[])];
+                const idx = fixings.findIndex(f=>f.date===date);
+                if (idx < 0) return trade;
+                const fp = parseFloat(fixings[idx].fixingPrice);
+                const scenario = accScenario(trade, fp);
+                fixings[idx] = {...fixings[idx], confirmed:true, scenario};
+
+                let newStatus = trade.status;
+                const schedule = buildAccSchedule(trade);
+                const isKO = scenario === 'knockout';
+                const isLast = date === schedule[schedule.length-1];
+
+                if (isKO) newStatus = 'Knocked Out';
+                else if (isLast) newStatus = 'Matured';
+
+                const result = {...trade, fixings, status:newStatus};
+                pushTrade(result);
+                return result;
+            });
+            return updated;
+        });
+    };
+
+    const fetchFromSheets = async () => {
+        if (!config.scriptUrl) return;
         setSheetsLoading(true);
         try {
-            const res=await fcnSheetsCall(config.scriptUrl,{action:'readFCNOrders'});
-            if(res.values&&res.values.length) setTrades(res.values.filter(r=>r[0]&&r[1]).map(rowToTrade));
-        } catch(e){alert('FCN sync error: '+e.message);}
+            const res = await accSheetsCall(config.scriptUrl, {action:'readAccOrders'});
+            if (res.values?.length) setTrades(res.values.filter(r=>r[0]&&r[1]).map(accRowToTrade));
+        } catch(e) { alert('Accumulator sync error: '+e.message); }
         setSheetsLoading(false);
     };
 
-    const filtered=trades.filter(t=>{
-        if(filterStatus==='all') return true;
-        if(filterStatus==='active') return t.status==='Active';
-        if(filterStatus==='knocked-out') return t.status==='Knocked Out';
-        if(filterStatus==='exercised') return t.status==='Exercised';
-        if(filterStatus==='matured') return t.status==='Matured';
+    const filtered = trades.filter(t => {
+        if (filterStatus==='all') return true;
+        if (filterStatus==='active') return t.status==='Active';
+        if (filterStatus==='knocked-out') return t.status==='Knocked Out';
+        if (filterStatus==='matured') return t.status==='Matured';
         return true;
     });
 
-    return(
+    return (
         <div>
-            <FCNDashboard trades={trades} prices={prices} onConfirmPayment={confirmPayment}/>
+            <AccumulatorDashboard trades={trades} prices={prices} onConfirmFixing={confirmFixing}/>
+
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
                     <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5">
-                        <option value="all">All</option><option value="active">Active</option>
-                        <option value="knocked-out">Knocked Out</option><option value="exercised">Exercised</option><option value="matured">Matured</option>
+                        <option value="all">All</option>
+                        <option value="active">Active</option>
+                        <option value="knocked-out">Knocked Out</option>
+                        <option value="matured">Matured</option>
                     </Select>
-                    {config.scriptUrl&&<button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={sheetsLoading}/> Sync Sheets</button>}
-                    <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Config</button>
+                    {config.scriptUrl && (
+                        <button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
+                            <Icon.Refresh spin={sheetsLoading}/> Sync Sheets
+                        </button>
+                    )}
+                    <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
+                        <Icon.Settings/> Config
+                    </button>
                 </div>
-                <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><Icon.Plus/> New FCN Trade</button>
+                <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
+                    <Icon.Plus/> New Accumulator
+                </button>
             </div>
-            {showSettings&&(
+
+            {showSettings && (
                 <div className="card p-5 mb-5">
-                    <h3 className="font-semibold mb-3 text-sm">Google Sheets Config — FCN</h3>
-                    <p className="text-xs text-slate-500 mb-3">Separate spreadsheet from Loans and SSPS.</p>
-                    <Field label="FCN Apps Script URL"><Input value={config.scriptUrl||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/></Field>
+                    <h3 className="font-semibold mb-3 text-sm">Google Sheets Config — Accumulator</h3>
+                    <p className="text-xs text-slate-500 mb-3">Separate spreadsheet from Loans, SSPS, and FCN.</p>
+                    <Field label="Apps Script URL">
+                        <Input value={config.scriptUrl||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/>
+                    </Field>
                     <div className="flex gap-2 mt-3">
-                        <button onClick={()=>{localStorage.setItem('cpb_fcn_config',JSON.stringify(config));setShowSettings(false);if(config.scriptUrl)fetchFromSheets();}} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
+                        <button onClick={()=>{ localStorage.setItem('cpb_acc_config',JSON.stringify(config)); setShowSettings(false); if(config.scriptUrl) fetchFromSheets(); }} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
                         <button onClick={()=>setShowSettings(false)} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
                     </div>
                 </div>
             )}
-            {filtered.length===0
-                ?<div className="card p-12 text-center"><p className="text-slate-400">No FCN trades found.</p></div>
-                :<div className="space-y-3">{filtered.map(t=><FCNOrderCard key={t.id} trade={t} prices={prices} onEdit={setEditingTrade} onDelete={deleteTrade}/>)}</div>
+
+            {filtered.length === 0
+                ? <div className="card p-12 text-center"><p className="text-slate-400">No Accumulator trades found.</p></div>
+                : <div className="space-y-3">
+                    {filtered.map(t => (
+                        <AccumulatorCard key={t.id} trade={t} prices={prices}
+                            onEdit={setEditingTrade} onDelete={deleteTrade}
+                            onSaveFix={saveFixing} onConfirmFixing={confirmFixing}/>
+                    ))}
+                </div>
             }
-            {showAdd&&<FCNFormModal onSave={addTrade} onClose={()=>setShowAdd(false)}/>}
-            {editingTrade&&<FCNFormModal trade={editingTrade} onSave={updateTrade} onClose={()=>setEditingTrade(null)}/>}
+
+            {showAdd && <AccumulatorFormModal onSave={addTrade} onClose={()=>setShowAdd(false)}/>}
+            {editingTrade && <AccumulatorFormModal trade={editingTrade} onSave={updateTrade} onClose={()=>setEditingTrade(null)}/>}
         </div>
     );
 };
@@ -2848,11 +2530,7 @@ const App = () => {
 
     const fetchLivePrices=useCallback(async()=>{
         try {
-            const [btc,eth,ada]=await Promise.allSettled([
-                fetchBybitLive('BTCUSDT'),
-                fetchBybitLive('ETHUSDT'),
-                fetchBybitLive('ADAUSDT'),
-            ]);
+            const [btc,eth,ada]=await Promise.allSettled([fetchBybitLive('BTCUSDT'),fetchBybitLive('ETHUSDT'),fetchBybitLive('ADAUSDT')]);
             setPrices(p=>({
                 BTC:btc.status==='fulfilled'?btc.value:p.BTC,
                 ETH:eth.status==='fulfilled'?eth.value:p.ETH,
@@ -2873,11 +2551,11 @@ const App = () => {
                 </div>
                 <PriceTicker prices={prices} lastUpdate={lastUpdate}/>
                 <div className="flex gap-1 mb-6 border-b border-slate-800">
-                    {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['fcn','Fixed Coupon Note']].map(([id,label])=>(
+                    {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['acc','Accumulator']].map(([id,label])=>(
                         <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
                     ))}
                 </div>
-                {tab==='loans'?<LoanModule prices={prices}/>:tab==='ssps'?<SSPSModule prices={prices}/>:<FCNModule prices={prices}/>}
+                {tab==='loans'?<LoanModule prices={prices}/>:tab==='ssps'?<SSPSModule prices={prices}/>:<AccumulatorModule prices={prices}/>}
             </div>
         </div>
     );
