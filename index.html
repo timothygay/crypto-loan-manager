@@ -2841,6 +2841,791 @@ const FCNModule = ({prices}) => {
     );
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ACCUMULATOR MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+const ACC_UNDERLYING_SYMBOLS = { 'BTC/USDT':'BTCUSDT','BTC/USDC':'BTCUSDC','ETH/USDT':'ETHUSDT','ETH/USDC':'ETHUSDC','ADA/USDT':'ADAUSDT','ADA/USDC':'ADAUSDC' };
+const ACC_PAIRS = Object.keys(ACC_UNDERLYING_SYMBOLS);
+const accBaseAsset = (pair) => (pair||'').split('/')[0]; // BTC/USDT → BTC
+
+// Build settlement schedule for an accumulator
+const buildAccSchedule = (trade) => {
+    if (!trade.tradeDate || !trade.maturityDate) return [];
+    const dates = [];
+    let current = new Date(trade.tradeDate + 'T00:00:00Z');
+    const maturity = new Date(trade.maturityDate + 'T00:00:00Z');
+    const isWeekly = trade.tenorUnit === 'weeks';
+    while (true) {
+        if (isWeekly) current = new Date(current.getTime() + 7*86400000);
+        else { const d = new Date(current); d.setUTCMonth(d.getUTCMonth()+1); current=d; }
+        if (current > maturity) break;
+        dates.push(current.toISOString().split('T')[0]);
+    }
+    return dates;
+};
+
+// Determine scenario for a fixing
+// Returns: 'above' | 'inzone' | 'below' | 'knockout'
+const accScenario = (trade, fixingPrice) => {
+    const strike  = parseFloat(trade.strikePrice);
+    const koPrice = trade.knockOutEnabled ? parseFloat(trade.knockOutPrice) : null;
+    const buf     = trade.bufferEnabled  ? parseFloat(trade.bufferPrice)  : null;
+    if (koPrice && fixingPrice >= koPrice) return 'knockout';
+    // Above both strike and buffer (or just strike if no buffer)
+    if (buf !== null) {
+        const zoneMin = Math.min(strike, buf);
+        const zoneMax = Math.max(strike, buf);
+        if (fixingPrice >= zoneMax) return 'above';
+        if (fixingPrice >= zoneMin && fixingPrice < zoneMax) return 'inzone';
+        return 'below';
+    }
+    return fixingPrice >= strike ? 'above' : 'below';
+};
+
+// Calculate amounts for a given scenario
+const accAmounts = (trade, scenario) => {
+    const amount1 = parseFloat(trade.amount1);
+    const amount2 = parseFloat(trade.amount2);
+    const strike  = parseFloat(trade.strikePrice);
+    const base    = accBaseAsset(trade.underlyingPair);
+    const notionalCcy = trade.notionalCurrency;
+    switch (scenario) {
+        case 'above':
+            return {
+                cryptoQty: amount1 / strike,
+                cryptoCcy: base,
+                baseAmount: amount1,
+                baseCcy: notionalCcy,
+                label: 'Amount 1 crypto + Amount 1 base returned',
+                totalUsed: amount2,
+            };
+        case 'inzone':
+            return {
+                cryptoQty: 0,
+                cryptoCcy: base,
+                baseAmount: amount2,
+                baseCcy: notionalCcy,
+                label: 'In zone — Amount 2 base returned',
+                totalUsed: amount2,
+            };
+        case 'below':
+            return {
+                cryptoQty: amount2 / strike,
+                cryptoCcy: base,
+                baseAmount: 0,
+                baseCcy: notionalCcy,
+                label: 'Amount 2 crypto purchased at strike',
+                totalUsed: amount2,
+            };
+        case 'knockout':
+            return {
+                cryptoQty: 0,
+                cryptoCcy: base,
+                baseAmount: 0,
+                baseCcy: notionalCcy,
+                label: 'KO — final settlement + remaining balance returned',
+                totalUsed: amount2,
+            };
+        default: return { cryptoQty:0, baseAmount:0, totalUsed:0, label:'—' };
+    }
+};
+
+const ACC_SCENARIO_STYLE = {
+    'above':    { bg:'bg-green-900/20', border:'border-green-500/30', text:'text-green-400',  label:'ABOVE STRIKE' },
+    'inzone':   { bg:'bg-blue-900/20',  border:'border-blue-500/30',  text:'text-blue-400',   label:'IN ZONE' },
+    'below':    { bg:'bg-red-900/20',   border:'border-red-500/30',   text:'text-red-400',    label:'BELOW STRIKE' },
+    'knockout': { bg:'bg-orange-900/20',border:'border-orange-500/30',text:'text-orange-400', label:'KNOCK OUT' },
+};
+
+const ACC_STATUS_BADGE = {
+    'Active':      'bg-green-500/15 text-green-400 border-green-500/30',
+    'Knocked Out': 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+    'Matured':     'bg-blue-500/15 text-blue-400 border-blue-500/30',
+};
+
+// Sheets call
+const accSheetsCall = async (url, payload) => {
+    const qs = Object.entries(payload).map(([k,v])=>`${k}=${encodeURIComponent(typeof v==='object'?JSON.stringify(v):v)}`).join('&');
+    const res = await fetch(`${url}?${qs}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error||'Accumulator Sheets error');
+    return data;
+};
+
+const accTradeToRow = (t) => [
+    t.id, t.clientName, t.tradeDate, t.tenorValue, t.tenorUnit, t.maturityDate,
+    t.notionalCurrency, t.notionalAmount, t.underlyingPair, t.spotReferencePrice,
+    t.strikePrice,
+    t.knockOutEnabled?'YES':'NO', t.knockOutPrice||'',
+    t.bufferEnabled?'YES':'NO', t.bufferPrice||'',
+    t.amount1, t.amount2,
+    t.upfrontFee||0, t.upfrontAmount||0,
+    t.status,
+    JSON.stringify(t.fixings||[]),
+    t.createdAt||new Date().toISOString()
+];
+
+const accRowToTrade = (r) => ({
+    id:r[0], clientName:r[1], tradeDate:r[2],
+    tenorValue:r[3], tenorUnit:r[4], maturityDate:r[5],
+    notionalCurrency:r[6], notionalAmount:r[7],
+    underlyingPair:r[8], spotReferencePrice:r[9], strikePrice:r[10],
+    knockOutEnabled:r[11]==='YES', knockOutPrice:r[12],
+    bufferEnabled:r[13]==='YES', bufferPrice:r[14],
+    amount1:r[15], amount2:r[16],
+    upfrontFee:r[17]||0, upfrontAmount:r[18]||0,
+    status:r[19],
+    fixings: (() => { try { return JSON.parse(r[20]||'[]'); } catch { return []; } })(),
+    createdAt:r[21],
+});
+
+// ─── ACCUMULATOR DASHBOARD ────────────────────────────────────────────────────
+const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
+    const today = todayUTC();
+    const in7 = new Date(new Date().getTime()+7*86400000).toISOString().split('T')[0];
+    const activeTrades = trades.filter(t=>t.status==='Active');
+
+    // Portfolio totals — remaining notional per currency
+    const portfolioTotals = {};
+    activeTrades.forEach(t => {
+        const sched = buildAccSchedule(t);
+        const confirmedCount = (t.fixings||[]).filter(f=>f.confirmed).length;
+        const remaining = Math.max(0, parseFloat(t.notionalAmount) - confirmedCount * parseFloat(t.amount2));
+        const ccy = t.notionalCurrency;
+        if (!portfolioTotals[ccy]) portfolioTotals[ccy] = {original:0, remaining:0};
+        portfolioTotals[ccy].original  += parseFloat(t.notionalAmount);
+        portfolioTotals[ccy].remaining += remaining;
+    });
+
+    // Upcoming settlements in next 7 days
+    const upcoming = [];
+    trades.forEach(trade => {
+        if (!['Active','Knocked Out'].includes(trade.status)) return;
+        const sched = buildAccSchedule(trade);
+        sched.forEach(date => {
+            if (date < today || date > in7) return;
+            const existing = (trade.fixings||[]).find(f=>f.date===date);
+            if (existing?.confirmed) return;
+            const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<date).length;
+            const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * parseFloat(trade.amount2));
+            upcoming.push({trade, date, existing, remaining, weekend:isWeekend(date)});
+        });
+    });
+    upcoming.sort((a,b)=>a.date.localeCompare(b.date));
+
+    return (
+        <div className="mb-6">
+            <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-violet-400 inline-block"/>
+                    Accumulator Dashboard
+                </h2>
+            </div>
+
+            {/* Portfolio summary */}
+            {Object.keys(portfolioTotals).length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                    {Object.entries(portfolioTotals).map(([ccy,{original,remaining}])=>(
+                        <div key={ccy} className="card p-4">
+                            <p className="text-xs text-slate-400 mb-1 font-medium">Active Notional — {ccy}</p>
+                            <p className="text-xl font-bold mono text-white">{ccy} {fmt(remaining,2)}</p>
+                            <div className="mt-2 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                <div className="h-full bg-violet-500 rounded-full" style={{width:`${Math.min(100,(remaining/original)*100)}%`}}/>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">{fmt((remaining/original)*100,1)}% remaining of {ccy} {fmt(original,2)} original · {activeTrades.filter(t=>t.notionalCurrency===ccy).length} trade(s)</p>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Upcoming settlements */}
+            {upcoming.length > 0 ? (
+                <div className="card overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                        <p className="text-sm font-semibold text-slate-300">Settlements Due (Next 7 Days)</p>
+                        <span className="text-xs text-slate-500">{upcoming.length} pending</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                            <thead>
+                                <tr className="border-b border-slate-800 bg-slate-900/40">
+                                    {['Client','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Strike','Remaining','Action'].map(h=>(
+                                        <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {upcoming.map((s,i)=>{
+                                    const f = s.existing;
+                                    const scenario = f?.fixingPrice ? accScenario(s.trade, parseFloat(f.fixingPrice)) : null;
+                                    const amounts  = scenario ? accAmounts(s.trade, scenario) : null;
+                                    const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
+                                    const isKO = scenario === 'knockout';
+                                    return (
+                                        <tr key={i} className={`border-b border-slate-800/50 ${s.weekend?'bg-amber-900/10':''} ${isKO?'bg-orange-900/10':''}`}>
+                                            <td className="px-3 py-2.5 font-medium text-slate-200">{s.trade.clientName}</td>
+                                            <td className={`px-3 py-2.5 mono ${s.weekend?'text-amber-400':'text-slate-300'}`}>
+                                                {s.date}{s.weekend&&<span className="ml-1 text-[10px] text-amber-500">WE</span>}
+                                            </td>
+                                            <td className="px-3 py-2.5 text-slate-400">{dayName(s.date)}</td>
+                                            <td className="px-3 py-2.5 mono text-slate-300">
+                                                {f?.fixingPrice ? `$${fmt(parseFloat(f.fixingPrice),2)}` : <span className="text-slate-600">—</span>}
+                                            </td>
+                                            <td className="px-3 py-2.5">
+                                                {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${ss.bg} ${ss.text}`}>{ss.label}</span> : <span className="text-slate-600">—</span>}
+                                            </td>
+                                            <td className="px-3 py-2.5 mono text-cyan-400">
+                                                {amounts?.cryptoQty > 0 ? `${amounts.cryptoQty.toFixed(8)} ${amounts.cryptoCcy}` : '—'}
+                                            </td>
+                                            <td className="px-3 py-2.5 mono text-yellow-400">
+                                                {amounts?.baseAmount > 0 ? `${s.trade.notionalCurrency} ${fmt(amounts.baseAmount,2)}` : isKO ? `${s.trade.notionalCurrency} ${fmt(s.remaining,2)} (remaining)` : '—'}
+                                            </td>
+                                            <td className="px-3 py-2.5 mono text-orange-400">
+                                                {s.trade.knockOutEnabled ? `$${fmt(parseFloat(s.trade.knockOutPrice),2)}` : '—'}
+                                            </td>
+                                            <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
+                                            <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.remaining,2)}</td>
+                                            <td className="px-3 py-2.5">
+                                                {f?.fixingPrice ? (
+                                                    <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
+                                                        className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 rounded text-green-400 text-[10px] transition-colors whitespace-nowrap">
+                                                        ✓ Confirm
+                                                    </button>
+                                                ) : <span className="text-slate-600 text-[10px]">Enter price first</span>}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            ) : (
+                <div className="card p-6 text-center text-slate-500 text-sm">No settlements due in the next 7 days.</div>
+            )}
+        </div>
+    );
+};
+
+// ─── ACCUMULATOR ORDER CARD ───────────────────────────────────────────────────
+const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmFixing}) => {
+    const [expanded, setExpanded] = useState(false);
+    const [fetchingDate, setFetchingDate] = useState(null);
+    const [manualDate, setManualDate] = useState(null);
+    const [manualPrice, setManualPrice] = useState('');
+    const today = todayUTC();
+
+    const schedule    = buildAccSchedule(trade);
+    const fixings     = trade.fixings || [];
+    const confirmed   = fixings.filter(f=>f.confirmed);
+    const amount1     = parseFloat(trade.amount1);
+    const amount2     = parseFloat(trade.amount2);
+    const notional    = parseFloat(trade.notionalAmount);
+    const remaining   = Math.max(0, notional - confirmed.length * amount2);
+    const pctUsed     = notional > 0 ? ((notional-remaining)/notional)*100 : 0;
+    const statusCls   = ACC_STATUS_BADGE[trade.status] || ACC_STATUS_BADGE['Active'];
+    const livePrice   = prices[accBaseAsset(trade.underlyingPair)] || 0;
+    const bybitSymbol = ACC_UNDERLYING_SYMBOLS[trade.underlyingPair] || '';
+
+    // Fetch fixing price for a date
+    const fetchFixing = async (date) => {
+        setFetchingDate(date);
+        try {
+            const price = await fetchBybitFixing(bybitSymbol, date);
+            onSaveFix(trade.id, date, price.toFixed(2));
+        } catch(e) { alert('Failed to fetch price for '+date+': '+e.message); }
+        setFetchingDate(null);
+    };
+
+    const saveManual = (date) => {
+        const p = parseFloat(manualPrice);
+        if (!p || p <= 0) return alert('Enter a valid price');
+        onSaveFix(trade.id, date, p.toFixed(2));
+        setManualDate(null); setManualPrice('');
+    };
+
+    return (
+        <div className={`card p-5 ${trade.status!=='Active'?'opacity-80':''}`}>
+            {/* Header */}
+            <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
+                <div>
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <h3 className="font-bold text-lg">{trade.clientName}</h3>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusCls}`}>{trade.status}</span>
+                        {trade.bufferEnabled && <span className="px-2 py-0.5 rounded-full text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30">Buffered</span>}
+                        {trade.knockOutEnabled && <span className="px-2 py-0.5 rounded-full text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30">KO</span>}
+                    </div>
+                    <p className="text-xs text-slate-500 mono">{trade.id} · {fmtDate(trade.tradeDate)} → {fmtDate(trade.maturityDate)} · {trade.tenorValue} {trade.tenorUnit}</p>
+                </div>
+                <div className="flex gap-2">
+                    <button onClick={()=>setExpanded(!expanded)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1">Schedule {expanded?'▲':'▼'}</button>
+                    <button onClick={()=>onEdit(trade)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>
+                    <button onClick={()=>onDelete(trade.id)} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>
+                </div>
+            </div>
+
+            {/* Key metrics */}
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 mb-3">
+                {[
+                    ['Notional', `${trade.notionalCurrency} ${fmt(notional,2)}`, trade.underlyingPair, 'text-white'],
+                    ['Remaining', `${trade.notionalCurrency} ${fmt(remaining,2)}`, `${fmt(pctUsed,1)}% deployed`, remaining < amount2*2?'text-amber-400':'text-slate-300'],
+                    ['Amount 1', `${trade.notionalCurrency} ${fmt(amount1,2)}`, 'per above-strike', 'text-green-400'],
+                    ['Amount 2', `${trade.notionalCurrency} ${fmt(amount2,2)}`, 'per period', 'text-cyan-400'],
+                    ['Strike', `$${fmt(parseFloat(trade.strikePrice),2)}`, trade.underlyingPair, 'text-purple-400'],
+                    ['KO Price', trade.knockOutEnabled?`$${fmt(parseFloat(trade.knockOutPrice),2)}`:'—', trade.knockOutEnabled?'knockout level':'no KO', 'text-orange-400'],
+                    ['Buffer', trade.bufferEnabled?`$${fmt(parseFloat(trade.bufferPrice),2)}`:'—', trade.bufferEnabled?'buffer level':'no buffer', 'text-blue-400'],
+                    ['Progress', `${confirmed.length}/${schedule.length}`, `fixings confirmed`, 'text-slate-300'],
+                ].map(([lbl,val,sub,cls])=>(
+                    <div key={lbl} className="card-inner p-2.5">
+                        <p className="text-xs text-slate-400 mb-1 truncate">{lbl}</p>
+                        <p className={`font-bold mono text-xs ${cls} truncate`}>{val}</p>
+                        <p className="text-xs text-slate-500 truncate">{sub}</p>
+                    </div>
+                ))}
+            </div>
+
+            {/* Upfront fee strip */}
+            {(trade.upfrontFee > 0) && (
+                <div className="flex gap-4 text-xs text-slate-500 mb-3">
+                    <span>Upfront Fee: <span className="mono text-slate-300">{fmt(parseFloat(trade.upfrontFee),2)}%</span></span>
+                    <span>Upfront Amount: <span className="mono text-slate-300">{trade.notionalCurrency} {fmt(parseFloat(trade.upfrontAmount),2)}</span></span>
+                    <span>Spot Ref: <span className="mono text-slate-300">${fmt(parseFloat(trade.spotReferencePrice),2)}</span></span>
+                </div>
+            )}
+
+            {/* Progress bar */}
+            <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden mb-3">
+                <div className="h-full bg-violet-500 rounded-full transition-all" style={{width:`${pctUsed}%`}}/>
+            </div>
+
+            {/* Settlement schedule */}
+            {expanded && (
+                <div className="border-t border-slate-800 pt-3 overflow-x-auto">
+                    {manualDate && (
+                        <div className="card-inner p-3 mb-3 flex items-center gap-3">
+                            <span className="text-xs text-slate-400">Manual price for {manualDate}:</span>
+                            <Input type="number" value={manualPrice} onChange={e=>setManualPrice(e.target.value)} step="0.01" placeholder="e.g. 56000.00" className="w-40"/>
+                            <button onClick={()=>saveManual(manualDate)} className="btn-primary px-3 py-1 rounded text-xs">Save</button>
+                            <button onClick={()=>{setManualDate(null);setManualPrice('');}} className="btn-secondary px-3 py-1 rounded text-xs">Cancel</button>
+                        </div>
+                    )}
+                    <table className="w-full text-xs">
+                        <thead>
+                            <tr className="border-b border-slate-800 text-slate-400">
+                                {['#','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','Remaining After','Status','Actions'].map(h=>(
+                                    <th key={h} className="text-left pb-2 pr-3 whitespace-nowrap">{h}</th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {schedule.map((date, i) => {
+                                const fixing = fixings.find(f=>f.date===date);
+                                const fp = fixing?.fixingPrice ? parseFloat(fixing.fixingPrice) : null;
+                                const scenario = fp !== null ? accScenario(trade, fp) : null;
+                                const amounts  = scenario ? accAmounts(trade, scenario) : null;
+                                const ss       = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
+                                const isPast   = date < today;
+                                const isConf   = fixing?.confirmed;
+                                const weekend  = isWeekend(date);
+                                const isFuture = date > today;
+                                // Remaining notional after this fixing
+                                const confirmedBefore = fixings.filter(f=>f.confirmed&&f.date<=date).length;
+                                const notionalAfter = Math.max(0, notional - confirmedBefore * amount2);
+                                const isKO = scenario === 'knockout';
+                                return (
+                                    <tr key={date} className={`border-b border-slate-800/40 ${weekend?'bg-amber-900/10':''} ${isKO?'bg-orange-900/10':''} ${isFuture?'opacity-50':''}`}>
+                                        <td className="py-2 pr-3 text-slate-500">{i+1}</td>
+                                        <td className={`py-2 pr-3 mono ${weekend?'text-amber-400':'text-slate-300'}`}>
+                                            {date}{weekend&&<span className="ml-1 text-[9px] text-amber-500">WE</span>}
+                                        </td>
+                                        <td className="py-2 pr-3 text-slate-400">{dayName(date)}</td>
+                                        <td className="py-2 pr-3 mono text-white">
+                                            {fp !== null ? `$${fmt(fp,2)}` : <span className="text-slate-600">—</span>}
+                                        </td>
+                                        <td className="py-2 pr-3">
+                                            {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] ${ss.bg} ${ss.text}`}>{ss.label}</span> : <span className="text-slate-600">—</span>}
+                                        </td>
+                                        <td className="py-2 pr-3 mono text-cyan-400">
+                                            {amounts?.cryptoQty > 0 ? `${amounts.cryptoQty.toFixed(8)} ${amounts.cryptoCcy}` : '—'}
+                                        </td>
+                                        <td className="py-2 pr-3 mono text-yellow-400">
+                                            {amounts?.baseAmount > 0 ? `${trade.notionalCurrency} ${fmt(amounts.baseAmount,2)}` : isKO ? `${trade.notionalCurrency} ${fmt(notionalAfter,2)}` : '—'}
+                                        </td>
+                                        <td className="py-2 pr-3 mono text-slate-400">
+                                            {isConf ? `${trade.notionalCurrency} ${fmt(notionalAfter,2)}` : '—'}
+                                        </td>
+                                        <td className="py-2 pr-3">
+                                            {isConf ? <span className="text-green-400">✓ Confirmed</span>
+                                                : isPast ? <span className="text-red-400">Pending</span>
+                                                : <span className="text-slate-500">Upcoming</span>}
+                                        </td>
+                                        <td className="py-2 flex gap-1.5">
+                                            {!isConf && !isFuture && (
+                                                <>
+                                                    <button onClick={()=>fetchFixing(date)} disabled={!!fetchingDate}
+                                                        className="px-2 py-0.5 bg-cyan-900/30 border border-cyan-500/30 rounded text-cyan-400 text-[10px] hover:bg-cyan-900/50 flex items-center gap-1">
+                                                        <Icon.Refresh spin={fetchingDate===date}/> Fetch
+                                                    </button>
+                                                    <button onClick={()=>{setManualDate(date);setManualPrice(fp?fp.toFixed(2):'');}}
+                                                        className="px-2 py-0.5 bg-slate-700 border border-slate-600 rounded text-slate-300 text-[10px] hover:bg-slate-600">
+                                                        Enter
+                                                    </button>
+                                                    {fp !== null && (
+                                                        <button onClick={()=>onConfirmFixing(trade.id, date)}
+                                                            className="px-2 py-0.5 bg-green-900/30 border border-green-500/30 rounded text-green-400 text-[10px] hover:bg-green-900/50">
+                                                            ✓
+                                                        </button>
+                                                    )}
+                                                </>
+                                            )}
+                                            {isFuture && livePrice > 0 && (
+                                                <span className={`text-[10px] mono ${accScenario(trade,livePrice)==='knockout'?'text-orange-400':accScenario(trade,livePrice)==='above'?'text-green-400':accScenario(trade,livePrice)==='inzone'?'text-blue-400':'text-red-400'}`}>
+                                                    live: ${fmt(livePrice,0)} → {ACC_SCENARIO_STYLE[accScenario(trade,livePrice)]?.label}
+                                                </span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ─── ACCUMULATOR FORM MODAL ───────────────────────────────────────────────────
+const AccumulatorFormModal = ({trade, onSave, onClose}) => {
+    const [form, setForm] = useState(trade || {
+        clientName:'', tradeDate:todayLocal(), tenorValue:52, tenorUnit:'weeks',
+        notionalCurrency:'USDT', notionalAmount:'',
+        underlyingPair:'BTC/USDT', spotReferencePrice:'',
+        strikePrice:'', knockOutEnabled:false, knockOutPrice:'',
+        bufferEnabled:false, bufferPrice:'',
+        upfrontFee:'0.00', status:'Active',
+    });
+    const f  = k => e => setForm(p=>({...p,[k]:e.target.value}));
+    const fb = k => e => setForm(p=>({...p,[k]:e.target.checked}));
+
+    // Auto maturity
+    const computeMaturity = () => {
+        if (!form.tradeDate || !form.tenorValue) return '';
+        const start = new Date(form.tradeDate+'T00:00:00Z');
+        const val = parseInt(form.tenorValue)||0;
+        if (form.tenorUnit==='weeks') return new Date(start.getTime()+val*7*86400000).toISOString().split('T')[0];
+        const d = new Date(start); d.setUTCMonth(d.getUTCMonth()+val); return d.toISOString().split('T')[0];
+    };
+    const maturityDate = computeMaturity();
+
+    // Auto-calculate amounts
+    const periods = parseInt(form.tenorValue)||1;
+    const notional = parseFloat(form.notionalAmount)||0;
+    const amount2 = notional > 0 ? (notional / periods) : 0;
+    const amount1 = amount2 / 2;
+
+    // Auto-calculate upfront amount
+    const upfrontFee = parseFloat(form.upfrontFee)||0;
+    const upfrontAmount = notional * upfrontFee / 100;
+
+    const disabledCls = 'opacity-40 pointer-events-none';
+
+    const handleSave = () => {
+        if (!form.clientName) return alert('Client Name required');
+        if (!form.notionalAmount) return alert('Notional Amount required');
+        if (!form.strikePrice) return alert('Strike Price required');
+        if (!form.spotReferencePrice) return alert('Spot Reference Price required');
+        if (form.knockOutEnabled && !form.knockOutPrice) return alert('KO Price required when KO is enabled');
+        if (form.bufferEnabled && !form.bufferPrice) return alert('Buffer Price required when Buffer is enabled');
+        const id = trade ? trade.id : `ACC-${Date.now()}`;
+        onSave({
+            ...form, id, maturityDate,
+            amount1: amount1.toFixed(2),
+            amount2: amount2.toFixed(2),
+            upfrontAmount: upfrontAmount.toFixed(2),
+            fixings: trade?.fixings || [],
+            createdAt: trade?.createdAt || new Date().toISOString(),
+        });
+    };
+
+    const schedPreview = maturityDate ? buildAccSchedule({...form,maturityDate}).length : 0;
+
+    return (
+        <Modal title={trade?`Edit: ${trade.id}`:'New Accumulator Trade'} onClose={onClose} wide>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                    <Field label="Client Name"><Input value={form.clientName} onChange={f('clientName')} placeholder="Client name"/></Field>
+                </div>
+                <Field label="Trade Date"><Input type="date" value={form.tradeDate} onChange={f('tradeDate')}/></Field>
+                <Field label="Tenor">
+                    <div className="flex gap-2">
+                        <Input type="number" value={form.tenorValue} onChange={f('tenorValue')} min="1" style={{width:'80px'}}/>
+                        <Select value={form.tenorUnit} onChange={f('tenorUnit')}>
+                            <option value="weeks">Weeks</option>
+                            <option value="months">Months</option>
+                        </Select>
+                    </div>
+                </Field>
+                <Field label="Maturity Date (auto)">
+                    <div className="card-inner px-3 py-2 mono text-cyan-400 text-sm">{maturityDate||'—'}</div>
+                </Field>
+                <Field label="Settlement Frequency">
+                    <div className="card-inner px-3 py-2 text-slate-300 text-sm">{form.tenorUnit==='weeks'?'Weekly':'Monthly'} (from tenor)</div>
+                </Field>
+                <Field label="Notional Currency">
+                    <Select value={form.notionalCurrency} onChange={f('notionalCurrency')}>
+                        <option>USDT</option><option>USDC</option>
+                    </Select>
+                </Field>
+                <Field label="Notional Amount (2dp)">
+                    <Input type="number" value={form.notionalAmount} onChange={f('notionalAmount')} step="0.01"/>
+                </Field>
+                <Field label="Underlying Pair">
+                    <Select value={form.underlyingPair} onChange={f('underlyingPair')}>
+                        {ACC_PAIRS.map(p=><option key={p}>{p}</option>)}
+                    </Select>
+                </Field>
+                <Field label="Spot Reference Price (2dp)">
+                    <Input type="number" value={form.spotReferencePrice} onChange={f('spotReferencePrice')} step="0.01" placeholder="e.g. 56000.00"/>
+                </Field>
+                <Field label="Strike Price (2dp)">
+                    <Input type="number" value={form.strikePrice} onChange={f('strikePrice')} step="0.01"/>
+                </Field>
+
+                {/* Knock-Out */}
+                <div>
+                    <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs text-slate-400">Knock-Out Price (2dp)</label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs text-orange-400">
+                            <input type="checkbox" checked={form.knockOutEnabled} onChange={fb('knockOutEnabled')} className="accent-orange-500"/>Enable KO
+                        </label>
+                    </div>
+                    <div className={!form.knockOutEnabled?disabledCls:''}>
+                        <Input type="number" value={form.knockOutPrice} onChange={f('knockOutPrice')} step="0.01" disabled={!form.knockOutEnabled} placeholder={!form.knockOutEnabled?'Disabled':'e.g. 84000.00'}/>
+                    </div>
+                </div>
+
+                {/* Buffer */}
+                <div>
+                    <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs text-slate-400">Buffer Price (2dp)</label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs text-blue-400">
+                            <input type="checkbox" checked={form.bufferEnabled} onChange={fb('bufferEnabled')} className="accent-blue-500"/>Enable Buffer
+                        </label>
+                    </div>
+                    <div className={!form.bufferEnabled?disabledCls:''}>
+                        <Input type="number" value={form.bufferPrice} onChange={f('bufferPrice')} step="0.01" disabled={!form.bufferEnabled} placeholder={!form.bufferEnabled?'Disabled':'e.g. 50000.00'}/>
+                    </div>
+                </div>
+
+                {/* Upfront Fee */}
+                <Field label="Upfront Fee (% — bookkeeping only)">
+                    <Input type="number" value={form.upfrontFee} onChange={f('upfrontFee')} step="0.01" placeholder="0.00"/>
+                </Field>
+                <Field label="Upfront Amount (auto)">
+                    <div className="card-inner px-3 py-2 mono text-slate-300 text-sm">
+                        {notional > 0 ? `${form.notionalCurrency} ${fmt(upfrontAmount,2)}` : '—'}
+                    </div>
+                </Field>
+
+                {trade && (
+                    <Field label="Status">
+                        <Select value={form.status} onChange={f('status')}>
+                            <option>Active</option><option>Knocked Out</option><option>Matured</option>
+                        </Select>
+                    </Field>
+                )}
+            </div>
+
+            {/* Auto-calculated amounts preview */}
+            {notional > 0 && periods > 0 && (
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div className="bg-cyan-900/20 border border-cyan-500/20 rounded-lg p-3 text-xs">
+                        <p className="text-slate-400 mb-1">{form.tenorUnit==='weeks'?'Weekly':'Monthly'} Amount 2 (auto)</p>
+                        <p className="text-white font-bold mono text-sm">{form.notionalCurrency} {fmt(amount2,2)}</p>
+                        <p className="text-slate-500">{form.notionalCurrency} {fmt(notional,2)} ÷ {periods} periods</p>
+                    </div>
+                    <div className="bg-green-900/20 border border-green-500/20 rounded-lg p-3 text-xs">
+                        <p className="text-slate-400 mb-1">{form.tenorUnit==='weeks'?'Weekly':'Monthly'} Amount 1 (auto)</p>
+                        <p className="text-white font-bold mono text-sm">{form.notionalCurrency} {fmt(amount1,2)}</p>
+                        <p className="text-slate-500">Amount 2 ÷ 2</p>
+                    </div>
+                </div>
+            )}
+
+            {maturityDate && notional > 0 && (
+                <div className="mt-3 bg-violet-900/20 border border-violet-500/20 rounded-lg p-3 text-xs text-violet-300 space-y-1">
+                    <p className="font-medium">Trade Preview</p>
+                    <p>Maturity: {maturityDate} · {schedPreview} {form.tenorUnit==='weeks'?'weekly':'monthly'} fixing{schedPreview!==1?'s':''}</p>
+                    {form.bufferEnabled && form.bufferPrice && form.strikePrice && (
+                        <p>In-zone: between ${fmt(Math.min(parseFloat(form.strikePrice),parseFloat(form.bufferPrice)),2)} and ${fmt(Math.max(parseFloat(form.strikePrice),parseFloat(form.bufferPrice)),2)}</p>
+                    )}
+                </div>
+            )}
+
+            <div className="flex gap-2 mt-5">
+                <button onClick={handleSave} className="btn-primary flex-1 px-4 py-2 rounded-lg font-semibold text-sm">
+                    {trade?'Update Trade':'Create Trade'}
+                </button>
+                <button onClick={onClose} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+            </div>
+        </Modal>
+    );
+};
+
+// ─── ACCUMULATOR MODULE ───────────────────────────────────────────────────────
+const AccumulatorModule = ({prices}) => {
+    const [trades, setTrades] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_acc_trades')||'[]');}catch{return[];} });
+    const [config, setConfig] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_acc_config')||'{}');}catch{return{};} });
+    const [showAdd, setShowAdd] = useState(false);
+    const [editingTrade, setEditingTrade] = useState(null);
+    const [showSettings, setShowSettings] = useState(false);
+    const [filterStatus, setFilterStatus] = useState('all');
+    const [sheetsLoading, setSheetsLoading] = useState(false);
+
+    useEffect(()=>{ localStorage.setItem('cpb_acc_trades', JSON.stringify(trades)); }, [trades]);
+    useEffect(()=>{ localStorage.setItem('cpb_acc_config', JSON.stringify(config)); }, [config]);
+
+    const pushTrade = async (trade) => {
+        if (!config.scriptUrl) return;
+        try {
+            await accSheetsCall(config.scriptUrl, {action:'upsertAccOrder', values:JSON.stringify(accTradeToRow(trade))});
+        } catch(e) { console.error('Acc Sheets push failed:', e.message); }
+    };
+
+    const addTrade = async (t) => {
+        setTrades(p=>[...p, t]); setShowAdd(false); await pushTrade(t);
+    };
+    const updateTrade = async (t) => {
+        setTrades(p=>p.map(x=>x.id===t.id?t:x)); setEditingTrade(null); await pushTrade(t);
+    };
+    const deleteTrade = (id) => {
+        if (confirm('Delete this Accumulator trade?')) setTrades(p=>p.filter(t=>t.id!==id));
+    };
+
+    // Save a fixing price for a date
+    const saveFixing = async (tradeId, date, fixingPrice) => {
+        setTrades(prev => {
+            const updated = prev.map(trade => {
+                if (trade.id !== tradeId) return trade;
+                const fixings = [...(trade.fixings||[])];
+                const idx = fixings.findIndex(f=>f.date===date);
+                if (idx >= 0) fixings[idx] = {...fixings[idx], fixingPrice, confirmed:false};
+                else fixings.push({date, fixingPrice, confirmed:false});
+                const updated = {...trade, fixings};
+                pushTrade(updated);
+                return updated;
+            });
+            return updated;
+        });
+    };
+
+    // Confirm a fixing — update status if KO or final period
+    const confirmFixing = async (tradeId, date) => {
+        setTrades(prev => {
+            const updated = prev.map(trade => {
+                if (trade.id !== tradeId) return trade;
+                const fixings = [...(trade.fixings||[])];
+                const idx = fixings.findIndex(f=>f.date===date);
+                if (idx < 0) return trade;
+                const fp = parseFloat(fixings[idx].fixingPrice);
+                const scenario = accScenario(trade, fp);
+                fixings[idx] = {...fixings[idx], confirmed:true, scenario};
+
+                let newStatus = trade.status;
+                const schedule = buildAccSchedule(trade);
+                const isKO = scenario === 'knockout';
+                const isLast = date === schedule[schedule.length-1];
+
+                if (isKO) newStatus = 'Knocked Out';
+                else if (isLast) newStatus = 'Matured';
+
+                const result = {...trade, fixings, status:newStatus};
+                pushTrade(result);
+                return result;
+            });
+            return updated;
+        });
+    };
+
+    const fetchFromSheets = async () => {
+        if (!config.scriptUrl) return;
+        setSheetsLoading(true);
+        try {
+            const res = await accSheetsCall(config.scriptUrl, {action:'readAccOrders'});
+            if (res.values?.length) setTrades(res.values.filter(r=>r[0]&&r[1]).map(accRowToTrade));
+        } catch(e) { alert('Accumulator sync error: '+e.message); }
+        setSheetsLoading(false);
+    };
+
+    const filtered = trades.filter(t => {
+        if (filterStatus==='all') return true;
+        if (filterStatus==='active') return t.status==='Active';
+        if (filterStatus==='knocked-out') return t.status==='Knocked Out';
+        if (filterStatus==='matured') return t.status==='Matured';
+        return true;
+    });
+
+    return (
+        <div>
+            <AccumulatorDashboard trades={trades} prices={prices} onConfirmFixing={confirmFixing}/>
+
+            <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
+                <div className="flex gap-2 flex-wrap">
+                    <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5">
+                        <option value="all">All</option>
+                        <option value="active">Active</option>
+                        <option value="knocked-out">Knocked Out</option>
+                        <option value="matured">Matured</option>
+                    </Select>
+                    {config.scriptUrl && (
+                        <button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
+                            <Icon.Refresh spin={sheetsLoading}/> Sync Sheets
+                        </button>
+                    )}
+                    <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
+                        <Icon.Settings/> Config
+                    </button>
+                </div>
+                <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
+                    <Icon.Plus/> New Accumulator
+                </button>
+            </div>
+
+            {showSettings && (
+                <div className="card p-5 mb-5">
+                    <h3 className="font-semibold mb-3 text-sm">Google Sheets Config — Accumulator</h3>
+                    <p className="text-xs text-slate-500 mb-3">Separate spreadsheet from Loans, SSPS, and FCN.</p>
+                    <Field label="Apps Script URL">
+                        <Input value={config.scriptUrl||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/>
+                    </Field>
+                    <div className="flex gap-2 mt-3">
+                        <button onClick={()=>{ localStorage.setItem('cpb_acc_config',JSON.stringify(config)); setShowSettings(false); if(config.scriptUrl) fetchFromSheets(); }} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
+                        <button onClick={()=>setShowSettings(false)} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+                    </div>
+                </div>
+            )}
+
+            {filtered.length === 0
+                ? <div className="card p-12 text-center"><p className="text-slate-400">No Accumulator trades found.</p></div>
+                : <div className="space-y-3">
+                    {filtered.map(t => (
+                        <AccumulatorCard key={t.id} trade={t} prices={prices}
+                            onEdit={setEditingTrade} onDelete={deleteTrade}
+                            onSaveFix={saveFixing} onConfirmFixing={confirmFixing}/>
+                    ))}
+                </div>
+            }
+
+            {showAdd && <AccumulatorFormModal onSave={addTrade} onClose={()=>setShowAdd(false)}/>}
+            {editingTrade && <AccumulatorFormModal trade={editingTrade} onSave={updateTrade} onClose={()=>setEditingTrade(null)}/>}
+        </div>
+    );
+};
+
 const App = () => {
     const [tab,setTab]=useState('ssps');
     const [prices,setPrices]=useState({BTC:0,ETH:0,ADA:0});
@@ -2873,11 +3658,11 @@ const App = () => {
                 </div>
                 <PriceTicker prices={prices} lastUpdate={lastUpdate}/>
                 <div className="flex gap-1 mb-6 border-b border-slate-800">
-                    {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['fcn','Fixed Coupon Note']].map(([id,label])=>(
+                    {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['fcn','Fixed Coupon Note'],['acc','Accumulator']].map(([id,label])=>(
                         <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
                     ))}
                 </div>
-                {tab==='loans'?<LoanModule prices={prices}/>:tab==='ssps'?<SSPSModule prices={prices}/>:<FCNModule prices={prices}/>}
+                {tab==='loans'?<LoanModule prices={prices}/>:tab==='ssps'?<SSPSModule prices={prices}/>:tab==='fcn'?<FCNModule prices={prices}/>:<AccumulatorModule prices={prices}/>}
             </div>
         </div>
     );
