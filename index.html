@@ -2929,6 +2929,10 @@ const accScenario = (trade, fixingPrice) => {
     return fixingPrice >= strike ? 'above' : 'below';
 };
 
+// Truncation helpers — never round up financial amounts
+const trunc2 = (n) => Math.floor(n * 100) / 100;
+const trunc8 = (n) => Math.floor(n * 1e8) / 1e8;
+
 // Calculate amounts for a given scenario
 const accAmounts = (trade, scenario) => {
     const amount1 = parseFloat(trade.amount1);
@@ -2939,7 +2943,7 @@ const accAmounts = (trade, scenario) => {
     switch (scenario) {
         case 'above':
             return {
-                cryptoQty: amount1 / strike,
+                cryptoQty: trunc8(amount1 / strike),
                 cryptoCcy: base,
                 baseAmount: amount1,
                 baseCcy: notionalCcy,
@@ -2957,7 +2961,7 @@ const accAmounts = (trade, scenario) => {
             };
         case 'below':
             return {
-                cryptoQty: amount2 / strike,
+                cryptoQty: trunc8(amount2 / strike),
                 cryptoCcy: base,
                 baseAmount: 0,
                 baseCcy: notionalCcy,
@@ -3136,7 +3140,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
                                                 {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${ss.bg} ${ss.text}`}>{ss.label}{isIndicative&&<span className="ml-0.5 opacity-60">~</span>}</span> : <span className="text-slate-600">—</span>}
                                             </td>
                                             <td className="px-3 py-2.5 mono text-cyan-400">
-                                                {amounts?.cryptoQty > 0 ? <span>{amounts.cryptoQty.toFixed(8)} {amounts.cryptoCcy}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span> : '—'}
+                                                {amounts?.cryptoQty > 0 ? <span>{trunc8(amounts.cryptoQty).toFixed(8)} {amounts.cryptoCcy}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span> : '—'}
                                             </td>
                                             <td className="px-3 py-2.5 mono text-yellow-400">
                                                 {amounts?.baseAmount > 0
@@ -3230,8 +3234,8 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                 {[
                     ['Notional', `${trade.notionalCurrency} ${fmt(notional,2)}`, trade.underlyingPair, 'text-white'],
                     ['Remaining', `${trade.notionalCurrency} ${fmt(remaining,2)}`, `${fmt(pctUsed,1)}% deployed`, remaining < amount2*2?'text-amber-400':'text-slate-300'],
-                    ['Amount 1', `${trade.notionalCurrency} ${fmt(amount1,2)}`, parseFloat(trade.strikePrice)>0?`≈ ${(amount1/parseFloat(trade.strikePrice)).toFixed(8)} ${accBaseAsset(trade.underlyingPair)}`:'per above-strike', 'text-green-400'],
-                    ['Amount 2', `${trade.notionalCurrency} ${fmt(amount2,2)}`, parseFloat(trade.strikePrice)>0?`≈ ${(amount2/parseFloat(trade.strikePrice)).toFixed(8)} ${accBaseAsset(trade.underlyingPair)}`:'per period', 'text-cyan-400'],
+                    ['Amount 1', `${trade.notionalCurrency} ${fmt(amount1,2)}`, parseFloat(trade.strikePrice)>0?`≈ ${trunc8(amount1/parseFloat(trade.strikePrice)).toFixed(8)} ${accBaseAsset(trade.underlyingPair)}`:'per above-strike', 'text-green-400'],
+                    ['Amount 2', `${trade.notionalCurrency} ${fmt(amount2,2)}`, parseFloat(trade.strikePrice)>0?`≈ ${trunc8(amount2/parseFloat(trade.strikePrice)).toFixed(8)} ${accBaseAsset(trade.underlyingPair)}`:'per period', 'text-cyan-400'],
                     ['Strike', `$${fmt(parseFloat(trade.strikePrice),2)}`, trade.underlyingPair, 'text-purple-400'],
                     ['KO Price', trade.knockOutEnabled?`$${fmt(parseFloat(trade.knockOutPrice),2)}`:'—', trade.knockOutEnabled?'knockout level':'no KO', 'text-orange-400'],
                     ['Buffer', trade.bufferEnabled?`$${fmt(parseFloat(trade.bufferPrice),2)}`:'—', trade.bufferEnabled?'buffer level':'no buffer', 'text-blue-400'],
@@ -3308,7 +3312,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                             {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] ${ss.bg} ${ss.text}`}>{ss.label}</span> : <span className="text-slate-600">—</span>}
                                         </td>
                                         <td className="py-2 pr-3 mono text-cyan-400">
-                                            {amounts?.cryptoQty > 0 ? `${amounts.cryptoQty.toFixed(8)} ${amounts.cryptoCcy}` : '—'}
+                                            {amounts?.cryptoQty > 0 ? `${trunc8(amounts.cryptoQty).toFixed(8)} ${amounts.cryptoCcy}` : '—'}
                                         </td>
                                         <td className="py-2 pr-3 mono text-yellow-400">
                                             {amounts?.baseAmount > 0 ? `${trade.notionalCurrency} ${fmt(amounts.baseAmount,2)}` : isKO ? `${trade.notionalCurrency} ${fmt(notionalAfter,2)}` : '—'}
@@ -3415,8 +3419,8 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
         const id = trade ? trade.id : `ACC-${Date.now()}`;
         onSave({
             ...form, id, maturityDate,
-            amount1: amount1.toFixed(2),
-            amount2: amount2.toFixed(2),
+            amount1: trunc2(amount1).toFixed(2),
+            amount2: trunc2(amount2).toFixed(2),
             upfrontAmount: upfrontAmount.toFixed(2),
             upfrontFeeUnderlying: feeUnderlying,
             fixings: trade?.fixings || [],
