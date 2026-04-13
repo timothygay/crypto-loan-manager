@@ -2191,6 +2191,7 @@ const tradToRow = (trade) => [
     trade.status, trade.knockInTriggered?'YES':'NO',
     (trade.paidSettlements||[]).join('|'),
     trade.worstOffPair||'', trade.worstOffStrike||'',
+    trade.upfrontFee||0, trade.upfrontAmount||0, trade.upfrontFeeUnderlying||'USDT',
     trade.createdAt||new Date().toISOString()
 ];
 
@@ -2205,7 +2206,8 @@ const rowToTrade = (r) => ({
     status:r[14], knockInTriggered:r[15]==='YES',
     paidSettlements:r[16]?String(r[16]).split('|').filter(Boolean):[],
     worstOffPair:r[17]||'', worstOffStrike:r[18]||'',
-    createdAt:r[19],
+    upfrontFee:r[19]||0, upfrontAmount:r[20]||0, upfrontFeeUnderlying:r[21]||'USDT',
+    createdAt:r[22],
 });
 
 // ─── FCN DASHBOARD ────────────────────────────────────────────────────────────
@@ -2429,6 +2431,7 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
 
     // Worst-of exercised info
     const wasExercised=trade.status==='Exercised'&&trade.worstOffPair;
+    const fcnCardUpfrontFee=parseFloat(trade.upfrontFee)||0;
 
     return (
         <div className={`card p-5 ${trade.status!=='Active'?'opacity-80':''}`}>
@@ -2494,6 +2497,13 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
                 })}
             </div>
 
+            {fcnCardUpfrontFee>0&&(
+                <div className="flex gap-4 text-xs text-slate-500 mb-3">
+                    <span>Upfront Fee: <span className="mono text-slate-300">{fmt(fcnCardUpfrontFee,2)}%</span></span>
+                    <span>Fee Underlying: <span className="mono text-slate-300">{trade.upfrontFeeUnderlying||'USDT'}</span></span>
+                    <span>Upfront Amount: <span className="mono text-slate-300">{trade.upfrontFeeUnderlying||'USDT'} {fmt(parseFloat(trade.upfrontAmount)||0,isCrypto(trade.upfrontFeeUnderlying||'USDT')?8:2)}</span></span>
+                </div>
+            )}
             {/* Settlement schedule */}
             {expanded&&(
                 <div className="border-t border-slate-800 pt-3 overflow-x-auto">
@@ -2560,6 +2570,7 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
         couponRate:'',settlementFrequency:'Monthly',
         knockInEnabled:false,knockInPrice:'',
         status:'Active',knockInTriggered:false,
+        upfrontFee:'0.00',upfrontFeeUnderlying:'USDT',
     });
     const [underlyings,setUnderlyings]=useState(initUnderlyings);
     const f=k=>e=>setForm(p=>({...p,[k]:e.target.value}));
@@ -2610,13 +2621,31 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
         if(!underlyings.length) return alert('At least one underlying pair required');
         if(underlyings.some(u=>!u.pair||!u.spotRef||!u.strikePrice)) return alert('Each underlying needs pair, spot ref and strike price');
         const id=trade?trade.id:`FCN-${Date.now()}`;
-        onSave({...form,id,maturityDate,underlyings,paidSettlements:trade?.paidSettlements||[],createdAt:trade?.createdAt||new Date().toISOString()});
+        onSave({...form,id,maturityDate,underlyings,
+            upfrontFee:form.upfrontFee||'0.00',
+            upfrontFeeUnderlying:fcnFeeUnderlying,
+            upfrontAmount:fcnUpfrontAmount.toFixed(isCrypto(fcnFeeUnderlying)?8:2),
+            paidSettlements:trade?.paidSettlements||[],createdAt:trade?.createdAt||new Date().toISOString()});
     };
 
     const notionalDp=isCrypto(form.notionalCurrency)?8:2;
     const sampleTrade={...form,maturityDate,underlyings};
     const couponPreview=maturityDate&&form.notionalAmount&&form.couponRate?calcFCNCoupon(sampleTrade):null;
     const schedPreview=maturityDate?buildFCNSchedule(sampleTrade):[];
+    // Upfront fee calculation
+    const fcnNotional=parseFloat(form.notionalAmount)||0;
+    const fcnUpfrontFee=parseFloat(form.upfrontFee)||0;
+    const fcnFeeUnderlying=form.upfrontFeeUnderlying||'USDT';
+    const fcnSpotRef=parseFloat(underlyings[0]?.spotRef||0);
+    const fcnUpfrontAmount=(()=>{
+        if(!fcnNotional||!fcnUpfrontFee) return 0;
+        const notionalIsCrypto=isCrypto(form.notionalCurrency);
+        const feeIsCrypto=isCrypto(fcnFeeUnderlying);
+        if(fcnFeeUnderlying===form.notionalCurrency) return fcnNotional*fcnUpfrontFee/100;
+        if(notionalIsCrypto&&!feeIsCrypto) return fcnNotional*fcnSpotRef*fcnUpfrontFee/100;
+        if(!notionalIsCrypto&&feeIsCrypto&&fcnSpotRef>0) return (fcnNotional/fcnSpotRef)*fcnUpfrontFee/100;
+        return fcnNotional*fcnUpfrontFee/100;
+    })();
 
     return(
         <Modal title={trade?`Edit: ${trade.id}`:'New FCN Trade'} onClose={onClose} wide>
@@ -2654,6 +2683,21 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
                     </div>
                 </div>
                 <Field label="Coupon Rate (% APR)"><Input type="number" value={form.couponRate} onChange={f('couponRate')} step="0.01" placeholder="e.g. 12.00"/></Field>
+                {/* Upfront Fee */}
+                <Field label="Upfront Fee (% — bookkeeping only)">
+                    <Input type="number" value={form.upfrontFee||'0.00'} onChange={f('upfrontFee')} step="0.01" placeholder="0.00"/>
+                </Field>
+                <Field label="Fee Underlying Currency">
+                    <Select value={form.upfrontFeeUnderlying||'USDT'} onChange={f('upfrontFeeUnderlying')}>
+                        <option value="BTC">BTC</option><option value="ETH">ETH</option>
+                        <option value="USDC">USDC</option><option value="USDT">USDT</option>
+                    </Select>
+                </Field>
+                <Field label="Upfront Amount (auto)" hint={fcnFeeUnderlying!==form.notionalCurrency?`Converted at spot ref $${fmt(fcnSpotRef,2)}`:'Same currency'}>
+                    <div className="card-inner px-3 py-2 mono text-slate-300 text-sm">
+                        {fcnNotional>0?`${fcnFeeUnderlying} ${fmt(fcnUpfrontAmount,isCrypto(fcnFeeUnderlying)?8:2)}`:'—'}
+                    </div>
+                </Field>
                 {/* KI — Variant A only */}
                 {!notionalIsStable&&(
                     <div>
@@ -2962,7 +3006,7 @@ const accTradeToRow = (t) => [
     t.knockOutEnabled?'YES':'NO', t.knockOutPrice||'',
     t.bufferEnabled?'YES':'NO', t.bufferPrice||'',
     t.amount1, t.amount2,
-    t.upfrontFee||0, t.upfrontAmount||0,
+    t.upfrontFee||0, t.upfrontAmount||0, t.upfrontFeeUnderlying||t.notionalCurrency||'USDT',
     t.status,
     JSON.stringify(t.fixings||[]),
     t.createdAt||new Date().toISOString()
@@ -2976,7 +3020,7 @@ const accRowToTrade = (r) => ({
     knockOutEnabled:r[11]==='YES', knockOutPrice:r[12],
     bufferEnabled:r[13]==='YES', bufferPrice:r[14],
     amount1:r[15], amount2:r[16],
-    upfrontFee:r[17]||0, upfrontAmount:r[18]||0,
+    upfrontFee:r[17]||0, upfrontAmount:r[18]||0, upfrontFeeUnderlying:r[19]||'',
     status:r[19],
     fixings: (() => { try { return JSON.parse(r[20]||'[]'); } catch { return []; } })(),
     createdAt:r[21],
@@ -3191,7 +3235,8 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
             {(trade.upfrontFee > 0) && (
                 <div className="flex gap-4 text-xs text-slate-500 mb-3">
                     <span>Upfront Fee: <span className="mono text-slate-300">{fmt(parseFloat(trade.upfrontFee),2)}%</span></span>
-                    <span>Upfront Amount: <span className="mono text-slate-300">{trade.notionalCurrency} {fmt(parseFloat(trade.upfrontAmount),2)}</span></span>
+                    <span>Fee Underlying: <span className="mono text-slate-300">{trade.upfrontFeeUnderlying||trade.notionalCurrency}</span></span>
+                    <span>Upfront Amount: <span className="mono text-slate-300">{trade.upfrontFeeUnderlying||trade.notionalCurrency} {fmt(parseFloat(trade.upfrontAmount),2)}</span></span>
                     <span>Spot Ref: <span className="mono text-slate-300">${fmt(parseFloat(trade.spotReferencePrice),2)}</span></span>
                 </div>
             )}
@@ -3306,7 +3351,7 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
         underlyingPair:'BTC/USDT', spotReferencePrice:'',
         strikePrice:'', knockOutEnabled:false, knockOutPrice:'',
         bufferEnabled:false, bufferPrice:'',
-        upfrontFee:'0.00', status:'Active',
+        upfrontFee:'0.00', upfrontFeeUnderlying:'USDT', status:'Active',
     });
     const f  = k => e => setForm(p=>({...p,[k]:e.target.value}));
     const fb = k => e => setForm(p=>({...p,[k]:e.target.checked}));
@@ -3327,9 +3372,22 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
     const amount2 = notional > 0 ? (notional / periods) : 0;
     const amount1 = amount2 / 2;
 
-    // Auto-calculate upfront amount
+    // Auto-calculate upfront amount based on fee underlying
     const upfrontFee = parseFloat(form.upfrontFee)||0;
-    const upfrontAmount = notional * upfrontFee / 100;
+    const spotRef = parseFloat(form.spotReferencePrice)||0;
+    const feeUnderlying = form.upfrontFeeUnderlying || form.notionalCurrency;
+    const upfrontAmount = (() => {
+        if (!notional || !upfrontFee) return 0;
+        const notionalIsCrypto = ['BTC','ETH','ADA'].includes(form.notionalCurrency);
+        const feeIsCrypto = ['BTC','ETH','ADA'].includes(feeUnderlying);
+        // Same currency — straightforward
+        if (feeUnderlying === form.notionalCurrency) return notional * upfrontFee / 100;
+        // Notional is crypto, fee in stablecoin → multiply by spot ref
+        if (notionalIsCrypto && !feeIsCrypto) return notional * spotRef * upfrontFee / 100;
+        // Notional is stablecoin, fee in crypto → divide by spot ref
+        if (!notionalIsCrypto && feeIsCrypto && spotRef > 0) return (notional / spotRef) * upfrontFee / 100;
+        return notional * upfrontFee / 100;
+    })();
 
     const disabledCls = 'opacity-40 pointer-events-none';
 
@@ -3346,6 +3404,7 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
             amount1: amount1.toFixed(2),
             amount2: amount2.toFixed(2),
             upfrontAmount: upfrontAmount.toFixed(2),
+            upfrontFeeUnderlying: feeUnderlying,
             fixings: trade?.fixings || [],
             createdAt: trade?.createdAt || new Date().toISOString(),
         });
@@ -3425,9 +3484,17 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
                 <Field label="Upfront Fee (% — bookkeeping only)">
                     <Input type="number" value={form.upfrontFee} onChange={f('upfrontFee')} step="0.01" placeholder="0.00"/>
                 </Field>
-                <Field label="Upfront Amount (auto)">
+                <Field label="Fee Underlying Currency">
+                    <Select value={form.upfrontFeeUnderlying||form.notionalCurrency} onChange={f('upfrontFeeUnderlying')}>
+                        <option value="BTC">BTC</option>
+                        <option value="ETH">ETH</option>
+                        <option value="USDC">USDC</option>
+                        <option value="USDT">USDT</option>
+                    </Select>
+                </Field>
+                <Field label="Upfront Amount (auto)" hint={feeUnderlying!==form.notionalCurrency?`Converted at spot ref $${fmt(spotRef,2)}`:'Same currency'}>
                     <div className="card-inner px-3 py-2 mono text-slate-300 text-sm">
-                        {notional > 0 ? `${form.notionalCurrency} ${fmt(upfrontAmount,2)}` : '—'}
+                        {notional > 0 ? `${feeUnderlying} ${fmt(upfrontAmount,2)}` : '—'}
                     </div>
                 </Field>
 
