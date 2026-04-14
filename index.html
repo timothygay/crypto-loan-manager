@@ -3210,9 +3210,9 @@ const accRowToTrade = (r) => ({
     bufferEnabled:r[13]==='YES', bufferPrice:r[14],
     amount1:r[15], amount2:r[16],
     upfrontFee:r[17]||0, upfrontAmount:r[18]||0, upfrontFeeUnderlying:r[19]||'',
-    status:r[19],
-    fixings: (() => { try { return JSON.parse(r[20]||'[]'); } catch { return []; } })(),
-    createdAt:r[21],
+    status:r[20],
+    fixings: (() => { try { return JSON.parse(r[21]||'[]'); } catch { return []; } })(),
+    createdAt:r[22],
 });
 
 // ─── ACCUMULATOR DASHBOARD ────────────────────────────────────────────────────
