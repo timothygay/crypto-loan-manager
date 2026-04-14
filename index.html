@@ -2666,15 +2666,16 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
 // ─── FCN ORDER CARD ───────────────────────────────────────────────────────────
 const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
     const [expanded,setExpanded]=useState(false);
-    const couponPerPeriod=calcFCNCoupon(trade);
     const schedule=buildFCNSchedule(trade);
     const today=todayUTC();
     const paidSettlements=trade.paidSettlements||[];
     const underlyings=trade.underlyings||[];
     const isStable=!isCrypto(trade.notionalCurrency);
-
+    // Per-period coupon with date for accurate Act/365 calculation
+    const couponPerPeriod=calcFCNCoupon(trade); // uses 30-day fallback for "Per Period" display tile
+    // P&L collected: sum actual per-date coupons for each paid settlement
+    const couponsCollected=paidSettlements.reduce((sum,date)=>sum+calcFCNCoupon(trade,date),0);
     const nextSettlement=schedule.find(s=>s.date>=today&&!paidSettlements.includes(s.date));
-    const couponsCollected=paidSettlements.length*couponPerPeriod;
     const statusCls=FCN_STATUS_BADGE[trade.status]||FCN_STATUS_BADGE['Active'];
 
     // Worst-of exercised info
@@ -2764,6 +2765,7 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
                         <tbody>
                             {schedule.map(({date,isMaturity},i)=>{
                                 const isPast=date<today,isPaid=paidSettlements.includes(date),weekend=isWeekend(date);
+                                const couponForDate=calcFCNCoupon(trade,date); // Act/365 per settlement date
                                 return(
                                     <tr key={date} className={`border-b border-slate-800/40 ${weekend?'bg-amber-900/10':''} ${isMaturity?'bg-cyan-900/10':''} ${isPast&&!isPaid?'opacity-50':''}`}>
                                         <td className="py-1.5 pr-3 text-slate-500">{i+1}</td>
@@ -2773,8 +2775,8 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
                                         <td className="py-1.5 pr-3 text-slate-400">{dayName(date)}</td>
                                         <td className="py-1.5 pr-3 mono text-yellow-400">
                                             {isMaturity
-                                                ?<span>{fmtFCNCompact(couponPerPeriod,trade.couponCurrency)} + <span className="text-slate-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency}</span></span>
-                                                :fmtFCNCompact(couponPerPeriod,trade.couponCurrency)
+                                                ?<span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-slate-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency}</span></span>
+                                                :fmtFCNCompact(couponForDate,trade.couponCurrency)
                                             }
                                         </td>
                                         <td className="py-1.5 pr-3">
