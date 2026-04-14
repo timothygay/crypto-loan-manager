@@ -2403,6 +2403,7 @@ const tradToRow = (trade) => [
     (trade.paidSettlements||[]).join('|'),
     trade.worstOffPair||'', trade.worstOffStrike||'',
     trade.upfrontFee||0, trade.upfrontAmount||0, trade.upfrontFeeUnderlying||'USDT',
+    JSON.stringify(trade.settlementFixings||{}),
     trade.createdAt||new Date().toISOString()
 ];
 
@@ -2418,7 +2419,8 @@ const rowToTrade = (r) => ({
     paidSettlements:r[16]?String(r[16]).split('|').filter(Boolean):[],
     worstOffPair:r[17]||'', worstOffStrike:r[18]||'',
     upfrontFee:r[19]||0, upfrontAmount:r[20]||0, upfrontFeeUnderlying:r[21]||'USDT',
-    createdAt:r[22],
+    settlementFixings:(()=>{try{return JSON.parse(r[22]||'{}');}catch{return{};}})(),
+    createdAt:r[23],
 });
 
 // ─── FCN DASHBOARD ────────────────────────────────────────────────────────────
@@ -2764,38 +2766,75 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
                     <table className="w-full text-xs">
                         <thead>
                             <tr className="border-b border-slate-800 text-slate-400">
-                                {['#','Date','Day','Coupon','Type','Status'].map(h=><th key={h} className="text-left pb-2 pr-3">{h}</th>)}
+                                {['#','Date','Day','Fixing Price','KO Check','Coupon','Type','Status'].map(h=><th key={h} className="text-left pb-2 pr-3 whitespace-nowrap">{h}</th>)}
                             </tr>
                         </thead>
                         <tbody>
-                            {schedule.map(({date,isMaturity},i)=>{
-                                const isPast=date<today,isPaid=paidSettlements.includes(date),weekend=isWeekend(date);
-                                const couponForDate=calcFCNCoupon(trade,date); // Act/365 per settlement date
-                                return(
-                                    <tr key={date} className={`border-b border-slate-800/40 ${weekend?'bg-amber-900/10':''} ${isMaturity?'bg-cyan-900/10':''} ${isPast&&!isPaid?'opacity-50':''}`}>
-                                        <td className="py-1.5 pr-3 text-slate-500">{i+1}</td>
-                                        <td className={`py-1.5 pr-3 mono ${weekend?'text-amber-400':isMaturity?'text-cyan-400':'text-slate-300'}`}>
-                                            {date}{weekend&&<span className="ml-1 text-[9px] text-amber-500">WE</span>}
-                                        </td>
-                                        <td className="py-1.5 pr-3 text-slate-400">{dayName(date)}</td>
-                                        <td className="py-1.5 pr-3 mono text-yellow-400">
-                                            {isMaturity
-                                                ?<span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-slate-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency}</span></span>
-                                                :fmtFCNCompact(couponForDate,trade.couponCurrency)
-                                            }
-                                        </td>
-                                        <td className="py-1.5 pr-3">
-                                            {isMaturity
-                                                ?<span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-[10px]">MATURITY</span>
-                                                :<span className="px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded text-[10px]">COUPON</span>
-                                            }
-                                        </td>
-                                        <td className="py-1.5">
-                                            {isPaid?<span className="text-green-400">✓ Paid</span>:isPast?<span className="text-red-400">Unpaid</span>:<span className="text-slate-500">Pending</span>}
-                                        </td>
-                                    </tr>
-                                );
-                            })}
+                            {(()=>{
+                                const sf=trade.settlementFixings||{};
+                                const tradeEnded=['Knocked Out','Exercised','Matured'].includes(trade.status);
+                                // Find KO date — first date where stored price triggered KO
+                                let koDateFound=null;
+                                if(tradeEnded){
+                                    for(const {date} of schedule){
+                                        const fp=parseFloat(sf[date]||0);
+                                        if(!fp) continue;
+                                        const u=(trade.underlyings||[])[0];
+                                        const isKoHit=u?.koEnabled&&(isCrypto(trade.notionalCurrency)?fp<parseFloat(u.koPrice):fp>parseFloat(u.koPrice));
+                                        if(isKoHit){koDateFound=date;break;}
+                                    }
+                                }
+                                return schedule.map(({date,isMaturity},i)=>{
+                                    // Hide dates after KO
+                                    if(koDateFound&&date>koDateFound) return null;
+                                    const isPast=date<today,isPaid=paidSettlements.includes(date),weekend=isWeekend(date);
+                                    const fp=parseFloat(sf[date]||0)||null;
+                                    const couponForDate=calcFCNCoupon(trade,date);
+                                    const u=(trade.underlyings||[])[0];
+                                    const isThisKO=koDateFound===date;
+                                    // KO check display
+                                    let koCheckEl=null;
+                                    if(fp&&u?.koEnabled){
+                                        const koP=parseFloat(u.koPrice);
+                                        const isHit=isCrypto(trade.notionalCurrency)?fp<koP:fp>koP;
+                                        koCheckEl=<span className={`px-1 py-0.5 rounded text-[9px] ${isHit?'bg-orange-900/40 text-orange-400':'bg-green-900/20 text-green-400'}`}>{isHit?'KO':'OK'} ${fmt(koP,2)}</span>;
+                                    }
+                                    const rowBg=isThisKO?'bg-orange-900/15':weekend?'bg-amber-900/10':isMaturity?'bg-cyan-900/10':'';
+                                    return(
+                                        <tr key={date} className={`border-b border-slate-800/40 ${rowBg} ${isPast&&!isPaid&&!isThisKO?'opacity-60':''}`}>
+                                            <td className="py-1.5 pr-3 text-slate-500">{i+1}</td>
+                                            <td className={`py-1.5 pr-3 mono ${weekend?'text-amber-400':isThisKO?'text-orange-400':isMaturity?'text-cyan-400':'text-slate-300'}`}>
+                                                {date}{weekend&&<span className="ml-1 text-[9px] text-amber-500">WE</span>}
+                                                {isThisKO&&<span className="ml-1 px-1 py-0.5 bg-orange-900/40 text-orange-400 rounded text-[9px]">KO</span>}
+                                            </td>
+                                            <td className="py-1.5 pr-3 text-slate-400">{dayName(date)}</td>
+                                            <td className="py-1.5 pr-3 mono">
+                                                {fp?<span className={isThisKO?'text-orange-300':'text-white'}>${fmt(fp,2)}</span>:<span className="text-slate-600">{isPast?'fetching…':'—'}</span>}
+                                            </td>
+                                            <td className="py-1.5 pr-3">{koCheckEl||<span className="text-slate-600">—</span>}</td>
+                                            <td className="py-1.5 pr-3 mono text-yellow-400">
+                                                {isThisKO
+                                                    ?<span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-slate-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency}</span></span>
+                                                    :isMaturity
+                                                        ?<span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-slate-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency}</span></span>
+                                                        :fmtFCNCompact(couponForDate,trade.couponCurrency)
+                                                }
+                                            </td>
+                                            <td className="py-1.5 pr-3">
+                                                {isThisKO
+                                                    ?<span className="px-1.5 py-0.5 bg-orange-500/20 text-orange-400 rounded text-[10px]">KO</span>
+                                                    :isMaturity
+                                                        ?<span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-[10px]">MATURITY</span>
+                                                        :<span className="px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded text-[10px]">COUPON</span>
+                                                }
+                                            </td>
+                                            <td className="py-1.5">
+                                                {isPaid?<span className="text-green-400">✓ Paid</span>:isPast?<span className="text-red-400">Unpaid</span>:<span className="text-slate-500">Pending</span>}
+                                            </td>
+                                        </tr>
+                                    );
+                                });
+                            })()}
                         </tbody>
                     </table>
                 </div>
@@ -3050,44 +3089,103 @@ const FCNModule = ({prices}) => {
     // Auto-sync from Sheets on load and every 30 seconds — picks up trades added by other users
     useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
 
-    // fixingPrices: map of "SYMBOL|YYYY-MM-DD" → price, for overdue FCN settlement dates.
-    // FCN uses Binance Price Index (08:00 UTC) same as Accumulator.
+    // fixingPrices: map of "SYMBOL|YYYY-MM-DD" → price, for overdue dashboard display.
     const [fixingPrices,setFixingPrices]=useState({});
 
-    // Auto-fetch Binance fixing prices for overdue FCN settlement dates.
-    // Uses first underlying pair per trade. Runs on load + every 60s + on trade count change.
+    // Auto-fetch Binance fixing prices for all past FCN settlement dates.
+    // Stores prices in both fixingPrices (dashboard) and trade.settlementFixings (per-trade).
+    // Also runs barrier checks against stored prices to auto-update trade status.
     const fcnAutoFetch=useCallback(async()=>{
         const today=todayUTC();
         const nowSGT=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
         const past4pm=nowSGT.getHours()>=16;
-        const past30=new Date(new Date().getTime()-30*86400000).toISOString().split('T')[0];
+        // Collect all dates needing fetch across all trades
         const toFetch=[];
         trades.forEach(trade=>{
             if(!['Active','Knocked Out','Exercised','Matured'].includes(trade.status)) return;
             const underlyings=trade.underlyings||[];
             if(!underlyings.length) return;
-            // Use first underlying pair for the fixing price
             const pair=underlyings[0].pair||'';
             const base=pair.split('/')[0];
             const quote=pair.split('/')[1]||'USDT';
-            const symbol=base+quote; // e.g. BTCUSDT
+            const symbol=base+quote;
+            const sf=trade.settlementFixings||{};
             buildFCNSchedule(trade).forEach(({date})=>{
-                if((trade.paidSettlements||[]).includes(date)) return;
                 const isOverdue=date<today||(date===today&&past4pm);
-                if(!isOverdue||date<past30) return;
-                const key=symbol+'|'+date;
-                if(fixingPrices[key]) return; // already fetched
-                toFetch.push({key,symbol,date});
+                if(!isOverdue) return;
+                const dashKey=symbol+'|'+date;
+                if(sf[date]&&fixingPrices[dashKey]) return; // already have both
+                toFetch.push({tradeId:trade.id,symbol,date,dashKey,hasSF:!!sf[date]});
             });
         });
-        // Deduplicate by key
-        const unique=[...new Map(toFetch.map(x=>[x.key,x])).values()];
+        const unique=[...new Map(toFetch.map(x=>[x.tradeId+'|'+x.date,x])).values()];
         if(!unique.length) return;
-        for(const {key,symbol,date} of unique){
+
+        for(const {tradeId,symbol,date,dashKey,hasSF} of unique){
             try{
                 await new Promise(r=>setTimeout(r,300));
-                const price=await fetchBinanceFixing(symbol,date);
-                setFixingPrices(prev=>({...prev,[key]:price.toFixed(2)}));
+                let price;
+                // Re-use already-fetched price if available
+                if(fixingPrices[dashKey]) price=fixingPrices[dashKey];
+                else{
+                    const p=await fetchBinanceFixing(symbol,date);
+                    price=p.toFixed(2);
+                    setFixingPrices(prev=>({...prev,[dashKey]:price}));
+                }
+                if(!hasSF){
+                    // Store in trade.settlementFixings and run barrier check
+                    setTrades(prev=>prev.map(trade=>{
+                        if(trade.id!==tradeId) return trade;
+                        const sf={...(trade.settlementFixings||{}),[date]:price};
+                        // Run barrier checks on all past dates in order to determine KO
+                        const underlyings=trade.underlyings||[];
+                        const isStable=!isCrypto(trade.notionalCurrency);
+                        let newStatus=trade.status;
+                        let knockInTriggered=trade.knockInTriggered||false;
+                        let worstOffPair=trade.worstOffPair||'';
+                        let worstOffStrike=trade.worstOffStrike||'';
+                        let koDate=null;
+                        if(newStatus==='Active'){
+                            const sched=buildFCNSchedule(trade);
+                            // Walk schedule in order, check each date with its stored price
+                            for(const {date:d,isMaturity} of sched){
+                                const fp=parseFloat(sf[d]||0);
+                                if(!fp) continue;
+                                if(!isStable){
+                                    // Variant A: crypto notional — KO when price < koPrice
+                                    const u=underlyings[0];
+                                    if(u?.koEnabled&&fp<parseFloat(u.koPrice)){
+                                        newStatus='Knocked Out'; koDate=d; break;
+                                    }
+                                    if(trade.knockInEnabled&&!knockInTriggered&&fp<parseFloat(trade.knockInPrice)){
+                                        knockInTriggered=true;
+                                    }
+                                    if(isMaturity){
+                                        newStatus=fp>parseFloat(u?.strikePrice||0)&&knockInTriggered?'Exercised':'Matured';
+                                    }
+                                } else {
+                                    // Variant B/C: stablecoin — KO when price > koPrice
+                                    const ko=underlyings.find(u=>u.koEnabled&&fp>parseFloat(u.koPrice));
+                                    if(ko){newStatus='Knocked Out';koDate=d;break;}
+                                    if(isMaturity){
+                                        const below=underlyings.filter(u=>fp<parseFloat(u.strikePrice));
+                                        if(below.length>0){
+                                            const worst=below.reduce((w,u)=>{
+                                                const pct=(parseFloat(u.strikePrice)-fp)/parseFloat(u.strikePrice);
+                                                const wpct=(parseFloat(w.strikePrice)-fp)/parseFloat(w.strikePrice);
+                                                return pct>wpct?u:w;
+                                            });
+                                            newStatus='Exercised';worstOffPair=worst.pair;worstOffStrike=worst.strikePrice;
+                                        } else newStatus='Matured';
+                                    }
+                                }
+                            }
+                        }
+                        const updated={...trade,settlementFixings:sf,status:newStatus,knockInTriggered,worstOffPair,worstOffStrike};
+                        pushTrade(updated);
+                        return updated;
+                    }));
+                }
             } catch(e){
                 console.warn('FCN auto-fetch failed for '+symbol+' '+date+':',e.message);
             }
