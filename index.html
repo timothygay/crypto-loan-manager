@@ -3487,8 +3487,10 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                     const confirmedBefore = (s.trade.fixings||[]).filter(f=>f.confirmed&&f.date<s.date).length;
                     const amounts = scenario ? accAmounts(s.trade, scenario, confirmedBefore, isKO) : null;
                     const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
-                    const rowBg = isPast
-                        ? 'bg-amber-900/15 border-amber-800/30'
+                    const tradeIsEnded = ['Knocked Out','Matured'].includes(s.trade.status);
+                    const rowBg = tradeIsEnded
+                        ? 'bg-red-900/15 border-red-800/20'
+                        : isPast ? 'bg-amber-900/15 border-amber-800/30'
                         : isKO ? 'bg-orange-900/10' : s.weekend ? 'bg-amber-900/10' : '';
                     return (
                         <tr key={i} className={`border-b border-slate-800/50 ${rowBg}`}>
@@ -3703,18 +3705,24 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                 const fixing = fixings.find(f=>f.date===date);
                                 const fp = fixing?.fixingPrice ? parseFloat(fixing.fixingPrice) : null;
                                 const scenario = fp !== null ? accScenario(trade, fp) : null;
-                                const amounts  = scenario ? accAmounts(trade, scenario) : null;
-                                const ss       = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
-                                const isPast   = date < today;
-                                const isConf   = fixing?.confirmed;
-                                const weekend  = isWeekend(date);
+                                const isKO = fp !== null ? accIsKO(trade, fp) : false;
+                                const confirmedBefore = fixings.filter(f=>f.confirmed&&f.date<date).length;
+                                const amounts = scenario ? accAmounts(trade, scenario, confirmedBefore, isKO) : null;
+                                const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
+                                const isPast = date < today;
+                                const isConf = fixing?.confirmed;
+                                const weekend = isWeekend(date);
                                 const isFuture = date > today;
+                                // Hide future rows if trade is KO'd or Matured — no more settlements
+                                const tradeEnded = ['Knocked Out','Matured'].includes(trade.status);
+                                // Find the date when trade ended (last confirmed fixing)
+                                const lastConfirmed = fixings.filter(f=>f.confirmed).sort((a,b)=>b.date.localeCompare(a.date))[0];
+                                const endDate = lastConfirmed?.date;
+                                if (tradeEnded && endDate && date > endDate) return null; // hide post-KO/maturity rows
                                 // Remaining notional after this fixing
-                                const confirmedBefore = fixings.filter(f=>f.confirmed&&f.date<=date).length;
-                                const notionalAfter = Math.max(0, notional - confirmedBefore * amount2); // amount2 already truncated
-                                const isKO = scenario === 'knockout';
+                                const notionalAfter = Math.max(0, notional - (confirmedBefore + (isConf?1:0)) * amount2);
                                 return (
-                                    <tr key={date} className={`border-b border-slate-800/40 ${weekend?'bg-amber-900/10':''} ${isKO?'bg-orange-900/10':''} ${isFuture?'opacity-50':''}`}>
+                                    <tr key={date} className={`border-b border-slate-800/40 ${weekend?'bg-amber-900/10':''} ${isKO&&isConf?'bg-orange-900/15':''} ${isFuture&&!tradeEnded?'opacity-50':''}`}>
                                         <td className="py-2 pr-3 text-slate-500">{i+1}</td>
                                         <td className={`py-2 pr-3 mono ${weekend?'text-amber-400':'text-slate-300'}`}>
                                             {date}{weekend&&<span className="ml-1 text-[9px] text-amber-500">WE</span>}
@@ -3724,19 +3732,23 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                             {fp !== null ? `$${fmt(fp,2)}` : <span className="text-slate-600">—</span>}
                                         </td>
                                         <td className="py-2 pr-3">
-                                            {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] ${ss.bg} ${ss.text}`}>{ss.label}</span> : <span className="text-slate-600">—</span>}
+                                            {ss&&<span className={`px-1.5 py-0.5 rounded text-[10px] ${ss.bg} ${ss.text}`}>{ss.label}</span>}
+                                            {isKO&&<span className="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-orange-900/40 text-orange-400">KO</span>}
+                                            {!ss&&<span className="text-slate-600">—</span>}
                                         </td>
                                         <td className="py-2 pr-3 mono text-cyan-400">
                                             {amounts?.cryptoQty > 0 ? `${trunc8(amounts.cryptoQty).toFixed(8)} ${amounts.cryptoCcy}` : '—'}
                                         </td>
                                         <td className="py-2 pr-3 mono text-yellow-400">
-                                            {amounts?.baseAmount > 0 ? `${trade.notionalCurrency} ${fmt(amounts.baseAmount,2)}` : isKO ? `${trade.notionalCurrency} ${fmt(notionalAfter,2)}` : '—'}
+                                            {amounts?.baseAmount > 0
+                                                ? <span>{trade.notionalCurrency} {fmt(amounts.baseAmount,2)}{isKO&&isConf&&<span className="text-orange-400/70 text-[9px] ml-1">incl. remaining</span>}</span>
+                                                : '—'}
                                         </td>
                                         <td className="py-2 pr-3 mono text-slate-400">
                                             {isConf ? `${trade.notionalCurrency} ${fmt(notionalAfter,2)}` : '—'}
                                         </td>
                                         <td className="py-2 pr-3">
-                                            {isConf ? <span className="text-green-400">✓ Confirmed</span>
+                                            {isConf ? <span className={isKO?'text-orange-400 font-medium':'text-green-400'}>✓ {isKO?'KO Confirmed':'Confirmed'}</span>
                                                 : isPast ? <span className="text-red-400">Pending</span>
                                                 : <span className="text-slate-500">Upcoming</span>}
                                         </td>
@@ -3759,9 +3771,9 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                                     )}
                                                 </>
                                             )}
-                                            {isFuture && livePrice > 0 && (
-                                                <span className={`text-[10px] mono ${accScenario(trade,livePrice)==='knockout'?'text-orange-400':accScenario(trade,livePrice)==='above'?'text-green-400':accScenario(trade,livePrice)==='inzone'?'text-blue-400':'text-red-400'}`}>
-                                                    live: ${fmt(livePrice,0)} → {ACC_SCENARIO_STYLE[accScenario(trade,livePrice)]?.label}
+                                            {isFuture && !tradeEnded && livePrice > 0 && (
+                                                <span className={`text-[10px] mono ${accIsKO(trade,livePrice)?'text-orange-400':accScenario(trade,livePrice)==='above'?'text-green-400':accScenario(trade,livePrice)==='inzone'?'text-blue-400':'text-red-400'}`}>
+                                                    live: ${fmt(livePrice,0)} → {accIsKO(trade,livePrice)?'KNOCK OUT':ACC_SCENARIO_STYLE[accScenario(trade,livePrice)]?.label}
                                                 </span>
                                             )}
                                         </td>
