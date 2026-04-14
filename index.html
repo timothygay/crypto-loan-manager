@@ -3093,14 +3093,16 @@ const buildAccSchedule = (trade) => {
     return dates;
 };
 
-// Determine scenario for a fixing
-// Returns: 'above' | 'inzone' | 'below' | 'knockout'
+// Check if fixing triggers KO (price >= KO price)
+const accIsKO = (trade, fixingPrice) =>
+    trade.knockOutEnabled && fixingPrice >= parseFloat(trade.knockOutPrice);
+
+// Determine base settlement scenario for a fixing.
+// Returns: 'above' | 'inzone' | 'below'
+// KO is a separate modifier checked via accIsKO — it does not change the settlement scenario.
 const accScenario = (trade, fixingPrice) => {
-    const strike  = parseFloat(trade.strikePrice);
-    const koPrice = trade.knockOutEnabled ? parseFloat(trade.knockOutPrice) : null;
-    const buf     = trade.bufferEnabled  ? parseFloat(trade.bufferPrice)  : null;
-    if (koPrice && fixingPrice >= koPrice) return 'knockout';
-    // Above both strike and buffer (or just strike if no buffer)
+    const strike = parseFloat(trade.strikePrice);
+    const buf    = trade.bufferEnabled ? parseFloat(trade.bufferPrice) : null;
     if (buf !== null) {
         const zoneMin = Math.min(strike, buf);
         const zoneMax = Math.max(strike, buf);
@@ -3115,65 +3117,69 @@ const accScenario = (trade, fixingPrice) => {
 const trunc2 = (n) => Math.floor(n * 100) / 100;
 const trunc8 = (n) => Math.floor(n * 1e8) / 1e8;
 
-// Calculate amounts for a given scenario
-const accAmounts = (trade, scenario) => {
-    // Always recompute from source with truncation to avoid stale rounded stored values.
-    // amount2 = notional / periods (trunc 2dp), amount1 = amount2 / 2 (trunc 2dp)
-    const notional  = parseFloat(trade.notionalAmount) || 0;
-    const periods   = parseInt(trade.tenorValue) || 1;
-    const amount2raw = notional / periods;
-    const amount2   = trunc2(amount2raw);
-    const amount1   = trunc2(amount2 / 2);
-    const strike    = parseFloat(trade.strikePrice);
-    const base    = accBaseAsset(trade.underlyingPair);
+// Calculate amounts for a given scenario.
+// confirmedCount = number of periods already confirmed BEFORE this one.
+// isKO = true if this fixing also triggers a knockout.
+// When isKO: remaining balance = notional - (confirmedCount+1)*amount2 is added to base returned.
+// If base returned and remaining are the same currency (always USDT/USDC here) they are combined.
+const accAmounts = (trade, scenario, confirmedCount=0, isKO=false) => {
+    const notional    = parseFloat(trade.notionalAmount) || 0;
+    const periods     = parseInt(trade.tenorValue) || 1;
+    const amount2     = trunc2(notional / periods);
+    const amount1     = trunc2(amount2 / 2);
+    const strike      = parseFloat(trade.strikePrice);
+    const base        = accBaseAsset(trade.underlyingPair);
     const notionalCcy = trade.notionalCurrency;
+    // Remaining balance returned on KO = notional minus all periods including this one
+    const remaining   = isKO ? Math.max(0, notional - (confirmedCount + 1) * amount2) : 0;
+
     switch (scenario) {
         case 'above':
             return {
-                cryptoQty: trunc8(amount1 / strike),
-                cryptoCcy: base,
-                baseAmount: amount1,
-                baseCcy: notionalCcy,
-                label: 'Amount 1 crypto + Amount 1 base returned',
-                totalUsed: amount2,
+                cryptoQty:  trunc8(amount1 / strike),
+                cryptoCcy:  base,
+                // Amount1 base + remaining combined (same currency)
+                baseAmount: isKO ? trunc2(amount1 + remaining) : amount1,
+                baseCcy:    notionalCcy,
+                label: isKO ? 'KO: Amount 1 crypto + Amount 1 + remaining returned' : 'Amount 1 crypto + Amount 1 base returned',
+                totalUsed:  amount2,
+                isKO,
+                remaining,
             };
         case 'inzone':
             return {
-                cryptoQty: 0,
-                cryptoCcy: base,
-                baseAmount: amount2,
-                baseCcy: notionalCcy,
-                label: 'In zone — Amount 2 base returned',
-                totalUsed: amount2,
+                cryptoQty:  0,
+                cryptoCcy:  base,
+                // Amount2 base + remaining combined (same currency)
+                baseAmount: isKO ? trunc2(amount2 + remaining) : amount2,
+                baseCcy:    notionalCcy,
+                label: isKO ? 'KO: In zone — Amount 2 + remaining returned' : 'In zone — Amount 2 base returned',
+                totalUsed:  amount2,
+                isKO,
+                remaining,
             };
         case 'below':
             return {
-                cryptoQty: trunc8(amount2 / strike),
-                cryptoCcy: base,
-                baseAmount: 0,
-                baseCcy: notionalCcy,
-                label: 'Amount 2 crypto purchased at strike',
-                totalUsed: amount2,
+                cryptoQty:  trunc8(amount2 / strike),
+                cryptoCcy:  base,
+                // Crypto delivery separate, remaining base returned separately
+                baseAmount: isKO ? remaining : 0,
+                baseCcy:    notionalCcy,
+                label: isKO ? 'KO: Amount 2 crypto + remaining base returned' : 'Amount 2 crypto purchased at strike',
+                totalUsed:  amount2,
+                isKO,
+                remaining,
             };
-        case 'knockout':
-            return {
-                cryptoQty: 0,
-                cryptoCcy: base,
-                baseAmount: 0,
-                baseCcy: notionalCcy,
-                label: 'KO — final settlement + remaining balance returned',
-                totalUsed: amount2,
-            };
-        default: return { cryptoQty:0, baseAmount:0, totalUsed:0, label:'—' };
+        default: return { cryptoQty:0, baseAmount:0, totalUsed:0, label:'—', isKO:false, remaining:0 };
     }
 };
 
 const ACC_SCENARIO_STYLE = {
-    'above':    { bg:'bg-green-900/20', border:'border-green-500/30', text:'text-green-400',  label:'ABOVE STRIKE' },
-    'inzone':   { bg:'bg-blue-900/20',  border:'border-blue-500/30',  text:'text-blue-400',   label:'IN ZONE' },
-    'below':    { bg:'bg-red-900/20',   border:'border-red-500/30',   text:'text-red-400',    label:'BELOW STRIKE' },
-    'knockout': { bg:'bg-orange-900/20',border:'border-orange-500/30',text:'text-orange-400', label:'KNOCK OUT' },
+    'above':  { bg:'bg-green-900/20',  border:'border-green-500/30',  text:'text-green-400',  label:'ABOVE STRIKE' },
+    'inzone': { bg:'bg-blue-900/20',   border:'border-blue-500/30',   text:'text-blue-400',   label:'IN ZONE' },
+    'below':  { bg:'bg-red-900/20',    border:'border-red-500/30',    text:'text-red-400',    label:'BELOW STRIKE' },
 };
+const ACC_KO_STYLE = { bg:'bg-orange-900/20', border:'border-orange-500/30', text:'text-orange-400' };
 
 const ACC_STATUS_BADGE = {
     'Active':      'bg-green-500/15 text-green-400 border-green-500/30',
@@ -3236,21 +3242,24 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
         portfolioTotals[ccy].remaining += remaining;
     });
 
-    // Upcoming settlements in next 7 days
-    const upcoming = [];
+    // Build overdue (past 30 days, unconfirmed) and upcoming (next 7 days) lists
+    const past30 = new Date(new Date().getTime() - 30*86400000).toISOString().split('T')[0];
+    const overdue = [], upcoming = [];
     trades.forEach(trade => {
         if (!['Active','Knocked Out'].includes(trade.status)) return;
         const sched = buildAccSchedule(trade);
+        const amount2up = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
         sched.forEach(date => {
-            if (date < today || date > in7) return;
             const existing = (trade.fixings||[]).find(f=>f.date===date);
             if (existing?.confirmed) return;
             const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<date).length;
-            const amount2up = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
             const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
-            upcoming.push({trade, date, existing, remaining, weekend:isWeekend(date)});
+            const entry = {trade, date, existing, remaining, weekend:isWeekend(date)};
+            if (date < today && date >= past30) overdue.push(entry);
+            else if (date >= today && date <= in7) upcoming.push(entry);
         });
     });
+    overdue.sort((a,b)=>b.date.localeCompare(a.date)); // newest first for overdue
     upcoming.sort((a,b)=>a.date.localeCompare(b.date));
 
     return (
@@ -3278,85 +3287,110 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
                 </div>
             )}
 
-            {/* Upcoming settlements */}
-            {upcoming.length > 0 ? (
-                <div className="card overflow-hidden">
-                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                        <p className="text-sm font-semibold text-slate-300">Settlements Due (Next 7 Days)</p>
-                        <span className="text-xs text-slate-500">{upcoming.length} pending</span>
-                    </div>
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                            <thead>
-                                <tr className="border-b border-slate-800 bg-slate-900/40">
-                                    {['Client','Underlying','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Strike','Remaining','Action'].map(h=>(
-                                        <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
-                                    ))}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {upcoming.map((s,i)=>{
-                                    const f = s.existing;
-                                    // After 4pm SGT on the settlement date, lock to actual fixing price.
-                                    // Before 4pm SGT (or on future dates), use live price for indicative scenario.
-                                    const nowSGT = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
-                                    const isToday = s.date === todayUTC();
-                                    const pastFixingTime = isToday && nowSGT.getHours() >= 16;
-                                    const priceForScenario = f?.fixingPrice
-                                        ? parseFloat(f.fixingPrice)  // locked fixing price
-                                        : (!pastFixingTime ? (prices[accBaseAsset(s.trade.underlyingPair)] || null) : null); // live indicative
-                                    const isIndicative = !f?.fixingPrice && priceForScenario !== null;
-                                    const scenario = priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null;
-                                    const amounts  = scenario ? accAmounts(s.trade, scenario) : null;
-                                    const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
-                                    const isKO = scenario === 'knockout';
-                                    return (
-                                        <tr key={i} className={`border-b border-slate-800/50 ${s.weekend?'bg-amber-900/10':''} ${isKO?'bg-orange-900/10':''}`}>
-                                            <td className="px-3 py-2.5 font-medium text-slate-200">{s.trade.clientName}</td>
-                                            <td className="px-3 py-2.5 mono text-slate-400">{s.trade.underlyingPair}</td>
-                                            <td className={`px-3 py-2.5 mono ${s.weekend?'text-amber-400':'text-slate-300'}`}>
-                                                {s.date}{s.weekend&&<span className="ml-1 text-[10px] text-amber-500">WE</span>}
-                                            </td>
-                                            <td className="px-3 py-2.5 text-slate-400">{dayName(s.date)}</td>
-                                            <td className="px-3 py-2.5 mono">
-                                                {f?.fixingPrice
-                                                    ? <span className="text-white">${fmt(parseFloat(f.fixingPrice),2)}</span>
-                                                    : isIndicative
-                                                        ? <span className="text-slate-400">${fmt(priceForScenario,2)} <span className="text-slate-600 text-[9px]">live</span></span>
-                                                        : <span className="text-slate-600">—</span>}
-                                            </td>
-                                            <td className="px-3 py-2.5">
-                                                {ss ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${ss.bg} ${ss.text}`}>{ss.label}{isIndicative&&<span className="ml-0.5 opacity-60">~</span>}</span> : <span className="text-slate-600">—</span>}
-                                            </td>
-                                            <td className="px-3 py-2.5 mono text-cyan-400">
-                                                {amounts?.cryptoQty > 0 ? <span>{trunc8(amounts.cryptoQty).toFixed(8)} {amounts.cryptoCcy}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span> : '—'}
-                                            </td>
-                                            <td className="px-3 py-2.5 mono text-yellow-400">
-                                                {amounts?.baseAmount > 0
-                                                    ? <span>{s.trade.notionalCurrency} {fmt(amounts.baseAmount,2)}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
-                                                    : isKO ? `${s.trade.notionalCurrency} ${fmt(s.remaining,2)} (remaining)` : '—'}
-                                            </td>
-                                            <td className="px-3 py-2.5 mono text-orange-400">
-                                                {s.trade.knockOutEnabled ? `$${fmt(parseFloat(s.trade.knockOutPrice),2)}` : '—'}
-                                            </td>
-                                            <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
-                                            <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.remaining,2)}</td>
-                                            <td className="px-3 py-2.5">
-                                                <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
-                                                    className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 rounded text-green-400 text-[10px] transition-colors whitespace-nowrap">
-                                                    ✓ Confirm
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            ) : (
-                <div className="card p-6 text-center text-slate-500 text-sm">No settlements due in the next 7 days.</div>
-            )}
+            {/* Settlements table renderer — shared by overdue and upcoming */}
+            {(()=>{
+                const nowSGT = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
+                const renderRow = (s, i, isPast) => {
+                    const f = s.existing;
+                    // Past rows: price is locked (no live indicative)
+                    // Today before 4pm: use live indicative
+                    // Today after 4pm / future: locked if price entered, else live
+                    const isToday = s.date === todayUTC();
+                    const pastFixingTime = isToday && nowSGT.getHours() >= 16;
+                    const priceForScenario = f?.fixingPrice
+                        ? parseFloat(f.fixingPrice)
+                        : (isPast || pastFixingTime) ? null
+                        : (prices[accBaseAsset(s.trade.underlyingPair)] || null);
+                    const isIndicative = !f?.fixingPrice && priceForScenario !== null;
+                    const scenario = priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null;
+                    const isKO = priceForScenario !== null ? accIsKO(s.trade, priceForScenario) : false;
+                    const confirmedBefore = (s.trade.fixings||[]).filter(f=>f.confirmed&&f.date<s.date).length;
+                    const amounts = scenario ? accAmounts(s.trade, scenario, confirmedBefore, isKO) : null;
+                    const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
+                    const rowBg = isPast
+                        ? 'bg-amber-900/15 border-amber-800/30'
+                        : isKO ? 'bg-orange-900/10' : s.weekend ? 'bg-amber-900/10' : '';
+                    return (
+                        <tr key={i} className={`border-b border-slate-800/50 ${rowBg}`}>
+                            <td className="px-3 py-2.5 font-medium text-slate-200">
+                                {s.trade.clientName}
+                                {isPast&&<span className="ml-1.5 px-1 py-0.5 bg-amber-900/40 text-amber-400 rounded text-[9px]">OVERDUE</span>}
+                            </td>
+                            <td className="px-3 py-2.5 mono text-slate-400">{s.trade.underlyingPair}</td>
+                            <td className={`px-3 py-2.5 mono ${isPast?'text-amber-400':s.weekend?'text-amber-400':'text-slate-300'}`}>
+                                {s.date}{s.weekend&&<span className="ml-1 text-[10px] text-amber-500">WE</span>}
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-400">{dayName(s.date)}</td>
+                            <td className="px-3 py-2.5 mono">
+                                {f?.fixingPrice
+                                    ? <span className="text-white">${fmt(parseFloat(f.fixingPrice),2)}</span>
+                                    : isIndicative
+                                        ? <span className="text-slate-400">${fmt(priceForScenario,2)} <span className="text-slate-600 text-[9px]">live</span></span>
+                                        : <span className="text-red-400/70 text-[10px]">price needed</span>}
+                            </td>
+                            <td className="px-3 py-2.5">
+                                {ss&&<span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${ss.bg} ${ss.text}`}>{ss.label}{isIndicative&&<span className="ml-0.5 opacity-60">~</span>}</span>}
+                                {isKO&&<span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-900/40 text-orange-400">KO</span>}
+                                {!ss&&<span className="text-slate-600">—</span>}
+                            </td>
+                            <td className="px-3 py-2.5 mono text-cyan-400">
+                                {amounts?.cryptoQty>0
+                                    ? <span>{trunc8(amounts.cryptoQty).toFixed(8)} {amounts.cryptoCcy}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
+                                    : '—'}
+                            </td>
+                            <td className="px-3 py-2.5 mono text-yellow-400">
+                                {amounts?.baseAmount>0
+                                    ? <span>{s.trade.notionalCurrency} {fmt(amounts.baseAmount,2)}{isKO&&!isIndicative&&<span className="text-orange-400/70 text-[9px] ml-1">incl. remaining</span>}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
+                                    : '—'}
+                            </td>
+                            <td className="px-3 py-2.5 mono text-orange-400">
+                                {s.trade.knockOutEnabled?`$${fmt(parseFloat(s.trade.knockOutPrice),2)}`:'—'}
+                            </td>
+                            <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
+                            <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.remaining,2)}</td>
+                            <td className="px-3 py-2.5">
+                                <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
+                                    className={`px-2 py-1 border rounded text-[10px] transition-colors whitespace-nowrap ${isPast?'bg-amber-600/20 hover:bg-amber-600/40 border-amber-500/30 text-amber-400':'bg-green-600/20 hover:bg-green-600/40 border-green-500/30 text-green-400'}`}>
+                                    ✓ Confirm
+                                </button>
+                            </td>
+                        </tr>
+                    );
+                };
+                const headers = ['Client','Underlying','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Strike','Remaining','Action'];
+                const thead = (<thead><tr className="border-b border-slate-800 bg-slate-900/40">{headers.map(h=>(<th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>))}</tr></thead>);
+                return (<>
+                    {/* Overdue settlements */}
+                    {overdue.length>0&&(
+                        <div className="card overflow-hidden mb-3">
+                            <div className="px-4 py-3 border-b border-amber-800/30 bg-amber-900/10 flex items-center justify-between">
+                                <p className="text-sm font-semibold text-amber-400 flex items-center gap-2">
+                                    <span className="w-2 h-2 rounded-full bg-amber-400 inline-block animate-pulse"/>
+                                    Overdue Settlements (Last 30 Days)
+                                </p>
+                                <span className="text-xs text-amber-500/70">{overdue.length} unconfirmed</span>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs">{thead}<tbody>{overdue.map((s,i)=>renderRow(s,i,true))}</tbody></table>
+                            </div>
+                        </div>
+                    )}
+                    {/* Upcoming settlements */}
+                    {upcoming.length>0?(
+                        <div className="card overflow-hidden">
+                            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                                <p className="text-sm font-semibold text-slate-300">Settlements Due (Next 7 Days)</p>
+                                <span className="text-xs text-slate-500">{upcoming.length} pending</span>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs">{thead}<tbody>{upcoming.map((s,i)=>renderRow(s,i,false))}</tbody></table>
+                            </div>
+                        </div>
+                    ):(
+                        <div className="card p-6 text-center text-slate-500 text-sm">No settlements due in the next 7 days.</div>
+                    )}
+                </>);
+            })()}
         </div>
     );
 };
@@ -3801,8 +3835,9 @@ const AccumulatorModule = ({prices}) => {
         });
     };
 
-    // Confirm a fixing — update status if KO or final period
+    // Confirm a fixing — update status if KO or final period, log settlement to Sheets
     const confirmFixing = async (tradeId, date) => {
+        let settlementLog = null;
         setTrades(prev => {
             const updated = prev.map(trade => {
                 if (trade.id !== tradeId) return trade;
@@ -3810,16 +3845,42 @@ const AccumulatorModule = ({prices}) => {
                 const idx = fixings.findIndex(f=>f.date===date);
                 if (idx < 0) return trade;
                 const fp = parseFloat(fixings[idx].fixingPrice);
+                if (!fp) return trade; // no price entered — cannot confirm
                 const scenario = accScenario(trade, fp);
-                fixings[idx] = {...fixings[idx], confirmed:true, scenario};
+                const isKO = accIsKO(trade, fp);
+                const confirmedBefore = fixings.filter(f=>f.confirmed).length;
+                const amounts = accAmounts(trade, scenario, confirmedBefore, isKO);
+                fixings[idx] = {...fixings[idx], confirmed:true, scenario, isKO,
+                    cryptoQty: amounts.cryptoQty, baseAmount: amounts.baseAmount};
 
                 let newStatus = trade.status;
                 const schedule = buildAccSchedule(trade);
-                const isKO = scenario === 'knockout';
                 const isLast = date === schedule[schedule.length-1];
-
                 if (isKO) newStatus = 'Knocked Out';
                 else if (isLast) newStatus = 'Matured';
+
+                // Compute remaining after this confirmation
+                const amount2 = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
+                const remainingAfter = Math.max(0, parseFloat(trade.notionalAmount) - (confirmedBefore + 1) * amount2);
+
+                // Build settlement log entry for Sheets
+                settlementLog = {
+                    tradeId: trade.id,
+                    clientName: trade.clientName,
+                    underlyingPair: trade.underlyingPair,
+                    settlementDate: date,
+                    confirmedAt: new Date().toISOString(),
+                    scenario,
+                    isKO: isKO ? 'YES' : 'NO',
+                    cryptoQty: amounts.cryptoQty,
+                    cryptoCcy: amounts.cryptoCcy,
+                    baseAmount: amounts.baseAmount,
+                    notionalCcy: trade.notionalCurrency,
+                    remainingAfter,
+                    fixingPrice: fp,
+                    strikePrice: trade.strikePrice,
+                    koPrice: trade.knockOutEnabled ? trade.knockOutPrice : '',
+                };
 
                 const result = {...trade, fixings, status:newStatus};
                 pushTrade(result);
@@ -3827,6 +3888,25 @@ const AccumulatorModule = ({prices}) => {
             });
             return updated;
         });
+        // Push settlement log to Sheets after state update
+        if (settlementLog && config.scriptUrl) {
+            try {
+                await accSheetsCall(config.scriptUrl, {
+                    action: 'logSettlement',
+                    values: JSON.stringify([
+                        settlementLog.tradeId, settlementLog.clientName,
+                        settlementLog.underlyingPair, settlementLog.settlementDate,
+                        settlementLog.confirmedAt, settlementLog.scenario,
+                        settlementLog.isKO,
+                        settlementLog.cryptoQty ? settlementLog.cryptoQty.toFixed(8) : '0',
+                        settlementLog.cryptoCcy, settlementLog.baseAmount,
+                        settlementLog.notionalCcy, settlementLog.remainingAfter,
+                        settlementLog.fixingPrice, settlementLog.strikePrice,
+                        settlementLog.koPrice,
+                    ])
+                });
+            } catch(e) { console.error('Settlement log failed:', e.message); }
+        }
     };
 
     const fetchFromSheets = async () => {
