@@ -2574,10 +2574,12 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
                                 }
                             </td>
                             <td className="px-3 py-2.5">
-                                <button onClick={()=>onConfirmPayment(s.trade.id,s.date)}
-                                    className={`px-2 py-1 border rounded text-[10px] transition-colors whitespace-nowrap ${isPast?'bg-amber-600/20 hover:bg-amber-600/40 border-amber-500/30 text-amber-400':'bg-green-600/20 hover:bg-green-600/40 border-green-500/30 text-green-400'}`}>
-                                    ✓ Confirm
-                                </button>
+                                {isPast ? (
+                                    <button onClick={()=>onConfirmPayment(s.trade.id,s.date)}
+                                        className="px-2 py-1 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-500/30 rounded text-amber-400 text-[10px] transition-colors whitespace-nowrap">
+                                        ✓ Confirm
+                                    </button>
+                                ) : <span className="text-slate-600 text-[10px]">Pending</span>}
                             </td>
                         </tr>
                     );
@@ -3425,18 +3427,20 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                             <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
                             <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.remaining,2)}</td>
                             <td className="px-3 py-2.5">
-                                <div className="flex gap-1 flex-wrap">
-                                    {!f?.fixingPrice&&isPast&&(
-                                        <button onClick={()=>onFetchPrice(s.trade.id,s.date,s.trade.underlyingPair)}
-                                            className="px-2 py-1 bg-cyan-900/30 hover:bg-cyan-900/50 border border-cyan-500/30 rounded text-cyan-400 text-[10px] transition-colors flex items-center gap-1">
-                                            ↻ Fetch
+                                {isPast ? (
+                                    <div className="flex gap-1 flex-wrap">
+                                        {!f?.fixingPrice&&(
+                                            <button onClick={()=>onFetchPrice(s.trade.id,s.date,s.trade.underlyingPair)}
+                                                className="px-2 py-1 bg-cyan-900/30 hover:bg-cyan-900/50 border border-cyan-500/30 rounded text-cyan-400 text-[10px] transition-colors flex items-center gap-1">
+                                                ↻ Fetch
+                                            </button>
+                                        )}
+                                        <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
+                                            className="px-2 py-1 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-500/30 rounded text-amber-400 text-[10px] transition-colors whitespace-nowrap">
+                                            ✓ Confirm
                                         </button>
-                                    )}
-                                    <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
-                                        className={`px-2 py-1 border rounded text-[10px] transition-colors whitespace-nowrap ${isPast?'bg-amber-600/20 hover:bg-amber-600/40 border-amber-500/30 text-amber-400':'bg-green-600/20 hover:bg-green-600/40 border-green-500/30 text-green-400'}`}>
-                                        ✓ Confirm
-                                    </button>
-                                </div>
+                                    </div>
+                                ) : <span className="text-slate-600 text-[10px]">Pending</span>}
                             </td>
                         </tr>
                     );
