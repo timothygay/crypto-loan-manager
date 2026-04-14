@@ -2423,6 +2423,9 @@ const rowToTrade = (r) => ({
     createdAt:r[23],
 });
 
+// Helper: convert pair string to Binance symbol e.g. "BTC/USDC" → "BTCUSDC"
+const pairToSymbol = (pair) => { const [b,q]=(pair||'').split('/'); return (b||'')+(q||'USDT'); };
+
 // ─── FCN DASHBOARD ────────────────────────────────────────────────────────────
 const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
     const today = todayUTC();
@@ -3120,9 +3123,6 @@ const FCNModule = ({prices}) => {
     // Auto-fetch Binance fixing prices for all past FCN settlement dates.
     // Stores prices in both fixingPrices (dashboard) and trade.settlementFixings (per-trade).
     // Also runs barrier checks against stored prices to auto-update trade status.
-    // Helper: get Binance symbol from pair string e.g. "BTC/USDC" → "BTCUSDC"
-    const pairToSymbol = (pair) => { const [b,q]=pair.split('/'); return (b||'')+(q||'USDT'); };
-
     // Run FCN barrier checks using settlementFixings {date:{SYMBOL:price}}.
     // Returns updated trade fields: status, knockInTriggered, worstOffPair, worstOffStrike.
     const fcnBarrierCheck = (trade, sf) => {
