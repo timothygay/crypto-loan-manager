@@ -3023,52 +3023,56 @@ const FCNModule = ({prices}) => {
     const updateTrade=async(t)=>{ setTrades(p=>p.map(x=>x.id===t.id?t:x)); setEditingTrade(null); await pushTrade(t); };
     const deleteTrade=(id)=>{ if(confirm('Delete this FCN trade?')) setTrades(p=>p.filter(t=>t.id!==id)); };
     const confirmPayment=async(tradeId,date)=>{
-        let logEntry=null;
-        setTrades(prev=>{
-            const updated=prev.map(t=>{
-                if(t.id!==tradeId) return t;
-                const paid=[...(t.paidSettlements||[])];
-                if(!paid.includes(date)) paid.push(date);
-                const u={...t,paidSettlements:paid};
-                // Build settlement log
-                const sched=buildFCNSchedule(t);
-                const settlementEntry=sched.find(s=>s.date===date);
-                const isMaturity=settlementEntry?.isMaturity||false;
-                const coupon=calcFCNCoupon(t);
-                const underlyingPairs=(t.underlyings||[]).map(u=>u.pair).join(', ');
-                let maturityType='—', notionalReturned=0;
-                if(isMaturity){
-                    if(t.status==='Exercised'){
-                        maturityType=`Exercised — worst-of ${t.worstOffPair||'N/A'} @ ${t.worstOffStrike||'N/A'}`;
-                        notionalReturned=0;
-                    } else if(t.status==='Knocked Out'){
-                        maturityType='Knocked Out — notional returned';
-                        notionalReturned=parseFloat(t.notionalAmount)||0;
-                    } else {
-                        maturityType='Matured — notional returned';
-                        notionalReturned=parseFloat(t.notionalAmount)||0;
-                    }
-                }
-                logEntry={
-                    tradeId:t.id, clientName:t.clientName,
-                    settlementDate:date, confirmedAt:new Date().toISOString(),
-                    type:isMaturity?'MATURITY':'COUPON',
-                    couponAmount:coupon.toFixed(isCrypto(t.couponCurrency)?8:2),
-                    couponCcy:t.couponCurrency,
-                    notionalReturned:notionalReturned.toFixed(isCrypto(t.notionalCurrency)?8:2),
-                    notionalCcy:t.notionalCurrency,
-                    maturityType,
-                    underlyingPairs,
-                    kiTriggered:t.knockInTriggered?'YES':'NO',
-                    tradeStatus:t.status,
-                };
-                pushTrade(u);
-                return u;
-            });
-            return updated;
-        });
-        // Log to FCN_Settlements sheet
-        if(logEntry&&config.scriptUrl){
+        // Compute everything from current trades state BEFORE calling setTrades —
+        // same fix as Accumulator: setTrades updater runs asynchronously so
+        // variables set inside it are not available in the code that follows.
+        const trade=trades.find(t=>t.id===tradeId);
+        if(!trade) return;
+
+        // Build updated trade
+        const paid=[...(trade.paidSettlements||[])];
+        if(!paid.includes(date)) paid.push(date);
+        const updatedTrade={...trade,paidSettlements:paid};
+
+        // Build settlement log entry synchronously
+        const sched=buildFCNSchedule(trade);
+        const settlementEntry=sched.find(s=>s.date===date);
+        const isMaturity=settlementEntry?.isMaturity||false;
+        const coupon=calcFCNCoupon(trade);
+        const underlyingPairs=(trade.underlyings||[]).map(u=>u.pair).join(', ');
+        let maturityType='—', notionalReturned=0;
+        if(isMaturity){
+            if(trade.status==='Exercised'){
+                maturityType=`Exercised — worst-of ${trade.worstOffPair||'N/A'} @ ${trade.worstOffStrike||'N/A'}`;
+                notionalReturned=0;
+            } else if(trade.status==='Knocked Out'){
+                maturityType='Knocked Out — notional returned';
+                notionalReturned=parseFloat(trade.notionalAmount)||0;
+            } else {
+                maturityType='Matured — notional returned';
+                notionalReturned=parseFloat(trade.notionalAmount)||0;
+            }
+        }
+        const logEntry={
+            tradeId:trade.id, clientName:trade.clientName,
+            settlementDate:date, confirmedAt:new Date().toISOString(),
+            type:isMaturity?'MATURITY':'COUPON',
+            couponAmount:coupon.toFixed(isCrypto(trade.couponCurrency)?8:2),
+            couponCcy:trade.couponCurrency,
+            notionalReturned:notionalReturned.toFixed(isCrypto(trade.notionalCurrency)?8:2),
+            notionalCcy:trade.notionalCurrency,
+            maturityType,
+            underlyingPairs,
+            kiTriggered:trade.knockInTriggered?'YES':'NO',
+            tradeStatus:trade.status,
+        };
+
+        // Update state and push trade
+        setTrades(prev=>prev.map(t=>t.id===tradeId?updatedTrade:t));
+        pushTrade(updatedTrade);
+
+        // Log to FCN_Settlements sheet — guaranteed non-null now
+        if(config.scriptUrl){
             try{
                 await fcnSheetsCall(config.scriptUrl,{
                     action:'logFCNSettlement',
@@ -3962,59 +3966,59 @@ const AccumulatorModule = ({prices}) => {
 
     // Confirm a fixing — update status if KO or final period, log settlement to Sheets
     const confirmFixing = async (tradeId, date) => {
-        let settlementLog = null;
-        setTrades(prev => {
-            const updated = prev.map(trade => {
-                if (trade.id !== tradeId) return trade;
-                const fixings = [...(trade.fixings||[])];
-                const idx = fixings.findIndex(f=>f.date===date);
-                if (idx < 0) return trade;
-                const fp = parseFloat(fixings[idx].fixingPrice);
-                if (!fp) return trade; // no price entered — cannot confirm
-                const scenario = accScenario(trade, fp);
-                const isKO = accIsKO(trade, fp);
-                const confirmedBefore = fixings.filter(f=>f.confirmed).length;
-                const amounts = accAmounts(trade, scenario, confirmedBefore, isKO);
-                fixings[idx] = {...fixings[idx], confirmed:true, scenario, isKO,
-                    cryptoQty: amounts.cryptoQty, baseAmount: amounts.baseAmount};
+        // Compute all settlement data BEFORE setTrades — setTrades updater runs
+        // asynchronously so variables set inside it are not available afterwards.
+        const currentTrades = trades;
+        const trade = currentTrades.find(t => t.id === tradeId);
+        if (!trade) return;
+        const fixings = [...(trade.fixings||[])];
+        const idx = fixings.findIndex(f => f.date === date);
+        if (idx < 0) return;
+        const fp = parseFloat(fixings[idx].fixingPrice);
+        if (!fp) { alert('No fixing price for this date. Please fetch or enter a price first.'); return; }
 
-                let newStatus = trade.status;
-                const schedule = buildAccSchedule(trade);
-                const isLast = date === schedule[schedule.length-1];
-                if (isKO) newStatus = 'Knocked Out';
-                else if (isLast) newStatus = 'Matured';
+        const scenario = accScenario(trade, fp);
+        const isKO = accIsKO(trade, fp);
+        const confirmedBefore = fixings.filter(f => f.confirmed).length;
+        const amounts = accAmounts(trade, scenario, confirmedBefore, isKO);
+        const amount2 = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
+        const remainingAfter = Math.max(0, parseFloat(trade.notionalAmount) - (confirmedBefore + 1) * amount2);
+        const schedule = buildAccSchedule(trade);
+        const isLast = date === schedule[schedule.length-1];
+        let newStatus = trade.status;
+        if (isKO) newStatus = 'Knocked Out';
+        else if (isLast) newStatus = 'Matured';
 
-                // Compute remaining after this confirmation
-                const amount2 = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
-                const remainingAfter = Math.max(0, parseFloat(trade.notionalAmount) - (confirmedBefore + 1) * amount2);
+        // Build settlement log before any async operations
+        const settlementLog = {
+            tradeId: trade.id,
+            clientName: trade.clientName,
+            underlyingPair: trade.underlyingPair,
+            settlementDate: date,
+            confirmedAt: new Date().toISOString(),
+            scenario,
+            isKO: isKO ? 'YES' : 'NO',
+            cryptoQty: amounts.cryptoQty,
+            cryptoCcy: amounts.cryptoCcy,
+            baseAmount: amounts.baseAmount,
+            notionalCcy: trade.notionalCurrency,
+            remainingAfter,
+            fixingPrice: fp,
+            strikePrice: trade.strikePrice,
+            koPrice: trade.knockOutEnabled ? trade.knockOutPrice : '',
+        };
 
-                // Build settlement log entry for Sheets
-                settlementLog = {
-                    tradeId: trade.id,
-                    clientName: trade.clientName,
-                    underlyingPair: trade.underlyingPair,
-                    settlementDate: date,
-                    confirmedAt: new Date().toISOString(),
-                    scenario,
-                    isKO: isKO ? 'YES' : 'NO',
-                    cryptoQty: amounts.cryptoQty,
-                    cryptoCcy: amounts.cryptoCcy,
-                    baseAmount: amounts.baseAmount,
-                    notionalCcy: trade.notionalCurrency,
-                    remainingAfter,
-                    fixingPrice: fp,
-                    strikePrice: trade.strikePrice,
-                    koPrice: trade.knockOutEnabled ? trade.knockOutPrice : '',
-                };
+        // Update fixings array
+        fixings[idx] = {...fixings[idx], confirmed:true, scenario, isKO,
+            cryptoQty: amounts.cryptoQty, baseAmount: amounts.baseAmount};
+        const updatedTrade = {...trade, fixings, status:newStatus};
 
-                const result = {...trade, fixings, status:newStatus};
-                pushTrade(result);
-                return result;
-            });
-            return updated;
-        });
-        // Push settlement log to Sheets after state update
-        if (settlementLog && config.scriptUrl) {
+        // Update state and push trade
+        setTrades(prev => prev.map(t => t.id === tradeId ? updatedTrade : t));
+        pushTrade(updatedTrade);
+
+        // Push settlement log to ACC_Settlements sheet
+        if (config.scriptUrl) {
             try {
                 await accSheetsCall(config.scriptUrl, {
                     action: 'logSettlement',
