@@ -214,7 +214,58 @@ const fetchBybitFixing = async (symbol, dateStr) => {
     return price;
 };
 
+// ─── BINANCE PRICE FUNCTIONS (FCN + Accumulator only) ────────────────────────
+// Live spot ticker — same endpoint confirmed working in browser test
+const fetchBinanceLive = async (symbol) => {
+    const r = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`);
+    const d = await r.json();
+    const price = parseFloat(d.price);
+    if (!price || price <= 0) throw new Error(`Bad Binance price for ${symbol}`);
+    return price;
+};
+
+// Binance Price Index kline at 08:00 UTC — the termsheet fixing endpoint.
+// Uses fapi.binance.com/fapi/v1/indexPriceKlines (composite index, not spot).
+// Confirmed working in browser test on 2026-04-14.
+// Same window/candle-selection logic as fetchBybitFixing for consistency.
+const fetchBinanceFixing = async (symbol, dateStr) => {
+    const target = new Date(`${dateStr}T08:00:00Z`).getTime();
+    const start  = target - 2 * 3600000; // T06:00 UTC
+    const end    = target + 2 * 3600000; // T10:00 UTC
+    // Primary: Binance Price Index kline (termsheet benchmark)
+    const indexUrl = `https://fapi.binance.com/fapi/v1/indexPriceKlines?pair=${symbol}&contractType=PERPETUAL&interval=1h&startTime=${start}&endTime=${end}&limit=5`;
+    // Fallback: Binance spot kline (tracks index within ~0.01%)
+    const spotUrl  = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&startTime=${start}&endTime=${end}&limit=5`;
+    let list = null;
+    try {
+        const r = await fetch(indexUrl);
+        const d = await r.json();
+        if (!Array.isArray(d) || !d.length) throw new Error('Empty index response');
+        list = d;
+    } catch(e) {
+        // Fallback to spot kline
+        const r2 = await fetch(spotUrl);
+        const d2 = await r2.json();
+        if (!Array.isArray(d2) || !d2.length) throw new Error(`Binance: no candles for ${symbol} ${dateStr}`);
+        list = d2;
+    }
+    let best = null, bestDiff = Infinity;
+    for (const c of list) {
+        const ts = parseInt(c[0], 10);
+        const diff = Math.abs(ts - target);
+        if (diff < bestDiff) { bestDiff = diff; best = c; }
+    }
+    if (!best || bestDiff > 1800000) {
+        const got = list.map(c => new Date(parseInt(c[0])).toISOString()).join(', ');
+        throw new Error(`No Binance candle within 30min of 08:00 UTC for ${symbol} ${dateStr}. Got: ${got}`);
+    }
+    const price = parseFloat(best[1]);
+    if (!price || price <= 0) throw new Error(`Bad Binance price ${price} for ${symbol} ${dateStr}`);
+    return price;
+};
+
 // Backfill: walk every calendar day from fromDate up to (not including) today,
+
 // fetch both BTC and ETH 08:00 UTC opens from Bybit for missing entries.
 const runBackfill = async (fromDate, toDate, existingHistory, onProgress) => {
     const history = { ...existingHistory };
@@ -253,20 +304,50 @@ const runBackfill = async (fromDate, toDate, existingHistory, onProgress) => {
 };
 
 // ─── PRICE TICKER ─────────────────────────────────────────────────────────────
-const PriceTicker = ({prices, lastUpdate}) => (
-    <div className="grid grid-cols-3 gap-3 mb-6">
-        {[['BTC','₿','orange'],['ETH','Ξ','purple'],['ADA','◈','blue']].map(([sym,icon,c])=>(
-            <div key={sym} className={`card p-4 bg-gradient-to-br from-${c}-500/10 to-${c}-600/5 border-${c}-500/20`}>
-                <div className="flex items-center justify-between">
-                    <div>
-                        <p className="text-xs text-slate-400">{sym==='BTC'?'Bitcoin':sym==='ETH'?'Ethereum':'Cardano'} · Bybit Live</p>
-                        <p className="text-2xl font-bold mono">${fmt(prices[sym],2)}</p>
-                        <p className="text-xs text-slate-500 mt-0.5">{lastUpdate?`${lastUpdate.toLocaleTimeString()} SGT`:'Connecting…'}</p>
+// bybitPrices  → BTC/ETH (Loans + SSPS)
+// binancePrices → BTC/ETH/ADA/XRP (FCN + Accumulator)
+const PriceTicker = ({bybitPrices, binancePrices, bybitUpdate, binanceUpdate}) => (
+    <div className="space-y-2 mb-6">
+        <div className="grid grid-cols-2 gap-3">
+            {[['BTC','₿','orange'],['ETH','Ξ','purple']].map(([sym,icon,c])=>(
+                <div key={sym} className={`card p-3 bg-gradient-to-br from-${c}-500/10 to-${c}-600/5 border-${c}-500/20`}>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="text-xs text-slate-400">{sym==='BTC'?'Bitcoin':'Ethereum'}</p>
+                            <div className="flex items-baseline gap-3 mt-0.5">
+                                <div>
+                                    <span className="text-[10px] text-slate-500">Bybit </span>
+                                    <span className="text-lg font-bold mono">${fmt(bybitPrices[sym],2)}</span>
+                                </div>
+                                <div>
+                                    <span className="text-[10px] text-slate-500">Binance </span>
+                                    <span className="text-lg font-bold mono text-cyan-400">${fmt(binancePrices[sym],2)}</span>
+                                </div>
+                            </div>
+                            <p className="text-xs text-slate-600 mt-0.5">{bybitUpdate?bybitUpdate.toLocaleTimeString():'—'} SGT</p>
+                        </div>
+                        <div className={`text-3xl text-${c}-400 opacity-60`}>{icon}</div>
                     </div>
-                    <div className={`text-3xl text-${c}-400 opacity-60`}>{icon}</div>
                 </div>
-            </div>
-        ))}
+            ))}
+        </div>
+        <div className="grid grid-cols-4 gap-3">
+            {[['ADA','◈','blue','Cardano'],['XRP','◆','teal','Ripple']].map(([sym,icon,c,name])=>(
+                <div key={sym} className={`card p-3 bg-gradient-to-br from-${c}-500/10 to-${c}-600/5 border-${c}-500/20`}>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="text-xs text-slate-400">{name} · Binance</p>
+                            <p className="text-lg font-bold mono text-cyan-400">${fmt(binancePrices[sym],2)}</p>
+                            <p className="text-xs text-slate-600 mt-0.5">{binanceUpdate?binanceUpdate.toLocaleTimeString():'—'} SGT</p>
+                        </div>
+                        <div className={`text-2xl text-${c}-400 opacity-60`}>{icon}</div>
+                    </div>
+                </div>
+            ))}
+            {/* Spacer tiles to fill 4-col grid */}
+            <div className="card p-3 opacity-0 pointer-events-none"/>
+            <div className="card p-3 opacity-0 pointer-events-none"/>
+        </div>
     </div>
 );
 
@@ -2040,8 +2121,8 @@ const SSPSFormModal = ({onSave, onClose}) => {
 // FCN MODULE — Fixed Coupon Note
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const FCN_CURRENCIES = ['BTC','ETH','ADA','USDT','USDC'];
-const FCN_CRYPTO = ['BTC','ETH','ADA'];
+const FCN_CURRENCIES = ['BTC','ETH','ADA','XRP','USDT','USDC'];
+const FCN_CRYPTO = ['BTC','ETH','ADA','XRP'];
 const FCN_STABLE = ['USDT','USDC'];
 const isCrypto = (ccy) => FCN_CRYPTO.includes(ccy);
 
@@ -2276,8 +2357,8 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
                     {liveSymbols.map(sym=>(
                         <div key={sym} className="card p-3 flex items-center justify-between">
                             <div>
-                                <p className="text-xs text-slate-400">{sym} · Live</p>
-                                <p className="text-lg font-bold mono">{prices[sym]?`$${fmt(prices[sym],2)}`:'—'}</p>
+                                <p className="text-xs text-slate-400">{sym} · Binance Live</p>
+                                <p className="text-lg font-bold mono text-cyan-400">{prices[sym]?`$${fmt(prices[sym],2)}`:'—'}</p>
                             </div>
                             <span className="text-2xl opacity-40">{sym==='BTC'?'₿':sym==='ETH'?'Ξ':'◈'}</span>
                         </div>
@@ -2639,7 +2720,7 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
     const fcnSpotRef=parseFloat(underlyings[0]?.spotRef||0);
     const fcnUpfrontAmount=(()=>{
         if(!fcnNotional||!fcnUpfrontFee) return 0;
-        const notionalIsCrypto=isCrypto(form.notionalCurrency);
+        const notionalIsCrypto=isCrypto(form.notionalCurrency); // includes XRP
         const feeIsCrypto=isCrypto(fcnFeeUnderlying);
         if(fcnFeeUnderlying===form.notionalCurrency) return fcnNotional*fcnUpfrontFee/100;
         if(notionalIsCrypto&&!feeIsCrypto) return fcnNotional*fcnSpotRef*fcnUpfrontFee/100;
@@ -2891,7 +2972,7 @@ const FCNModule = ({prices}) => {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-const ACC_UNDERLYING_SYMBOLS = { 'BTC/USDT':'BTCUSDT','BTC/USDC':'BTCUSDC','ETH/USDT':'ETHUSDT','ETH/USDC':'ETHUSDC','ADA/USDT':'ADAUSDT','ADA/USDC':'ADAUSDC' };
+const ACC_UNDERLYING_SYMBOLS = { 'BTC/USDT':'BTCUSDT','BTC/USDC':'BTCUSDC','ETH/USDT':'ETHUSDT','ETH/USDC':'ETHUSDC','ADA/USDT':'ADAUSDT','ADA/USDC':'ADAUSDC','XRP/USDT':'XRPUSDT','XRP/USDC':'XRPUSDC' };
 const ACC_PAIRS = Object.keys(ACC_UNDERLYING_SYMBOLS);
 const accBaseAsset = (pair) => (pair||'').split('/')[0]; // BTC/USDT → BTC
 
@@ -3199,15 +3280,15 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
     const pctUsed     = notional > 0 ? ((notional-remaining)/notional)*100 : 0;
     const statusCls   = ACC_STATUS_BADGE[trade.status] || ACC_STATUS_BADGE['Active'];
     const livePrice   = prices[accBaseAsset(trade.underlyingPair)] || 0;
-    const bybitSymbol = ACC_UNDERLYING_SYMBOLS[trade.underlyingPair] || '';
+    const binanceSymbol = ACC_UNDERLYING_SYMBOLS[trade.underlyingPair] || '';
 
-    // Fetch fixing price for a date
+    // Fetch fixing price via Binance Price Index (termsheet benchmark)
     const fetchFixing = async (date) => {
         setFetchingDate(date);
         try {
-            const price = await fetchBybitFixing(bybitSymbol, date);
+            const price = await fetchBinanceFixing(binanceSymbol, date);
             onSaveFix(trade.id, date, price.toFixed(2));
-        } catch(e) { alert('Failed to fetch price for '+date+': '+e.message); }
+        } catch(e) { alert('Failed to fetch Binance price for '+date+': '+e.message); }
         setFetchingDate(null);
     };
 
@@ -3405,8 +3486,8 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
     const feeUnderlying = form.upfrontFeeUnderlying || form.notionalCurrency;
     const upfrontAmount = (() => {
         if (!notional || !upfrontFee) return 0;
-        const notionalIsCrypto = ['BTC','ETH','ADA'].includes(form.notionalCurrency);
-        const feeIsCrypto = ['BTC','ETH','ADA'].includes(feeUnderlying);
+        const notionalIsCrypto = ['BTC','ETH','ADA','XRP'].includes(form.notionalCurrency);
+        const feeIsCrypto = ['BTC','ETH','ADA','XRP'].includes(feeUnderlying);
         // Same currency — straightforward
         if (feeUnderlying === form.notionalCurrency) return notional * upfrontFee / 100;
         // Notional is crypto, fee in stablecoin → multiply by spot ref
@@ -3722,26 +3803,50 @@ const AccumulatorModule = ({prices}) => {
 
 const App = () => {
     const [tab,setTab]=useState('ssps');
-    const [prices,setPrices]=useState({BTC:0,ETH:0,ADA:0});
-    const [lastUpdate,setLastUpdate]=useState(null);
+    // Bybit prices — Loans + SSPS only (BTC, ETH)
+    const [bybitPrices,setBybitPrices]=useState({BTC:0,ETH:0});
+    const [bybitUpdate,setBybitUpdate]=useState(null);
+    // Binance prices — FCN + Accumulator only (BTC, ETH, ADA, XRP)
+    const [binancePrices,setBinancePrices]=useState({BTC:0,ETH:0,ADA:0,XRP:0});
+    const [binanceUpdate,setBinanceUpdate]=useState(null);
 
-    const fetchLivePrices=useCallback(async()=>{
+    const fetchBybitPrices=useCallback(async()=>{
         try {
-            const [btc,eth,ada]=await Promise.allSettled([
+            const [btc,eth]=await Promise.allSettled([
                 fetchBybitLive('BTCUSDT'),
                 fetchBybitLive('ETHUSDT'),
-                fetchBybitLive('ADAUSDT'),
             ]);
-            setPrices(p=>({
+            setBybitPrices(p=>({
+                BTC:btc.status==='fulfilled'?btc.value:p.BTC,
+                ETH:eth.status==='fulfilled'?eth.value:p.ETH,
+            }));
+            setBybitUpdate(new Date());
+        } catch(e){console.error('Bybit price error',e);}
+    },[]);
+
+    const fetchBinancePrices=useCallback(async()=>{
+        try {
+            const [btc,eth,ada,xrp]=await Promise.allSettled([
+                fetchBinanceLive('BTCUSDT'),
+                fetchBinanceLive('ETHUSDT'),
+                fetchBinanceLive('ADAUSDT'),
+                fetchBinanceLive('XRPUSDT'),
+            ]);
+            setBinancePrices(p=>({
                 BTC:btc.status==='fulfilled'?btc.value:p.BTC,
                 ETH:eth.status==='fulfilled'?eth.value:p.ETH,
                 ADA:ada.status==='fulfilled'?ada.value:p.ADA,
+                XRP:xrp.status==='fulfilled'?xrp.value:p.XRP,
             }));
-            setLastUpdate(new Date());
-        } catch(e){console.error('Live price error',e);}
+            setBinanceUpdate(new Date());
+        } catch(e){console.error('Binance price error',e);}
     },[]);
 
-    useEffect(()=>{ fetchLivePrices(); const t=setInterval(fetchLivePrices,60000); return()=>clearInterval(t); },[]);
+    useEffect(()=>{
+        fetchBybitPrices(); const t1=setInterval(fetchBybitPrices,60000);
+        fetchBinancePrices(); const t2=setInterval(fetchBinancePrices,60000);
+        return()=>{clearInterval(t1);clearInterval(t2);};
+    },[]);
 
     return(
         <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
@@ -3750,13 +3855,13 @@ const App = () => {
                     <h1 className="text-3xl font-bold gradient-text mb-1">Crypto Prime Broker</h1>
                     <p className="text-slate-500 text-sm">Internal Portfolio Management System</p>
                 </div>
-                <PriceTicker prices={prices} lastUpdate={lastUpdate}/>
+                <PriceTicker bybitPrices={bybitPrices} binancePrices={binancePrices} bybitUpdate={bybitUpdate} binanceUpdate={binanceUpdate}/>
                 <div className="flex gap-1 mb-6 border-b border-slate-800">
                     {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['fcn','Fixed Coupon Note'],['acc','Accumulator']].map(([id,label])=>(
                         <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
                     ))}
                 </div>
-                {tab==='loans'?<LoanModule prices={prices}/>:tab==='ssps'?<SSPSModule prices={prices}/>:tab==='fcn'?<FCNModule prices={prices}/>:<AccumulatorModule prices={prices}/>}
+                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:<AccumulatorModule prices={binancePrices}/>}
             </div>
         </div>
     );
