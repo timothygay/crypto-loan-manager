@@ -44,7 +44,106 @@
     </style>
 </head>
 <body class="bg-slate-950 text-white min-h-screen">
+<div id="auth-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);align-items:center;justify-content:center;"></div>
 <div id="root"></div>
+<script>
+// ─── PASSWORD LOCK ────────────────────────────────────────────────────────────
+// To change the password in future:
+//   1. Go to https://emn178.github.io/online-tools/sha256.html
+//   2. Type your new password → copy the hash shown
+//   3. Replace the hash string below with the new one
+//   4. Redeploy to Vercel
+//
+// Current password hash — SHA-256 of "breakfastclub2026":
+const PASSWORD_HASH = "7137a84a39355cca8de10ad1f8efe081e5b95eecc518e2d230546f3d59b72ad5";
+const AUTH_KEY      = "cpb_auth_token";
+const AUTH_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
+
+async function sha256(str) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+function isAuthValid() {
+    try {
+        const stored = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
+        if (!stored || !stored.ts) return false;
+        return (Date.now() - stored.ts) < AUTH_DURATION;
+    } catch { return false; }
+}
+
+function storeAuth() {
+    localStorage.setItem(AUTH_KEY, JSON.stringify({ ts: Date.now() }));
+}
+
+function showLockScreen() {
+    const overlay = document.getElementById('auth-overlay');
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+        <div style="width:100%;max-width:400px;padding:0 24px;">
+            <div style="text-align:center;margin-bottom:32px;">
+                <div style="font-size:40px;margin-bottom:14px;">🔒</div>
+                <h1 style="color:#f8fafc;font-size:22px;font-weight:600;font-family:sans-serif;margin:0 0 6px;">Crypto Prime Broker</h1>
+                <p style="color:#64748b;font-size:13px;font-family:sans-serif;margin:0;">Internal Portfolio Management System</p>
+            </div>
+            <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:28px;">
+                <label style="display:block;font-size:11px;color:#94a3b8;font-family:sans-serif;margin-bottom:8px;letter-spacing:0.08em;text-transform:uppercase;">Password</label>
+                <input id="pw-input" type="password" placeholder="Enter password"
+                    style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;
+                           border-radius:8px;padding:11px 14px;color:#f8fafc;font-size:15px;
+                           font-family:monospace;outline:none;margin-bottom:8px;" />
+                <div id="pw-error" style="color:#f87171;font-size:12px;font-family:sans-serif;min-height:18px;margin-bottom:8px;"></div>
+                <button id="pw-btn"
+                    style="width:100%;background:#0ea5e9;border:none;border-radius:8px;
+                           padding:12px;color:#fff;font-size:14px;font-family:sans-serif;
+                           font-weight:600;cursor:pointer;transition:background 0.15s;">
+                    Unlock
+                </button>
+                <p style="color:#475569;font-size:11px;font-family:sans-serif;text-align:center;margin:14px 0 0;">
+                    Session stays unlocked for 7 days
+                </p>
+            </div>
+        </div>`;
+
+    const input = document.getElementById('pw-input');
+    const btn   = document.getElementById('pw-btn');
+    const err   = document.getElementById('pw-error');
+
+    async function attempt() {
+        const val = input.value;
+        if (!val) { err.textContent = 'Please enter a password.'; return; }
+        btn.textContent = 'Checking…';
+        btn.disabled = true;
+        err.textContent = '';
+        const hash = await sha256(val);
+        if (hash === PASSWORD_HASH) {
+            storeAuth();
+            overlay.style.display = 'none';
+            document.getElementById('root').style.display = '';
+        } else {
+            err.textContent = 'Incorrect password. Please try again.';
+            input.value = '';
+            input.focus();
+            btn.textContent = 'Unlock';
+            btn.disabled = false;
+        }
+    }
+
+    btn.addEventListener('click', attempt);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') attempt(); });
+    setTimeout(() => input.focus(), 80);
+}
+
+// On page load — check existing auth before rendering anything
+(function init() {
+    if (isAuthValid()) {
+        document.getElementById('auth-overlay').style.display = 'none';
+    } else {
+        document.getElementById('root').style.display = 'none';
+        showLockScreen();
+    }
+})();
+</script>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
