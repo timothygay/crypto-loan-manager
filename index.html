@@ -2972,6 +2972,8 @@ const FCNModule = ({prices}) => {
 
     useEffect(()=>{localStorage.setItem('cpb_fcn_trades',JSON.stringify(trades));},[trades]);
     useEffect(()=>{localStorage.setItem('cpb_fcn_config',JSON.stringify(config));},[config]);
+    // Auto-sync from Sheets on load and every 30 seconds — picks up trades added by other users
+    useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
 
     // Barrier check at 4pm SGT on settlement dates
     useEffect(()=>{
@@ -3762,6 +3764,8 @@ const AccumulatorModule = ({prices}) => {
 
     useEffect(()=>{ localStorage.setItem('cpb_acc_trades', JSON.stringify(trades)); }, [trades]);
     useEffect(()=>{ localStorage.setItem('cpb_acc_config', JSON.stringify(config)); }, [config]);
+    // Auto-sync from Sheets on load and every 30 seconds — picks up trades added by other users
+    useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
 
     const pushTrade = async (trade) => {
         if (!config.scriptUrl) return;
