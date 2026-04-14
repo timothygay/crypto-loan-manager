@@ -2255,18 +2255,44 @@ const buildFCNSchedule = (trade) => {
     return dates;
 };
 
-// Coupon per period — always on original notional
+// Coupon per period — Act/365 day count convention.
+// Weekly settlements: always 7 days → rate × 7/365
+// Monthly settlements: actual days between consecutive settlement dates
 // For crypto notional + stablecoin coupon: convert at first underlying's spotRef
-const calcFCNCoupon = (trade) => {
+const calcFCNCoupon = (trade, settlementDate=null) => {
     const notional = parseFloat(trade.notionalAmount) || 0;
     const rate = parseFloat(trade.couponRate) || 0;
-    const divisor = trade.tenorUnit === 'weeks' ? 52 : 12;
     let base = notional;
     const underlyings = trade.underlyings || [];
     if (isCrypto(trade.notionalCurrency) && !isCrypto(trade.couponCurrency) && underlyings.length > 0) {
         base = notional * (parseFloat(underlyings[0].spotRef) || 0);
     }
-    return base * rate / 100 / divisor;
+    let days;
+    if (trade.tenorUnit === 'weeks') {
+        days = 7; // weekly settlements are always exactly 7 days apart
+    } else {
+        // Monthly: use actual days between this settlement and the previous one.
+        // If no specific date provided, use 30 as a reasonable average for display.
+        if (settlementDate && trade.tradeDate) {
+            const sched = buildFCNSchedule(trade);
+            const idx = sched.findIndex(s => s.date === settlementDate);
+            if (idx > 0) {
+                const prev = new Date(sched[idx-1].date + 'T00:00:00Z');
+                const curr = new Date(settlementDate + 'T00:00:00Z');
+                days = Math.round((curr - prev) / 86400000);
+            } else if (idx === 0) {
+                // First settlement: days from trade date to first settlement date
+                const start = new Date(trade.tradeDate + 'T00:00:00Z');
+                const curr  = new Date(settlementDate + 'T00:00:00Z');
+                days = Math.round((curr - start) / 86400000);
+            } else {
+                days = 30;
+            }
+        } else {
+            days = 30; // fallback for dashboard totals / preview
+        }
+    }
+    return base * rate / 100 * days / 365;
 };
 
 const isWeekend = (dateStr) => { const d = new Date(dateStr+'T00:00:00Z'); const day=d.getUTCDay(); return day===0||day===6; };
@@ -2417,9 +2443,9 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
     trades.forEach(trade => {
         if (!['Active','Knocked Out','Exercised','Matured'].includes(trade.status)) return;
         const sched = buildFCNSchedule(trade);
-        const coupon = calcFCNCoupon(trade);
         sched.forEach(({date,isMaturity}) => {
             if ((trade.paidSettlements||[]).includes(date)) return;
+            const coupon = calcFCNCoupon(trade, date); // Act/365: pass settlement date for actual days
             const entry = {trade,date,isMaturity,coupon,weekend:isWeekend(date)};
             const isEffectivelyPast = date < today || (date === today && fcnPast4pm);
             if (isEffectivelyPast && date >= past30fcn) overdueF.push(entry);
@@ -2436,10 +2462,12 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
     const calcPeriodCoupons = (yr, mo) => {
         const ps=new Date(yr,mo,1), pe=new Date(yr,mo+1,1), total={};
         activeTrades.forEach(t => {
-            const coupon=calcFCNCoupon(t);
             buildFCNSchedule(t).forEach(({date})=>{
                 const d=new Date(date+'T00:00:00Z');
-                if (d>=ps&&d<pe) total[t.couponCurrency]=(total[t.couponCurrency]||0)+coupon;
+                if (d>=ps&&d<pe) {
+                    const coupon=calcFCNCoupon(t,date); // Act/365 per settlement date
+                    total[t.couponCurrency]=(total[t.couponCurrency]||0)+coupon;
+                }
             });
         });
         return total;
@@ -3104,7 +3132,7 @@ const FCNModule = ({prices}) => {
         const sched=buildFCNSchedule(trade);
         const settlementEntry=sched.find(s=>s.date===date);
         const isMaturity=settlementEntry?.isMaturity||false;
-        const coupon=calcFCNCoupon(trade);
+        const coupon=calcFCNCoupon(trade,date); // Act/365 for this specific settlement
         const underlyingPairs=(trade.underlyings||[]).map(u=>u.pair).join(', ');
         let maturityType='—', notionalReturned=0;
         if(isMaturity){
