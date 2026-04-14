@@ -2408,18 +2408,21 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
         activeTrades.flatMap(t=>(t.underlyings||[]).map(u=>(u.pair||'').split('/')[0]).filter(s=>FCN_CRYPTO.includes(s)))
     )];
 
-    // Upcoming settlements next 7 days
-    const upcoming = [];
+    // Build overdue (past 30 days, unpaid) and upcoming (next 7 days) settlement lists
+    const past30fcn = new Date(new Date().getTime()-30*86400000).toISOString().split('T')[0];
+    const overdueF = [], upcoming = [];
     trades.forEach(trade => {
         if (!['Active','Knocked Out','Exercised','Matured'].includes(trade.status)) return;
         const sched = buildFCNSchedule(trade);
         const coupon = calcFCNCoupon(trade);
         sched.forEach(({date,isMaturity}) => {
-            if (date>=today && date<=in7 && !(trade.paidSettlements||[]).includes(date)) {
-                upcoming.push({trade,date,isMaturity,coupon,weekend:isWeekend(date)});
-            }
+            if ((trade.paidSettlements||[]).includes(date)) return;
+            const entry = {trade,date,isMaturity,coupon,weekend:isWeekend(date)};
+            if (date < today && date >= past30fcn) overdueF.push(entry);
+            else if (date >= today && date <= in7) upcoming.push(entry);
         });
     });
+    overdueF.sort((a,b)=>b.date.localeCompare(a.date));
     upcoming.sort((a,b)=>a.date.localeCompare(b.date));
 
     // Monthly coupon totals
@@ -2505,92 +2508,112 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
                 </div>
             </div>
 
-            {/* Settlements due table */}
-            {upcoming.length>0&&(
-                <div className="card overflow-hidden">
-                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                        <p className="text-sm font-semibold text-slate-300">Settlements Due (Next 7 Days)</p>
-                        <span className="text-xs text-slate-500">{upcoming.length} pending</span>
-                    </div>
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                            <thead>
-                                <tr className="border-b border-slate-800 bg-slate-900/40">
-                                    {['Client','Date','Day','Coupon','CCY','Underlying(s) — KO / Strike','Type','Action'].map(h=>(
-                                        <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
-                                    ))}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {upcoming.map((s,i)=>{
-                                    const underlyings = s.trade.underlyings||[];
-                                    return(
-                                        <tr key={i} className={`border-b border-slate-800/50 ${s.weekend?'bg-amber-900/10':''} ${s.isMaturity?'bg-cyan-900/10':''}`}>
-                                            <td className="px-3 py-2.5 font-medium text-slate-200">{s.trade.clientName}</td>
-                                            <td className={`px-3 py-2.5 mono ${s.weekend?'text-amber-400':s.isMaturity?'text-cyan-400':'text-slate-300'}`}>
-                                                {s.date}{s.weekend&&<span className="ml-1 text-[10px] text-amber-500">WE</span>}
-                                            </td>
-                                            <td className="px-3 py-2.5 text-slate-400">{dayName(s.date)}</td>
-                                            <td className="px-3 py-2.5 mono text-yellow-400 font-medium">
-                                                {s.isMaturity
-                                                    ?<span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-slate-500">+ notional</span></span>
-                                                    :fmtFCNCompact(s.coupon,s.trade.couponCurrency)
-                                                }
-                                            </td>
-                                            <td className="px-3 py-2.5 text-slate-400">{s.trade.couponCurrency}</td>
-                                            {/* Show all underlying KO or Strike prices */}
-                                            <td className="px-3 py-2.5">
-                                                <div className="space-y-0.5">
-                                                    {underlyings.map((u,ui)=>{
-                                                        const liveP = getPriceForPair(u.pair,prices);
-                                                        if (s.isMaturity) {
-                                                            const strike=parseFloat(u.strikePrice)||0;
-                                                            const isBelow=liveP>0&&liveP<strike;
-                                                            return(
-                                                                <div key={ui} className="flex items-center gap-1.5">
-                                                                    <span className="text-slate-500">{u.pair}</span>
-                                                                    <span className={`mono ${isBelow?'text-red-400':'text-purple-400'}`}>${fmt(strike,2)}</span>
-                                                                    <span className="text-slate-600 text-[10px]">STRIKE</span>
-                                                                    {liveP>0&&<span className="text-slate-500 text-[10px]">live:${fmt(liveP,2)}</span>}
-                                                                </div>
-                                                            );
-                                                        } else {
-                                                            const ko=u.koEnabled?parseFloat(u.koPrice):null;
-                                                            const isAbove=ko&&liveP>0&&liveP>ko;
-                                                            return(
-                                                                <div key={ui} className="flex items-center gap-1.5">
-                                                                    <span className="text-slate-500">{u.pair}</span>
-                                                                    {ko?<><span className={`mono ${isAbove?'text-red-400':'text-orange-400'}`}>${fmt(ko,2)}</span><span className="text-slate-600 text-[10px]">KO</span></>:<span className="text-slate-600">no KO</span>}
-                                                                    {liveP>0&&<span className="text-slate-500 text-[10px]">live:${fmt(liveP,2)}</span>}
-                                                                </div>
-                                                            );
-                                                        }
-                                                    })}
+            {/* FCN settlements — shared row renderer */}
+            {(()=>{
+                const renderFCNRow = (s, i, isPast) => {
+                    const underlyings = s.trade.underlyings||[];
+                    const isStableNotional = !isCrypto(s.trade.notionalCurrency);
+                    // Maturity outcome for display
+                    let maturityNote = null;
+                    if (s.isMaturity) {
+                        if (s.trade.status==='Exercised') {
+                            maturityNote = s.trade.worstOffPair
+                                ? `Exercised — worst-of ${s.trade.worstOffPair} @ $${fmt(parseFloat(s.trade.worstOffStrike),2)}`
+                                : 'Exercised';
+                        } else if (s.trade.status==='Knocked Out') {
+                            maturityNote = 'Knocked Out';
+                        } else {
+                            maturityNote = 'Matured — notional returned';
+                        }
+                    }
+                    const rowBg = isPast
+                        ? 'bg-amber-900/15'
+                        : s.isMaturity ? 'bg-cyan-900/10' : s.weekend ? 'bg-amber-900/10' : '';
+                    return (
+                        <tr key={i} className={`border-b border-slate-800/50 ${rowBg}`}>
+                            <td className="px-3 py-2.5 font-medium text-slate-200">
+                                {s.trade.clientName}
+                                {isPast&&<span className="ml-1.5 px-1 py-0.5 bg-amber-900/40 text-amber-400 rounded text-[9px]">OVERDUE</span>}
+                            </td>
+                            <td className={`px-3 py-2.5 mono ${isPast?'text-amber-400':s.isMaturity?'text-cyan-400':s.weekend?'text-amber-400':'text-slate-300'}`}>
+                                {s.date}{s.weekend&&<span className="ml-1 text-[10px] text-amber-500">WE</span>}
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-400">{dayName(s.date)}</td>
+                            <td className="px-3 py-2.5 mono text-yellow-400 font-medium">
+                                {s.isMaturity
+                                    ?<span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-slate-500">+ notional</span></span>
+                                    :fmtFCNCompact(s.coupon,s.trade.couponCurrency)
+                                }
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-400">{s.trade.couponCurrency}</td>
+                            <td className="px-3 py-2.5">
+                                {maturityNote
+                                    ? <span className={`text-xs ${s.trade.status==='Exercised'?'text-purple-400':s.trade.status==='Knocked Out'?'text-orange-400':'text-blue-400'}`}>{maturityNote}</span>
+                                    : <div className="space-y-0.5">
+                                        {underlyings.map((u,ui)=>{
+                                            const liveP=getPriceForPair(u.pair,prices);
+                                            const ko=u.koEnabled?parseFloat(u.koPrice):null;
+                                            const strike=parseFloat(u.strikePrice)||0;
+                                            const isAboveKO=ko&&liveP>0&&liveP>ko;
+                                            return(
+                                                <div key={ui} className="flex items-center gap-1.5 flex-wrap">
+                                                    <span className="text-slate-500 text-[10px]">{u.pair}</span>
+                                                    {ko&&<><span className={`mono text-[10px] ${isAboveKO?'text-red-400':'text-orange-400'}`}>${fmt(ko,2)}</span><span className="text-slate-600 text-[9px]">KO</span></>}
+                                                    <span className="mono text-[10px] text-purple-400">${fmt(strike,2)}</span><span className="text-slate-600 text-[9px]">STRIKE</span>
+                                                    {!isPast&&liveP>0&&<span className="text-slate-500 text-[9px]">live:${fmt(liveP,2)}</span>}
                                                 </div>
-                                            </td>
-                                            <td className="px-3 py-2.5">
-                                                {s.isMaturity
-                                                    ?<span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-[10px]">MATURITY</span>
-                                                    :<span className="px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded text-[10px]">COUPON</span>
-                                                }
-                                            </td>
-                                            <td className="px-3 py-2.5">
-                                                <button onClick={()=>onConfirmPayment(s.trade.id,s.date)}
-                                                    className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 rounded text-green-400 text-[10px] transition-colors">
-                                                    ✓ Confirm
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            )}
-            {upcoming.length===0&&(
-                <div className="card p-6 text-center text-slate-500 text-sm">No settlements due in the next 7 days.</div>
-            )}
+                                            );
+                                        })}
+                                    </div>
+                                }
+                            </td>
+                            <td className="px-3 py-2.5">
+                                {s.isMaturity
+                                    ?<span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-[10px]">MATURITY</span>
+                                    :<span className="px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded text-[10px]">COUPON</span>
+                                }
+                            </td>
+                            <td className="px-3 py-2.5">
+                                <button onClick={()=>onConfirmPayment(s.trade.id,s.date)}
+                                    className={`px-2 py-1 border rounded text-[10px] transition-colors whitespace-nowrap ${isPast?'bg-amber-600/20 hover:bg-amber-600/40 border-amber-500/30 text-amber-400':'bg-green-600/20 hover:bg-green-600/40 border-green-500/30 text-green-400'}`}>
+                                    ✓ Confirm
+                                </button>
+                            </td>
+                        </tr>
+                    );
+                };
+                const fcnHeaders = ['Client','Date','Day','Coupon','CCY','Underlying(s) — KO / Strike','Type','Action'];
+                const fcnThead = (<thead><tr className="border-b border-slate-800 bg-slate-900/40">{fcnHeaders.map(h=>(<th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>))}</tr></thead>);
+                return (<>
+                    {overdueF.length>0&&(
+                        <div className="card overflow-hidden mb-3">
+                            <div className="px-4 py-3 border-b border-amber-800/30 bg-amber-900/10 flex items-center justify-between">
+                                <p className="text-sm font-semibold text-amber-400 flex items-center gap-2">
+                                    <span className="w-2 h-2 rounded-full bg-amber-400 inline-block animate-pulse"/>
+                                    Overdue Settlements (Last 30 Days)
+                                </p>
+                                <span className="text-xs text-amber-500/70">{overdueF.length} unconfirmed</span>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs">{fcnThead}<tbody>{overdueF.map((s,i)=>renderFCNRow(s,i,true))}</tbody></table>
+                            </div>
+                        </div>
+                    )}
+                    {upcoming.length>0?(
+                        <div className="card overflow-hidden">
+                            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                                <p className="text-sm font-semibold text-slate-300">Settlements Due (Next 7 Days)</p>
+                                <span className="text-xs text-slate-500">{upcoming.length} pending</span>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs">{fcnThead}<tbody>{upcoming.map((s,i)=>renderFCNRow(s,i,false))}</tbody></table>
+                            </div>
+                        </div>
+                    ):(
+                        <div className="card p-6 text-center text-slate-500 text-sm">No settlements due in the next 7 days.</div>
+                    )}
+                </>);
+            })()}
         </div>
     );
 };
@@ -3000,17 +3023,66 @@ const FCNModule = ({prices}) => {
     const updateTrade=async(t)=>{ setTrades(p=>p.map(x=>x.id===t.id?t:x)); setEditingTrade(null); await pushTrade(t); };
     const deleteTrade=(id)=>{ if(confirm('Delete this FCN trade?')) setTrades(p=>p.filter(t=>t.id!==id)); };
     const confirmPayment=async(tradeId,date)=>{
+        let logEntry=null;
         setTrades(prev=>{
             const updated=prev.map(t=>{
                 if(t.id!==tradeId) return t;
                 const paid=[...(t.paidSettlements||[])];
                 if(!paid.includes(date)) paid.push(date);
                 const u={...t,paidSettlements:paid};
+                // Build settlement log
+                const sched=buildFCNSchedule(t);
+                const settlementEntry=sched.find(s=>s.date===date);
+                const isMaturity=settlementEntry?.isMaturity||false;
+                const coupon=calcFCNCoupon(t);
+                const underlyingPairs=(t.underlyings||[]).map(u=>u.pair).join(', ');
+                let maturityType='—', notionalReturned=0;
+                if(isMaturity){
+                    if(t.status==='Exercised'){
+                        maturityType=`Exercised — worst-of ${t.worstOffPair||'N/A'} @ ${t.worstOffStrike||'N/A'}`;
+                        notionalReturned=0;
+                    } else if(t.status==='Knocked Out'){
+                        maturityType='Knocked Out — notional returned';
+                        notionalReturned=parseFloat(t.notionalAmount)||0;
+                    } else {
+                        maturityType='Matured — notional returned';
+                        notionalReturned=parseFloat(t.notionalAmount)||0;
+                    }
+                }
+                logEntry={
+                    tradeId:t.id, clientName:t.clientName,
+                    settlementDate:date, confirmedAt:new Date().toISOString(),
+                    type:isMaturity?'MATURITY':'COUPON',
+                    couponAmount:coupon.toFixed(isCrypto(t.couponCurrency)?8:2),
+                    couponCcy:t.couponCurrency,
+                    notionalReturned:notionalReturned.toFixed(isCrypto(t.notionalCurrency)?8:2),
+                    notionalCcy:t.notionalCurrency,
+                    maturityType,
+                    underlyingPairs,
+                    kiTriggered:t.knockInTriggered?'YES':'NO',
+                    tradeStatus:t.status,
+                };
                 pushTrade(u);
                 return u;
             });
             return updated;
         });
+        // Log to FCN_Settlements sheet
+        if(logEntry&&config.scriptUrl){
+            try{
+                await fcnSheetsCall(config.scriptUrl,{
+                    action:'logFCNSettlement',
+                    values:JSON.stringify([
+                        logEntry.tradeId, logEntry.clientName,
+                        logEntry.settlementDate, logEntry.confirmedAt,
+                        logEntry.type, logEntry.couponAmount, logEntry.couponCcy,
+                        logEntry.notionalReturned, logEntry.notionalCcy,
+                        logEntry.maturityType, logEntry.underlyingPairs,
+                        logEntry.kiTriggered, logEntry.tradeStatus,
+                    ])
+                });
+            } catch(e){console.error('FCN settlement log failed:',e.message);}
+        }
     };
 
     const fetchFromSheets=async()=>{
@@ -3224,7 +3296,7 @@ const accRowToTrade = (r) => ({
 });
 
 // ─── ACCUMULATOR DASHBOARD ────────────────────────────────────────────────────
-const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
+const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) => {
     const today = todayUTC();
     const in7 = new Date(new Date().getTime()+7*86400000).toISOString().split('T')[0];
     const activeTrades = trades.filter(t=>t.status==='Active');
@@ -3349,10 +3421,18 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing}) => {
                             <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
                             <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.remaining,2)}</td>
                             <td className="px-3 py-2.5">
-                                <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
-                                    className={`px-2 py-1 border rounded text-[10px] transition-colors whitespace-nowrap ${isPast?'bg-amber-600/20 hover:bg-amber-600/40 border-amber-500/30 text-amber-400':'bg-green-600/20 hover:bg-green-600/40 border-green-500/30 text-green-400'}`}>
-                                    ✓ Confirm
-                                </button>
+                                <div className="flex gap-1 flex-wrap">
+                                    {!f?.fixingPrice&&isPast&&(
+                                        <button onClick={()=>onFetchPrice(s.trade.id,s.date,s.trade.underlyingPair)}
+                                            className="px-2 py-1 bg-cyan-900/30 hover:bg-cyan-900/50 border border-cyan-500/30 rounded text-cyan-400 text-[10px] transition-colors flex items-center gap-1">
+                                            ↻ Fetch
+                                        </button>
+                                    )}
+                                    <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
+                                        className={`px-2 py-1 border rounded text-[10px] transition-colors whitespace-nowrap ${isPast?'bg-amber-600/20 hover:bg-amber-600/40 border-amber-500/30 text-amber-400':'bg-green-600/20 hover:bg-green-600/40 border-green-500/30 text-green-400'}`}>
+                                        ✓ Confirm
+                                    </button>
+                                </div>
                             </td>
                         </tr>
                     );
@@ -3801,6 +3881,51 @@ const AccumulatorModule = ({prices}) => {
     // Auto-sync from Sheets on load and every 30 seconds — picks up trades added by other users
     useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
 
+    // Auto-fetch missing Binance fixing prices for past settlement dates (up to 30 days back).
+    // Runs on load and whenever trades change. Silently populates prices so only Confirm is needed.
+    useEffect(()=>{
+        const today=todayUTC();
+        const past30=new Date(new Date().getTime()-30*86400000).toISOString().split('T')[0];
+        const toFetch=[];
+        trades.forEach(trade=>{
+            if(!['Active','Knocked Out'].includes(trade.status)) return;
+            const symbol=ACC_UNDERLYING_SYMBOLS[trade.underlyingPair];
+            if(!symbol) return;
+            buildAccSchedule(trade).forEach(date=>{
+                if(date>=today||date<past30) return;
+                const existing=(trade.fixings||[]).find(f=>f.date===date);
+                if(existing?.fixingPrice) return; // already have price
+                toFetch.push({tradeId:trade.id,date,symbol});
+            });
+        });
+        if(!toFetch.length) return;
+        // Fetch sequentially with 300ms delay to avoid rate limiting
+        (async()=>{
+            for(const {tradeId,date,symbol} of toFetch){
+                try{
+                    await new Promise(r=>setTimeout(r,300));
+                    const price=await fetchBinanceFixing(symbol,date);
+                    setTrades(prev=>prev.map(trade=>{
+                        if(trade.id!==tradeId) return trade;
+                        const fixings=[...(trade.fixings||[])];
+                        const idx=fixings.findIndex(f=>f.date===date);
+                        if(idx>=0){
+                            if(fixings[idx].fixingPrice) return trade; // already set
+                            fixings[idx]={...fixings[idx],fixingPrice:price.toFixed(2)};
+                        } else {
+                            fixings.push({date,fixingPrice:price.toFixed(2),confirmed:false});
+                        }
+                        const updated={...trade,fixings};
+                        pushTrade(updated);
+                        return updated;
+                    }));
+                } catch(e){
+                    console.warn('Auto-fetch failed for '+symbol+' '+date+':',e.message);
+                }
+            }
+        })();
+    },[trades.length]); // run when trade count changes (new sync)
+
     const pushTrade = async (trade) => {
         if (!config.scriptUrl) return;
         try {
@@ -3929,7 +4054,14 @@ const AccumulatorModule = ({prices}) => {
 
     return (
         <div>
-            <AccumulatorDashboard trades={trades} prices={prices} onConfirmFixing={confirmFixing}/>
+            <AccumulatorDashboard trades={trades} prices={prices} onConfirmFixing={confirmFixing} onFetchPrice={async(tradeId,date,pair)=>{
+                const symbol=ACC_UNDERLYING_SYMBOLS[pair]||'';
+                if(!symbol) return;
+                try{
+                    const price=await fetchBinanceFixing(symbol,date);
+                    saveFixing(tradeId,date,price.toFixed(2));
+                } catch(e){alert('Failed to fetch price: '+e.message);}
+            }}/>
 
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
