@@ -2391,7 +2391,7 @@ const rowToTrade = (r) => ({
 });
 
 // ─── FCN DASHBOARD ────────────────────────────────────────────────────────────
-const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
+const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
     const today = todayUTC();
     const in7 = new Date(new Date().getTime()+7*86400000).toISOString().split('T')[0];
     const activeTrades = trades.filter(t=>t.status==='Active');
@@ -2543,6 +2543,17 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
                                 {s.date}{s.weekend&&<span className="ml-1 text-[10px] text-amber-500">WE</span>}
                             </td>
                             <td className="px-3 py-2.5 text-slate-400">{dayName(s.date)}</td>
+                            <td className="px-3 py-2.5 mono">
+                                {isPast ? (()=>{
+                                    const underlyings=s.trade.underlyings||[];
+                                    const pair=underlyings[0]?.pair||'';
+                                    const sym=pair.split('/')[0]+(pair.split('/')[1]||'USDT');
+                                    const fp=fixingPrices[sym+'|'+s.date];
+                                    return fp
+                                        ? <span className="text-white">${fmt(parseFloat(fp),2)}</span>
+                                        : <span className="text-slate-600 text-[10px]">fetching…</span>;
+                                })() : <span className="text-slate-600">—</span>}
+                            </td>
                             <td className="px-3 py-2.5 mono text-yellow-400 font-medium">
                                 {s.isMaturity
                                     ?<span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-slate-500">+ notional</span></span>
@@ -2588,7 +2599,7 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
                         </tr>
                     );
                 };
-                const fcnHeaders = ['Client','Date','Day','Coupon','CCY','Underlying(s) — KO / Strike','Type','Action'];
+                const fcnHeaders = ['Client','Date','Day','Fixing Price','Coupon','CCY','Underlying(s) — KO / Strike','Type','Action'];
                 const fcnThead = (<thead><tr className="border-b border-slate-800 bg-slate-900/40">{fcnHeaders.map(h=>(<th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>))}</tr></thead>);
                 return (<>
                     {overdueF.length>0&&(
@@ -3004,6 +3015,55 @@ const FCNModule = ({prices}) => {
     // Auto-sync from Sheets on load and every 30 seconds — picks up trades added by other users
     useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
 
+    // fixingPrices: map of "SYMBOL|YYYY-MM-DD" → price, for overdue FCN settlement dates.
+    // FCN uses Binance Price Index (08:00 UTC) same as Accumulator.
+    const [fixingPrices,setFixingPrices]=useState({});
+
+    // Auto-fetch Binance fixing prices for overdue FCN settlement dates.
+    // Uses first underlying pair per trade. Runs on load + every 60s + on trade count change.
+    const fcnAutoFetch=useCallback(async()=>{
+        const today=todayUTC();
+        const nowSGT=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
+        const past4pm=nowSGT.getHours()>=16;
+        const past30=new Date(new Date().getTime()-30*86400000).toISOString().split('T')[0];
+        const toFetch=[];
+        trades.forEach(trade=>{
+            if(!['Active','Knocked Out','Exercised','Matured'].includes(trade.status)) return;
+            const underlyings=trade.underlyings||[];
+            if(!underlyings.length) return;
+            // Use first underlying pair for the fixing price
+            const pair=underlyings[0].pair||'';
+            const base=pair.split('/')[0];
+            const quote=pair.split('/')[1]||'USDT';
+            const symbol=base+quote; // e.g. BTCUSDT
+            buildFCNSchedule(trade).forEach(({date})=>{
+                if((trade.paidSettlements||[]).includes(date)) return;
+                const isOverdue=date<today||(date===today&&past4pm);
+                if(!isOverdue||date<past30) return;
+                const key=symbol+'|'+date;
+                if(fixingPrices[key]) return; // already fetched
+                toFetch.push({key,symbol,date});
+            });
+        });
+        // Deduplicate by key
+        const unique=[...new Map(toFetch.map(x=>[x.key,x])).values()];
+        if(!unique.length) return;
+        for(const {key,symbol,date} of unique){
+            try{
+                await new Promise(r=>setTimeout(r,300));
+                const price=await fetchBinanceFixing(symbol,date);
+                setFixingPrices(prev=>({...prev,[key]:price.toFixed(2)}));
+            } catch(e){
+                console.warn('FCN auto-fetch failed for '+symbol+' '+date+':',e.message);
+            }
+        }
+    },[trades,fixingPrices]);
+    useEffect(()=>{
+        fcnAutoFetch();
+        const t=setInterval(fcnAutoFetch,60000);
+        return()=>clearInterval(t);
+    },[trades.length]);
+
     // Barrier check at 4pm SGT on settlement dates
     useEffect(()=>{
         const nowSGT=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
@@ -3116,7 +3176,7 @@ const FCNModule = ({prices}) => {
 
     return(
         <div>
-            <FCNDashboard trades={trades} prices={prices} onConfirmPayment={confirmPayment}/>
+            <FCNDashboard trades={trades} prices={prices} onConfirmPayment={confirmPayment} fixingPrices={fixingPrices}/>
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
                     <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5">
@@ -3896,50 +3956,61 @@ const AccumulatorModule = ({prices}) => {
     // Auto-sync from Sheets on load and every 30 seconds — picks up trades added by other users
     useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
 
-    // Auto-fetch missing Binance fixing prices for past settlement dates (up to 30 days back).
-    // Runs on load and whenever trades change. Silently populates prices so only Confirm is needed.
-    useEffect(()=>{
+    // Auto-fetch missing Binance fixing prices for overdue settlement dates (up to 30 days back).
+    // Includes today's settlements once 4pm SGT has passed (fixing window closed).
+    // Runs on load, every 60 seconds, and whenever trade count changes.
+    const autoFetchMissingPrices = useCallback(async()=>{
         const today=todayUTC();
+        const nowSGT=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
+        const past4pm=nowSGT.getHours()>=16;
         const past30=new Date(new Date().getTime()-30*86400000).toISOString().split('T')[0];
         const toFetch=[];
-        trades.forEach(trade=>{
-            if(!['Active','Knocked Out'].includes(trade.status)) return;
-            const symbol=ACC_UNDERLYING_SYMBOLS[trade.underlyingPair];
-            if(!symbol) return;
-            buildAccSchedule(trade).forEach(date=>{
-                if(date>=today||date<past30) return;
-                const existing=(trade.fixings||[]).find(f=>f.date===date);
-                if(existing?.fixingPrice) return; // already have price
-                toFetch.push({tradeId:trade.id,date,symbol});
+        // Read current trades from state via ref to avoid stale closure
+        setTrades(currentTrades=>{
+            currentTrades.forEach(trade=>{
+                if(!['Active','Knocked Out'].includes(trade.status)) return;
+                const symbol=ACC_UNDERLYING_SYMBOLS[trade.underlyingPair];
+                if(!symbol) return;
+                buildAccSchedule(trade).forEach(date=>{
+                    // Include past dates AND today if past 4pm SGT
+                    const isOverdue = date<today || (date===today && past4pm);
+                    if(!isOverdue||date<past30) return;
+                    const existing=(trade.fixings||[]).find(f=>f.date===date);
+                    if(existing?.fixingPrice) return; // already have price
+                    toFetch.push({tradeId:trade.id,date,symbol});
+                });
             });
+            return currentTrades; // no state change here
         });
         if(!toFetch.length) return;
-        // Fetch sequentially with 300ms delay to avoid rate limiting
-        (async()=>{
-            for(const {tradeId,date,symbol} of toFetch){
-                try{
-                    await new Promise(r=>setTimeout(r,300));
-                    const price=await fetchBinanceFixing(symbol,date);
-                    setTrades(prev=>prev.map(trade=>{
-                        if(trade.id!==tradeId) return trade;
-                        const fixings=[...(trade.fixings||[])];
-                        const idx=fixings.findIndex(f=>f.date===date);
-                        if(idx>=0){
-                            if(fixings[idx].fixingPrice) return trade; // already set
-                            fixings[idx]={...fixings[idx],fixingPrice:price.toFixed(2)};
-                        } else {
-                            fixings.push({date,fixingPrice:price.toFixed(2),confirmed:false});
-                        }
-                        const updated={...trade,fixings};
-                        pushTrade(updated);
-                        return updated;
-                    }));
-                } catch(e){
-                    console.warn('Auto-fetch failed for '+symbol+' '+date+':',e.message);
-                }
+        for(const {tradeId,date,symbol} of toFetch){
+            try{
+                await new Promise(r=>setTimeout(r,300));
+                const price=await fetchBinanceFixing(symbol,date);
+                setTrades(prev=>prev.map(trade=>{
+                    if(trade.id!==tradeId) return trade;
+                    const fixings=[...(trade.fixings||[])];
+                    const idx=fixings.findIndex(f=>f.date===date);
+                    if(idx>=0){
+                        if(fixings[idx].fixingPrice) return trade;
+                        fixings[idx]={...fixings[idx],fixingPrice:price.toFixed(2)};
+                    } else {
+                        fixings.push({date,fixingPrice:price.toFixed(2),confirmed:false});
+                    }
+                    const updated={...trade,fixings};
+                    pushTrade(updated);
+                    return updated;
+                }));
+            } catch(e){
+                console.warn('Auto-fetch failed for '+symbol+' '+date+':',e.message);
             }
-        })();
-    },[trades.length]); // run when trade count changes (new sync)
+        }
+    },[]);
+    useEffect(()=>{
+        autoFetchMissingPrices();
+        const t=setInterval(autoFetchMissingPrices,60000);
+        return()=>clearInterval(t);
+    },[trades.length]); // also re-run when new trades load
 
     const pushTrade = async (trade) => {
         if (!config.scriptUrl) return;
