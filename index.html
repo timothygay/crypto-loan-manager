@@ -2408,7 +2408,10 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
         activeTrades.flatMap(t=>(t.underlyings||[]).map(u=>(u.pair||'').split('/')[0]).filter(s=>FCN_CRYPTO.includes(s)))
     )];
 
-    // Build overdue (past 30 days, unpaid) and upcoming (next 7 days) settlement lists
+    // Build overdue (past 30 days, unpaid) and upcoming (next 7 days) settlement lists.
+    // After 4pm SGT on the settlement date, that date moves to overdue.
+    const nowSGTfcn = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
+    const fcnPast4pm = nowSGTfcn.getHours() >= 16;
     const past30fcn = new Date(new Date().getTime()-30*86400000).toISOString().split('T')[0];
     const overdueF = [], upcoming = [];
     trades.forEach(trade => {
@@ -2418,8 +2421,9 @@ const FCNDashboard = ({trades, prices, onConfirmPayment}) => {
         sched.forEach(({date,isMaturity}) => {
             if ((trade.paidSettlements||[]).includes(date)) return;
             const entry = {trade,date,isMaturity,coupon,weekend:isWeekend(date)};
-            if (date < today && date >= past30fcn) overdueF.push(entry);
-            else if (date >= today && date <= in7) upcoming.push(entry);
+            const isEffectivelyPast = date < today || (date === today && fcnPast4pm);
+            if (isEffectivelyPast && date >= past30fcn) overdueF.push(entry);
+            else if (!isEffectivelyPast && date <= in7) upcoming.push(entry);
         });
     });
     overdueF.sort((a,b)=>b.date.localeCompare(a.date));
@@ -3320,7 +3324,11 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
         portfolioTotals[ccy].remaining += remaining;
     });
 
-    // Build overdue (past 30 days, unconfirmed) and upcoming (next 7 days) lists
+    // Build overdue (past 30 days, unconfirmed) and upcoming (next 7 days) lists.
+    // After 4pm SGT on the settlement date, that date is treated as overdue —
+    // the fixing window has closed and price should be locked.
+    const nowSGTacc = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
+    const past4pmSGT = nowSGTacc.getHours() >= 16;
     const past30 = new Date(new Date().getTime() - 30*86400000).toISOString().split('T')[0];
     const overdue = [], upcoming = [];
     trades.forEach(trade => {
@@ -3333,11 +3341,13 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
             const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<date).length;
             const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
             const entry = {trade, date, existing, remaining, weekend:isWeekend(date)};
-            if (date < today && date >= past30) overdue.push(entry);
-            else if (date >= today && date <= in7) upcoming.push(entry);
+            // After 4pm SGT: today's settlements move to overdue
+            const isEffectivelyPast = date < today || (date === today && past4pmSGT);
+            if (isEffectivelyPast && date >= past30) overdue.push(entry);
+            else if (!isEffectivelyPast && date <= in7) upcoming.push(entry);
         });
     });
-    overdue.sort((a,b)=>b.date.localeCompare(a.date)); // newest first for overdue
+    overdue.sort((a,b)=>b.date.localeCompare(a.date));
     upcoming.sort((a,b)=>a.date.localeCompare(b.date));
 
     return (
@@ -3367,17 +3377,14 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
 
             {/* Settlements table renderer — shared by overdue and upcoming */}
             {(()=>{
-                const nowSGT = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
                 const renderRow = (s, i, isPast) => {
                     const f = s.existing;
-                    // Past rows: price is locked (no live indicative)
-                    // Today before 4pm: use live indicative
-                    // Today after 4pm / future: locked if price entered, else live
-                    const isToday = s.date === todayUTC();
-                    const pastFixingTime = isToday && nowSGT.getHours() >= 16;
+                    // isPast already accounts for 4pm cutoff (today after 4pm → isPast=true).
+                    // For upcoming rows (isPast=false): show live indicative price.
+                    // For overdue rows (isPast=true): show stored price or "price needed".
                     const priceForScenario = f?.fixingPrice
                         ? parseFloat(f.fixingPrice)
-                        : (isPast || pastFixingTime) ? null
+                        : isPast ? null
                         : (prices[accBaseAsset(s.trade.underlyingPair)] || null);
                     const isIndicative = !f?.fixingPrice && priceForScenario !== null;
                     const scenario = priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null;
