@@ -2226,17 +2226,22 @@ const FCN_STABLE = ['USDT','USDC'];
 const isCrypto = (ccy) => FCN_CRYPTO.includes(ccy);
 
 // Format notional/coupon values
+// FCN formatting — truncate (never round) to avoid overstating amounts.
+// Crypto coupon/notional: truncate to 8dp. Stablecoin: truncate to 2dp.
+const truncFCN2 = (n) => Math.floor(Number(n) * 100) / 100;
+const truncFCN8 = (n) => Math.floor(Number(n) * 1e8) / 1e8;
+
 const fmtFCN = (val, ccy) => {
     if (val === null || val === undefined || isNaN(val)) return '—';
-    return isCrypto(ccy)
-        ? Number(val).toFixed(8)
-        : Number(val).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    if (isCrypto(ccy)) return truncFCN8(val).toFixed(8);
+    return truncFCN2(val).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
 };
+// fmtFCNCompact: used for coupon display in tables and cards.
+// Crypto: 8dp truncated. Stablecoin: 2dp truncated (no $ prefix for coupon amounts).
 const fmtFCNCompact = (val, ccy) => {
     if (val === null || val === undefined || isNaN(val)) return '—';
-    return isCrypto(ccy)
-        ? Number(val).toFixed(4)
-        : '$' + Number(val).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+    if (isCrypto(ccy)) return truncFCN8(val).toFixed(8);
+    return truncFCN2(val).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
 };
 
 // Build settlement schedule
