@@ -2581,12 +2581,19 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                             <td className="px-3 py-2.5 mono">
                                 {isPast ? (()=>{
                                     const underlyings=s.trade.underlyings||[];
-                                    const pair=underlyings[0]?.pair||'';
-                                    const sym=pair.split('/')[0]+(pair.split('/')[1]||'USDT');
-                                    const fp=fixingPrices[sym+'|'+s.date];
-                                    return fp
-                                        ? <span className="text-white">${fmt(parseFloat(fp),2)}</span>
-                                        : <span className="text-slate-600 text-[10px]">fetching…</span>;
+                                    const pm=(s.trade.settlementFixings||{})[s.date];
+                                    return <div className="space-y-0.5">
+                                        {underlyings.map(u=>{
+                                            const sym=pairToSymbol(u.pair);
+                                            const fp=pm&&typeof pm==='object'?pm[sym]:null;
+                                            const fallback=fixingPrices[sym+'|'+s.date];
+                                            const price=fp||fallback;
+                                            return <div key={u.pair} className="flex items-center gap-1">
+                                                {underlyings.length>1&&<span className="text-slate-500 text-[9px]">{u.pair}</span>}
+                                                {price?<span className="text-white">${fmt(parseFloat(price),2)}</span>:<span className="text-slate-600 text-[9px]">fetching…</span>}
+                                            </div>;
+                                        })}
+                                    </div>;
                                 })() : <span className="text-slate-600">—</span>}
                             </td>
                             <td className="px-3 py-2.5 mono text-yellow-400 font-medium">
@@ -2772,33 +2779,36 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
                         <tbody>
                             {(()=>{
                                 const sf=trade.settlementFixings||{};
+                                const underlyings=trade.underlyings||[];
+                                const isStable=!isCrypto(trade.notionalCurrency);
                                 const tradeEnded=['Knocked Out','Exercised','Matured'].includes(trade.status);
-                                // Find KO date — first date where stored price triggered KO
+                                // Find KO date — first date where ANY underlying triggered its own KO
                                 let koDateFound=null;
                                 if(tradeEnded){
                                     for(const {date} of schedule){
-                                        const fp=parseFloat(sf[date]||0);
-                                        if(!fp) continue;
-                                        const u=(trade.underlyings||[])[0];
-                                        const isKoHit=u?.koEnabled&&(isCrypto(trade.notionalCurrency)?fp<parseFloat(u.koPrice):fp>parseFloat(u.koPrice));
-                                        if(isKoHit){koDateFound=date;break;}
+                                        const pm=sf[date];
+                                        if(!pm||typeof pm!=='object') continue;
+                                        const hit=underlyings.some(u=>{
+                                            if(!u.koEnabled) return false;
+                                            const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);
+                                            return fp>0&&(isStable?fp>parseFloat(u.koPrice):fp<parseFloat(u.koPrice));
+                                        });
+                                        if(hit){koDateFound=date;break;}
                                     }
                                 }
                                 return schedule.map(({date,isMaturity},i)=>{
-                                    // Hide dates after KO
                                     if(koDateFound&&date>koDateFound) return null;
                                     const isPast=date<today,isPaid=paidSettlements.includes(date),weekend=isWeekend(date);
-                                    const fp=parseFloat(sf[date]||0)||null;
+                                    const pm=sf[date]; // {SYMBOL: price} object or undefined
                                     const couponForDate=calcFCNCoupon(trade,date);
-                                    const u=(trade.underlyings||[])[0];
                                     const isThisKO=koDateFound===date;
-                                    // KO check display
-                                    let koCheckEl=null;
-                                    if(fp&&u?.koEnabled){
-                                        const koP=parseFloat(u.koPrice);
-                                        const isHit=isCrypto(trade.notionalCurrency)?fp<koP:fp>koP;
-                                        koCheckEl=<span className={`px-1 py-0.5 rounded text-[9px] ${isHit?'bg-orange-900/40 text-orange-400':'bg-green-900/20 text-green-400'}`}>{isHit?'KO':'OK'} ${fmt(koP,2)}</span>;
-                                    }
+                                    // Per-underlying price + KO badge
+                                    const uRows=underlyings.map(u=>{
+                                        const sym=pairToSymbol(u.pair);
+                                        const fp=pm&&typeof pm==='object'?parseFloat(pm[sym]||0):0;
+                                        const koHit=fp>0&&u.koEnabled&&(isStable?fp>parseFloat(u.koPrice):fp<parseFloat(u.koPrice));
+                                        return {u,sym,fp:fp||null,koHit};
+                                    });
                                     const rowBg=isThisKO?'bg-orange-900/15':weekend?'bg-amber-900/10':isMaturity?'bg-cyan-900/10':'';
                                     return(
                                         <tr key={date} className={`border-b border-slate-800/40 ${rowBg} ${isPast&&!isPaid&&!isThisKO?'opacity-60':''}`}>
@@ -2809,9 +2819,24 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
                                             </td>
                                             <td className="py-1.5 pr-3 text-slate-400">{dayName(date)}</td>
                                             <td className="py-1.5 pr-3 mono">
-                                                {fp?<span className={isThisKO?'text-orange-300':'text-white'}>${fmt(fp,2)}</span>:<span className="text-slate-600">{isPast?'fetching…':'—'}</span>}
+                                                <div className="space-y-0.5">
+                                                    {uRows.map(({u,fp})=>(
+                                                        <div key={u.pair} className="flex items-center gap-1.5">
+                                                            {underlyings.length>1&&<span className="text-slate-500 text-[9px]">{u.pair}</span>}
+                                                            {fp?<span className={isThisKO?'text-orange-300':'text-white'}>${fmt(fp,2)}</span>:<span className="text-slate-600 text-[9px]">{isPast?'fetching…':'—'}</span>}
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </td>
-                                            <td className="py-1.5 pr-3">{koCheckEl||<span className="text-slate-600">—</span>}</td>
+                                            <td className="py-1.5 pr-3">
+                                                <div className="space-y-0.5">
+                                                    {uRows.map(({u,fp,koHit})=>u.koEnabled?(
+                                                        <div key={u.pair}>
+                                                            {fp?<span className={`px-1 py-0.5 rounded text-[9px] ${koHit?'bg-orange-900/40 text-orange-400':'bg-green-900/20 text-green-400'}`}>{koHit?'KO':'OK'} ${fmt(parseFloat(u.koPrice),2)}</span>:<span className="text-slate-600 text-[9px]">—</span>}
+                                                        </div>
+                                                    ):null)}
+                                                </div>
+                                            </td>
                                             <td className="py-1.5 pr-3 mono text-yellow-400">
                                                 {isThisKO
                                                     ?<span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-slate-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency}</span></span>
@@ -3095,101 +3120,145 @@ const FCNModule = ({prices}) => {
     // Auto-fetch Binance fixing prices for all past FCN settlement dates.
     // Stores prices in both fixingPrices (dashboard) and trade.settlementFixings (per-trade).
     // Also runs barrier checks against stored prices to auto-update trade status.
+    // Helper: get Binance symbol from pair string e.g. "BTC/USDC" → "BTCUSDC"
+    const pairToSymbol = (pair) => { const [b,q]=pair.split('/'); return (b||'')+(q||'USDT'); };
+
+    // Run FCN barrier checks using settlementFixings {date:{SYMBOL:price}}.
+    // Returns updated trade fields: status, knockInTriggered, worstOffPair, worstOffStrike.
+    const fcnBarrierCheck = (trade, sf) => {
+        const underlyings=trade.underlyings||[];
+        const isStable=!isCrypto(trade.notionalCurrency);
+        let newStatus=trade.status==='Active'?'Active':trade.status;
+        let knockInTriggered=trade.knockInTriggered||false;
+        let worstOffPair=trade.worstOffPair||'';
+        let worstOffStrike=trade.worstOffStrike||'';
+        if(newStatus!=='Active') return {newStatus,knockInTriggered,worstOffPair,worstOffStrike};
+        const sched=buildFCNSchedule(trade);
+        for(const {date:d,isMaturity} of sched){
+            const priceMap=sf[d]; // {SYMBOL: price} or null
+            if(!priceMap||typeof priceMap!=='object') continue;
+            // Check all underlyings have prices for this date
+            const allPrices=underlyings.every(u=>priceMap[pairToSymbol(u.pair)]);
+            if(!allPrices) continue; // skip if any underlying price missing
+            if(!isStable){
+                // Variant A: single underlying, crypto notional — KO when price < koPrice
+                const u=underlyings[0];
+                const fp=parseFloat(priceMap[pairToSymbol(u.pair)]||0);
+                if(!fp) continue;
+                if(u.koEnabled&&fp<parseFloat(u.koPrice)){newStatus='Knocked Out';break;}
+                if(trade.knockInEnabled&&!knockInTriggered&&fp<parseFloat(trade.knockInPrice)) knockInTriggered=true;
+                if(isMaturity) newStatus=fp>parseFloat(u.strikePrice||0)&&knockInTriggered?'Exercised':'Matured';
+            } else {
+                // Variant B/C: stablecoin notional, worst-of — each underlying has its own price
+                // KO: ANY underlying price > its own koPrice
+                let koHit=null;
+                for(const u of underlyings){
+                    if(!u.koEnabled) continue;
+                    const fp=parseFloat(priceMap[pairToSymbol(u.pair)]||0);
+                    if(fp>parseFloat(u.koPrice)){koHit=u;break;}
+                }
+                if(koHit){newStatus='Knocked Out';break;}
+                if(isMaturity){
+                    // Worst-of: find underlying furthest below its strike as % of strike
+                    const below=underlyings.filter(u=>{
+                        const fp=parseFloat(priceMap[pairToSymbol(u.pair)]||0);
+                        return fp>0&&fp<parseFloat(u.strikePrice);
+                    });
+                    if(below.length>0){
+                        const worst=below.reduce((w,u)=>{
+                            const fp=parseFloat(priceMap[pairToSymbol(u.pair)]||0);
+                            const wfp=parseFloat(priceMap[pairToSymbol(w.pair)]||0);
+                            const pct=(parseFloat(u.strikePrice)-fp)/parseFloat(u.strikePrice);
+                            const wpct=(parseFloat(w.strikePrice)-wfp)/parseFloat(w.strikePrice);
+                            return pct>wpct?u:w;
+                        });
+                        newStatus='Exercised';worstOffPair=worst.pair;worstOffStrike=worst.strikePrice;
+                    } else newStatus='Matured';
+                }
+            }
+        }
+        return {newStatus,knockInTriggered,worstOffPair,worstOffStrike};
+    };
+
     const fcnAutoFetch=useCallback(async()=>{
         const today=todayUTC();
         const nowSGT=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
         const past4pm=nowSGT.getHours()>=16;
-        // Collect all dates needing fetch across all trades
+        // Build fetch list: one entry per (tradeId, underlying, date) tuple
         const toFetch=[];
         trades.forEach(trade=>{
             if(!['Active','Knocked Out','Exercised','Matured'].includes(trade.status)) return;
             const underlyings=trade.underlyings||[];
             if(!underlyings.length) return;
-            const pair=underlyings[0].pair||'';
-            const base=pair.split('/')[0];
-            const quote=pair.split('/')[1]||'USDT';
-            const symbol=base+quote;
             const sf=trade.settlementFixings||{};
             buildFCNSchedule(trade).forEach(({date})=>{
                 const isOverdue=date<today||(date===today&&past4pm);
                 if(!isOverdue) return;
-                const dashKey=symbol+'|'+date;
-                if(sf[date]&&fixingPrices[dashKey]) return; // already have both
-                toFetch.push({tradeId:trade.id,symbol,date,dashKey,hasSF:!!sf[date]});
+                underlyings.forEach(u=>{
+                    const sym=pairToSymbol(u.pair);
+                    const dashKey=sym+'|'+date;
+                    const alreadyInSF=sf[date]&&sf[date][sym];
+                    const alreadyInDash=fixingPrices[dashKey];
+                    if(alreadyInSF&&alreadyInDash) return;
+                    toFetch.push({tradeId:trade.id,sym,date,dashKey,alreadyInSF});
+                });
             });
         });
-        const unique=[...new Map(toFetch.map(x=>[x.tradeId+'|'+x.date,x])).values()];
+        // Deduplicate by sym+date (same symbol/date shared across trades)
+        const unique=[...new Map(toFetch.map(x=>[x.sym+'|'+x.date,x])).values()];
         if(!unique.length) return;
 
-        for(const {tradeId,symbol,date,dashKey,hasSF} of unique){
+        // Fetch prices sequentially
+        const freshPrices={}; // sym|date → price string
+        for(const {sym,date,dashKey} of unique){
             try{
                 await new Promise(r=>setTimeout(r,300));
-                let price;
-                // Re-use already-fetched price if available
-                if(fixingPrices[dashKey]) price=fixingPrices[dashKey];
-                else{
-                    const p=await fetchBinanceFixing(symbol,date);
-                    price=p.toFixed(2);
+                if(fixingPrices[dashKey]){
+                    freshPrices[dashKey]=fixingPrices[dashKey];
+                } else {
+                    const p=await fetchBinanceFixing(sym,date);
+                    const price=p.toFixed(2);
+                    freshPrices[dashKey]=price;
                     setFixingPrices(prev=>({...prev,[dashKey]:price}));
                 }
-                if(!hasSF){
-                    // Store in trade.settlementFixings and run barrier check
-                    setTrades(prev=>prev.map(trade=>{
-                        if(trade.id!==tradeId) return trade;
-                        const sf={...(trade.settlementFixings||{}),[date]:price};
-                        // Run barrier checks on all past dates in order to determine KO
-                        const underlyings=trade.underlyings||[];
-                        const isStable=!isCrypto(trade.notionalCurrency);
-                        let newStatus=trade.status;
-                        let knockInTriggered=trade.knockInTriggered||false;
-                        let worstOffPair=trade.worstOffPair||'';
-                        let worstOffStrike=trade.worstOffStrike||'';
-                        let koDate=null;
-                        if(newStatus==='Active'){
-                            const sched=buildFCNSchedule(trade);
-                            // Walk schedule in order, check each date with its stored price
-                            for(const {date:d,isMaturity} of sched){
-                                const fp=parseFloat(sf[d]||0);
-                                if(!fp) continue;
-                                if(!isStable){
-                                    // Variant A: crypto notional — KO when price < koPrice
-                                    const u=underlyings[0];
-                                    if(u?.koEnabled&&fp<parseFloat(u.koPrice)){
-                                        newStatus='Knocked Out'; koDate=d; break;
-                                    }
-                                    if(trade.knockInEnabled&&!knockInTriggered&&fp<parseFloat(trade.knockInPrice)){
-                                        knockInTriggered=true;
-                                    }
-                                    if(isMaturity){
-                                        newStatus=fp>parseFloat(u?.strikePrice||0)&&knockInTriggered?'Exercised':'Matured';
-                                    }
-                                } else {
-                                    // Variant B/C: stablecoin — KO when price > koPrice
-                                    const ko=underlyings.find(u=>u.koEnabled&&fp>parseFloat(u.koPrice));
-                                    if(ko){newStatus='Knocked Out';koDate=d;break;}
-                                    if(isMaturity){
-                                        const below=underlyings.filter(u=>fp<parseFloat(u.strikePrice));
-                                        if(below.length>0){
-                                            const worst=below.reduce((w,u)=>{
-                                                const pct=(parseFloat(u.strikePrice)-fp)/parseFloat(u.strikePrice);
-                                                const wpct=(parseFloat(w.strikePrice)-fp)/parseFloat(w.strikePrice);
-                                                return pct>wpct?u:w;
-                                            });
-                                            newStatus='Exercised';worstOffPair=worst.pair;worstOffStrike=worst.strikePrice;
-                                        } else newStatus='Matured';
-                                    }
-                                }
-                            }
-                        }
-                        const updated={...trade,settlementFixings:sf,status:newStatus,knockInTriggered,worstOffPair,worstOffStrike};
-                        pushTrade(updated);
-                        return updated;
-                    }));
-                }
             } catch(e){
-                console.warn('FCN auto-fetch failed for '+symbol+' '+date+':',e.message);
+                console.warn('FCN auto-fetch failed for '+sym+' '+date+':',e.message);
             }
         }
+
+        // Now update each affected trade's settlementFixings and re-run barrier check
+        const affectedTradeIds=[...new Set(toFetch.map(x=>x.tradeId))];
+        setTrades(prev=>prev.map(trade=>{
+            if(!affectedTradeIds.includes(trade.id)) return trade;
+            const underlyings=trade.underlyings||[];
+            const today2=todayUTC();
+            const past4pm2=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'})).getHours()>=16;
+            // Build updated settlementFixings: {date: {SYMBOL: price}}
+            let sf={};
+            // Preserve existing valid entries
+            Object.entries(trade.settlementFixings||{}).forEach(([d,v])=>{
+                if(typeof v==='object'&&v!==null) sf[d]={...v};
+                // discard old string-format entries (migration)
+            });
+            // Merge new prices
+            buildFCNSchedule(trade).forEach(({date})=>{
+                const isOverdue=date<today2||(date===today2&&past4pm2);
+                if(!isOverdue) return;
+                underlyings.forEach(u=>{
+                    const sym=pairToSymbol(u.pair);
+                    const dashKey=sym+'|'+date;
+                    const price=freshPrices[dashKey]||fixingPrices[dashKey];
+                    if(!price) return;
+                    if(!sf[date]) sf[date]={};
+                    sf[date][sym]=price;
+                });
+            });
+            // Run barrier check with updated fixings
+            const {newStatus,knockInTriggered,worstOffPair,worstOffStrike}=fcnBarrierCheck(trade,sf);
+            const updated={...trade,settlementFixings:sf,status:newStatus,knockInTriggered,worstOffPair,worstOffStrike};
+            pushTrade(updated);
+            return updated;
+        }));
     },[trades,fixingPrices]);
     useEffect(()=>{
         fcnAutoFetch();
