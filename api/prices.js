@@ -35,17 +35,19 @@ export default async function handler(req, res) {
             return res.status(400).json({ success: false, error: 'Invalid exchange. Use BINANCE or BYBIT' });
         }
 
+        if (result.price === null) {
+            return res.status(404).json({ success: false, error: `No price found for ${exc} ${sym} on ${date}` });
+        }
         return res.status(200).json({
-            success: result.price !== null,
+            success: true,
             exchange: exc, symbol: sym, date,
-            price: result.price !== null ? result.price.toFixed(2) : null,
+            price: result.price.toFixed(2),
             source: result.source,
-            debug: result.debug || null,
         });
 
     } catch (err) {
         console.error('Price proxy error:', err);
-        return res.status(500).json({ success: false, error: err.message, stack: err.stack });
+        return res.status(500).json({ success: false, error: err.message });
     }
 }
 
@@ -53,8 +55,6 @@ async function fetchBinanceFixing(symbol, dateStr) {
     const target = new Date(`${dateStr}T08:00:00Z`).getTime();
     const start  = target - 2 * 3600000;
     const end    = target + 2 * 3600000;
-    const debug  = [];
-
     // Try 1: Binance futures Price Index kline
     const indexUrl = `https://fapi.binance.com/fapi/v1/indexPriceKlines?pair=${symbol}&contractType=PERPETUAL&interval=1h&startTime=${start}&endTime=${end}&limit=5`;
     try {
@@ -64,7 +64,7 @@ async function fetchBinanceFixing(symbol, dateStr) {
         const d = JSON.parse(text);
         if (Array.isArray(d) && d.length > 0) {
             const best = findClosest(d, target);
-            if (best) return { price: parseFloat(best[1]), source: 'binance-index', debug };
+            if (best) return { price: parseFloat(best[1]), source: 'binance-index' };
         }
     } catch(e) { debug.push(`index error: ${e.message}`); }
 
@@ -77,7 +77,7 @@ async function fetchBinanceFixing(symbol, dateStr) {
         const d = JSON.parse(text);
         if (Array.isArray(d) && d.length > 0) {
             const best = findClosest(d, target);
-            if (best) return { price: parseFloat(best[1]), source: 'binance-spot', debug };
+            if (best) return { price: parseFloat(best[1]), source: 'binance-spot' };
         }
     } catch(e) { debug.push(`spot error: ${e.message}`); }
 
@@ -90,18 +90,17 @@ async function fetchBinanceFixing(symbol, dateStr) {
         const d = JSON.parse(text);
         if (Array.isArray(d) && d.length > 0) {
             const best = findClosest(d, target);
-            if (best) return { price: parseFloat(best[1]), source: 'binance-us', debug };
+            if (best) return { price: parseFloat(best[1]), source: 'binance-us' };
         }
     } catch(e) { debug.push(`binance.us error: ${e.message}`); }
 
-    return { price: null, source: null, debug };
+    return { price: null, source: null };
 }
 
 async function fetchBybitFixing(symbol, dateStr) {
     const target = new Date(`${dateStr}T08:00:00Z`).getTime();
     const start  = target - 2 * 3600000;
     const end    = target + 2 * 3600000;
-    const debug  = [];
     const url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${symbol}&interval=60&start=${start}&end=${end}&limit=5`;
     try {
         const r = await fetch(url);
@@ -111,10 +110,10 @@ async function fetchBybitFixing(symbol, dateStr) {
         const list = d?.result?.list;
         if (list?.length) {
             const best = findClosest(list, target);
-            if (best) return { price: parseFloat(best[1]), source: 'bybit-kline', debug };
+            if (best) return { price: parseFloat(best[1]), source: 'bybit-kline' };
         }
     } catch(e) { debug.push(`bybit error: ${e.message}`); }
-    return { price: null, source: null, debug };
+    return { price: null, source: null };
 }
 
 function findClosest(candles, target) {
