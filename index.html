@@ -3603,13 +3603,27 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
         if (!['Active','Knocked Out'].includes(trade.status)) return;
         const sched = buildAccSchedule(trade);
         const amount2up = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
+        // For KO'd/Matured trades: find the cutoff date — hide all dates after it.
+        // Use the KO fixing date (first fixing with isKO:true) if available,
+        // otherwise fall back to the last confirmed fixing date.
+        let cutoffDate = null;
+        if (['Knocked Out','Matured'].includes(trade.status)) {
+            const koFixing = (trade.fixings||[]).find(f=>f.isKO);
+            if (koFixing) {
+                cutoffDate = koFixing.date;
+            } else {
+                const confirmed = (trade.fixings||[]).filter(f=>f.confirmed).sort((a,b)=>a.date.localeCompare(b.date));
+                cutoffDate = confirmed.pop()?.date || null;
+            }
+        }
         sched.forEach(date => {
+            // Hide dates after KO/Maturity
+            if (cutoffDate && date > cutoffDate) return;
             const existing = (trade.fixings||[]).find(f=>f.date===date);
             if (existing?.confirmed) return;
             const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<date).length;
             const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
             const entry = {trade, date, existing, remaining, weekend:isWeekend(date)};
-            // After 4pm SGT: today's settlements move to overdue
             const isEffectivelyPast = date < today || (date === today && past4pmSGT);
             if (isEffectivelyPast && date >= past30) overdue.push(entry);
             else if (!isEffectivelyPast && date <= in7) upcoming.push(entry);
