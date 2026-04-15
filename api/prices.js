@@ -55,44 +55,39 @@ async function fetchBinanceFixing(symbol, dateStr) {
     const target = new Date(`${dateStr}T08:00:00Z`).getTime();
     const start  = target - 2 * 3600000;
     const end    = target + 2 * 3600000;
+
     // Try 1: Binance futures Price Index kline
     const indexUrl = `https://fapi.binance.com/fapi/v1/indexPriceKlines?pair=${symbol}&contractType=PERPETUAL&interval=1h&startTime=${start}&endTime=${end}&limit=5`;
     try {
         const r = await fetch(indexUrl);
-        const text = await r.text();
-        debug.push(`index status=${r.status} body=${text.substring(0,100)}`);
-        const d = JSON.parse(text);
+        const d = await r.json();
         if (Array.isArray(d) && d.length > 0) {
             const best = findClosest(d, target);
             if (best) return { price: parseFloat(best[1]), source: 'binance-index' };
         }
-    } catch(e) { debug.push(`index error: ${e.message}`); }
+    } catch(e) {}
 
     // Try 2: Binance spot kline
     const spotUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&startTime=${start}&endTime=${end}&limit=5`;
     try {
         const r = await fetch(spotUrl);
-        const text = await r.text();
-        debug.push(`spot status=${r.status} body=${text.substring(0,100)}`);
-        const d = JSON.parse(text);
+        const d = await r.json();
         if (Array.isArray(d) && d.length > 0) {
             const best = findClosest(d, target);
             if (best) return { price: parseFloat(best[1]), source: 'binance-spot' };
         }
-    } catch(e) { debug.push(`spot error: ${e.message}`); }
+    } catch(e) {}
 
-    // Try 3: Binance US (no geo-restriction)
+    // Try 3: Binance US — no geo-restriction from Vercel US servers
     const usUrl = `https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=1h&startTime=${start}&endTime=${end}&limit=5`;
     try {
         const r = await fetch(usUrl);
-        const text = await r.text();
-        debug.push(`binance.us status=${r.status} body=${text.substring(0,100)}`);
-        const d = JSON.parse(text);
+        const d = await r.json();
         if (Array.isArray(d) && d.length > 0) {
             const best = findClosest(d, target);
             if (best) return { price: parseFloat(best[1]), source: 'binance-us' };
         }
-    } catch(e) { debug.push(`binance.us error: ${e.message}`); }
+    } catch(e) {}
 
     return { price: null, source: null };
 }
@@ -104,15 +99,13 @@ async function fetchBybitFixing(symbol, dateStr) {
     const url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${symbol}&interval=60&start=${start}&end=${end}&limit=5`;
     try {
         const r = await fetch(url);
-        const text = await r.text();
-        debug.push(`bybit status=${r.status} body=${text.substring(0,100)}`);
-        const d = JSON.parse(text);
+        const d = await r.json();
         const list = d?.result?.list;
         if (list?.length) {
             const best = findClosest(list, target);
             if (best) return { price: parseFloat(best[1]), source: 'bybit-kline' };
         }
-    } catch(e) { debug.push(`bybit error: ${e.message}`); }
+    } catch(e) {}
     return { price: null, source: null };
 }
 
