@@ -2681,7 +2681,7 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
 };
 
 // ─── FCN ORDER CARD ───────────────────────────────────────────────────────────
-const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
+const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus}) => {
     const [expanded,setExpanded]=useState(false);
     const schedule=buildFCNSchedule(trade);
     const today=todayUTC();
@@ -2716,6 +2716,9 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete}) => {
                     <button onClick={()=>setExpanded(!expanded)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1">Schedule {expanded?'▲':'▼'}</button>
                     <button onClick={()=>onEdit(trade)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>
                     <button onClick={()=>onDelete(trade.id)} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>
+                    {trade.status!=='Active'&&<button onClick={()=>onResetStatus(trade.id)}
+                        title="Reset to Active — barrier check will re-derive status from stored fixing prices"
+                        className="px-2 py-1 rounded-lg bg-slate-700 border border-slate-600 text-slate-300 hover:bg-slate-600 text-xs">↺ Reset</button>}
                 </div>
             </div>
 
@@ -3126,13 +3129,14 @@ const FCNModule = ({prices}) => {
     // Run FCN barrier checks using settlementFixings {date:{SYMBOL:price}}.
     // Returns updated trade fields: status, knockInTriggered, worstOffPair, worstOffStrike.
     const fcnBarrierCheck = (trade, sf) => {
+        // Always re-derive status from stored fixing prices — never trust current status.
+        // This corrects any KO/Exercised/Matured set incorrectly by live price checks.
         const underlyings=trade.underlyings||[];
         const isStable=!isCrypto(trade.notionalCurrency);
-        let newStatus=trade.status==='Active'?'Active':trade.status;
-        let knockInTriggered=trade.knockInTriggered||false;
-        let worstOffPair=trade.worstOffPair||'';
-        let worstOffStrike=trade.worstOffStrike||'';
-        if(newStatus!=='Active') return {newStatus,knockInTriggered,worstOffPair,worstOffStrike};
+        let newStatus='Active'; // always start from Active and re-derive
+        let knockInTriggered=false; // re-derive from scratch
+        let worstOffPair='';
+        let worstOffStrike='';
         const sched=buildFCNSchedule(trade);
         for(const {date:d,isMaturity} of sched){
             const priceMap=sf[d]; // {SYMBOL: price} or null
@@ -3267,18 +3271,11 @@ const FCNModule = ({prices}) => {
     },[trades.length]);
 
     // Barrier check at 4pm SGT on settlement dates
-    useEffect(()=>{
-        const nowSGT=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
-        if(nowSGT.getHours()<16) return;
-        const todayStr=todayUTC();
-        setTrades(prev=>prev.map(trade=>{
-            if(trade.status!=='Active') return trade;
-            const sched=buildFCNSchedule(trade);
-            const isSettlementToday=sched.some(s=>s.date===todayStr);
-            const isMaturityToday=sched.some(s=>s.date===todayStr&&s.isMaturity);
-            return checkBarriers(trade,prices,todayStr,isSettlementToday,isMaturityToday);
-        }));
-    },[prices]);
+    // Note: live-price barrier checks (checkBarriers) intentionally disabled.
+    // Trade status is derived exclusively from stored Binance fixing prices
+    // via fcnBarrierCheck / fcnAutoFetch. This prevents live price fluctuations
+    // from incorrectly triggering KO/Exercised/Matured status changes.
+    // useEffect([prices]) removed — no live barrier updates.
 
     const pushTrade=async(trade)=>{
         if(!config.scriptUrl) return;
@@ -3290,6 +3287,15 @@ const FCNModule = ({prices}) => {
     const addTrade=async(t)=>{ const trade={...t,createdAt:new Date().toISOString()}; setTrades(p=>[...p,trade]); setShowAdd(false); await pushTrade(trade); };
     const updateTrade=async(t)=>{ setTrades(p=>p.map(x=>x.id===t.id?t:x)); setEditingTrade(null); await pushTrade(t); };
     const deleteTrade=(id)=>{ if(confirm('Delete this FCN trade?')) setTrades(p=>p.filter(t=>t.id!==id)); };
+    const resetTradeStatus=(id)=>{
+        // Reset to Active so fcnBarrierCheck can re-derive status from stored fixing prices
+        setTrades(prev=>prev.map(t=>{
+            if(t.id!==id) return t;
+            const reset={...t,status:'Active',knockInTriggered:false,worstOffPair:'',worstOffStrike:''};
+            pushTrade(reset);
+            return reset;
+        }));
+    };
     const confirmPayment=async(tradeId,date)=>{
         // Compute everything from current trades state BEFORE calling setTrades —
         // same fix as Accumulator: setTrades updater runs asynchronously so
@@ -3403,7 +3409,7 @@ const FCNModule = ({prices}) => {
             )}
             {filtered.length===0
                 ?<div className="card p-12 text-center"><p className="text-slate-400">No FCN trades found.</p></div>
-                :<div className="space-y-3">{filtered.map(t=><FCNOrderCard key={t.id} trade={t} prices={prices} onEdit={setEditingTrade} onDelete={deleteTrade}/>)}</div>
+                :<div className="space-y-3">{filtered.map(t=><FCNOrderCard key={t.id} trade={t} prices={prices} onEdit={setEditingTrade} onDelete={deleteTrade} onResetStatus={resetTradeStatus}/>)}</div>
             }
             {showAdd&&<FCNFormModal onSave={addTrade} onClose={()=>setShowAdd(false)}/>}
             {editingTrade&&<FCNFormModal trade={editingTrade} onSave={updateTrade} onClose={()=>setEditingTrade(null)}/>}
