@@ -3593,8 +3593,8 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
     });
 
     // Build overdue (past 30 days, unconfirmed) and upcoming (next 7 days) lists.
-    // After 4pm SGT on the settlement date, that date is treated as overdue —
-    // the fixing window has closed and price should be locked.
+    // After 4pm SGT on the settlement date, that date is treated as overdue.
+    // KO'd trades get a special KO-return entry showing remaining to be returned.
     const nowSGTacc = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
     const past4pmSGT = nowSGTacc.getHours() >= 16;
     const past30 = new Date(new Date().getTime() - 30*86400000).toISOString().split('T')[0];
@@ -3603,22 +3603,29 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
         if (!['Active','Knocked Out'].includes(trade.status)) return;
         const sched = buildAccSchedule(trade);
         const amount2up = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
-        // For KO'd/Matured trades: find the cutoff date — hide all dates after it.
-        // Use the KO fixing date (first fixing with isKO:true) if available,
-        // otherwise fall back to the last confirmed fixing date.
-        let cutoffDate = null;
-        if (['Knocked Out','Matured'].includes(trade.status)) {
+
+        if (trade.status === 'Knocked Out') {
+            // KO'd trade: show the KO fixing date entry so remaining can be confirmed
             const koFixing = (trade.fixings||[]).find(f=>f.isKO);
-            if (koFixing) {
-                cutoffDate = koFixing.date;
-            } else {
-                const confirmed = (trade.fixings||[]).filter(f=>f.confirmed).sort((a,b)=>a.date.localeCompare(b.date));
-                cutoffDate = confirmed.pop()?.date || null;
+            const lastConfirmed = (trade.fixings||[]).filter(f=>f.confirmed).sort((a,b)=>b.date.localeCompare(a.date))[0];
+            // Use KO fixing date, or last confirmed date as fallback
+            const koDate = koFixing?.date || lastConfirmed?.date || null;
+            if (koDate) {
+                const isKOConfirmed = koFixing?.confirmed || false;
+                if (!isKOConfirmed) {
+                    const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<koDate).length;
+                    const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
+                    const isEffectivelyPast = koDate < today || (koDate === today && past4pmSGT);
+                    const entry = {trade, date:koDate, existing:koFixing||null, remaining, weekend:isWeekend(koDate), isKOReturn:true};
+                    if (isEffectivelyPast && koDate >= past30) overdue.push(entry);
+                    else if (!isEffectivelyPast && koDate <= in7) upcoming.push(entry);
+                }
             }
+            return;
         }
+
+        // Active trades: show all unconfirmed settlement dates
         sched.forEach(date => {
-            // Hide dates after KO/Maturity
-            if (cutoffDate && date > cutoffDate) return;
             const existing = (trade.fixings||[]).find(f=>f.date===date);
             if (existing?.confirmed) return;
             const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<date).length;
@@ -3675,15 +3682,23 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                     const amounts = scenario ? accAmounts(s.trade, scenario, confirmedBefore, isKO) : null;
                     const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
                     const tradeIsEnded = ['Knocked Out','Matured'].includes(s.trade.status);
-                    const rowBg = tradeIsEnded
-                        ? 'bg-red-900/15 border-red-800/20'
+                    const rowBg = s.isKOReturn
+                        ? 'bg-orange-900/20 border-orange-800/30'
+                        : tradeIsEnded ? 'bg-red-900/15 border-red-800/20'
                         : isPast ? 'bg-amber-900/15 border-amber-800/30'
                         : isKO ? 'bg-orange-900/10' : s.weekend ? 'bg-amber-900/10' : '';
+                    const displayAmounts = s.isKOReturn ? {
+                        cryptoQty: amounts?.cryptoQty||0,
+                        cryptoCcy: amounts?.cryptoCcy||accBaseAsset(s.trade.underlyingPair),
+                        baseAmount: s.remaining,
+                        baseCcy: s.trade.notionalCurrency,
+                    } : amounts;
                     return (
                         <tr key={i} className={`border-b border-slate-800/50 ${rowBg}`}>
                             <td className="px-3 py-2.5 font-medium text-slate-200">
                                 {s.trade.clientName}
-                                {isPast&&<span className="ml-1.5 px-1 py-0.5 bg-amber-900/40 text-amber-400 rounded text-[9px]">OVERDUE</span>}
+                                {s.isKOReturn&&<span className="ml-1.5 px-1 py-0.5 bg-orange-900/50 text-orange-300 rounded text-[9px]">KO — RETURN</span>}
+                                {!s.isKOReturn&&isPast&&<span className="ml-1.5 px-1 py-0.5 bg-amber-900/40 text-amber-400 rounded text-[9px]">OVERDUE</span>}
                             </td>
                             <td className="px-3 py-2.5 mono text-slate-400">{s.trade.underlyingPair}</td>
                             <td className={`px-3 py-2.5 mono ${isPast?'text-amber-400':s.weekend?'text-amber-400':'text-slate-300'}`}>
@@ -3703,13 +3718,13 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                                 {!ss&&<span className="text-slate-600">—</span>}
                             </td>
                             <td className="px-3 py-2.5 mono text-cyan-400">
-                                {amounts?.cryptoQty>0
-                                    ? <span>{trunc8(amounts.cryptoQty).toFixed(8)} {amounts.cryptoCcy}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
+                                {displayAmounts?.cryptoQty>0
+                                    ? <span>{trunc8(displayAmounts.cryptoQty).toFixed(8)} {displayAmounts.cryptoCcy}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
                                     : '—'}
                             </td>
                             <td className="px-3 py-2.5 mono text-yellow-400">
-                                {amounts?.baseAmount>0
-                                    ? <span>{s.trade.notionalCurrency} {fmt(amounts.baseAmount,2)}{isKO&&!isIndicative&&<span className="text-orange-400/70 text-[9px] ml-1">incl. remaining</span>}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
+                                {displayAmounts?.baseAmount>0
+                                    ? <span>{s.trade.notionalCurrency} {fmt(displayAmounts.baseAmount,2)}{s.isKOReturn&&<span className="text-orange-400/70 text-[9px] ml-1">remaining balance</span>}{isKO&&!s.isKOReturn&&!isIndicative&&<span className="text-orange-400/70 text-[9px] ml-1">incl. remaining</span>}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
                                     : '—'}
                             </td>
                             <td className="px-3 py-2.5 mono text-orange-400">
