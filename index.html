@@ -3594,7 +3594,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
     const portfolioTotals = {};
     activeTrades.forEach(t => {
         const sched = buildAccSchedule(t);
-        const confirmedCount = Object.values(t.fixings||{}).filter(f=>f.confirmed).length;
+        const sched_ = buildAccSchedule(t); const confirmedCount = sched_.filter(d=>(t.fixings||{})[d]?.confirmed).length;
         const amount2dash = trunc2((parseFloat(t.notionalAmount)||0) / (parseInt(t.tenorValue)||1));
         const remaining = Math.max(0, parseFloat(t.notionalAmount) - confirmedCount * amount2dash);
         const ccy = t.notionalCurrency;
@@ -3618,13 +3618,13 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
         if (trade.status === 'Knocked Out') {
             // KO'd trade: show the KO fixing date entry so remaining can be confirmed
             const koFixingEntry = Object.entries(trade.fixings||{}).find(([d,f])=>f.isKO); const koFixing = koFixingEntry ? {...koFixingEntry[1], date:koFixingEntry[0]} : null;
-            const lastConfirmed = Object.entries(trade.fixings||{}).filter(([d,f])=>f.confirmed).sort((a,b)=>b[0].localeCompare(a[0])).map(([d,f])=>({...f,date:d}))[0];
+            const sched_lc = buildAccSchedule(trade); const lastConfirmed = sched_lc.filter(d=>(trade.fixings||{})[d]?.confirmed).sort((a,b)=>b.localeCompare(a)).map(d=>({...(trade.fixings||{})[d],date:d}))[0];
             // Use KO fixing date, or last confirmed date as fallback
             const koDate = koFixing?.date || lastConfirmed?.date || null;
             if (koDate) {
                 const isKOConfirmed = koFixing?.confirmed || false;
                 if (!isKOConfirmed) {
-                    const confirmedBefore = Object.entries(trade.fixings||{}).filter(([d,f])=>f.confirmed&&d<koDate).length;
+                    const sched_ko = buildAccSchedule(trade); const confirmedBefore = sched_ko.filter(d=>d<koDate&&(trade.fixings||{})[d]?.confirmed).length;
                     // Use remainingAfter from the KO fixing entry if available (most accurate)
                     // Falls back to calculation if not present
                     const remaining = koFixing?.remainingAfter ?? Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
@@ -3641,7 +3641,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
         sched.forEach(date => {
             const existing = (trade.fixings||{})[date] || null;
             if (existing?.confirmed) return;
-            const confirmedBefore = Object.entries(trade.fixings||{}).filter(([d,f])=>f.confirmed&&d<date).length;
+            const confirmedBefore = sched.filter(d=>d<date&&(trade.fixings||{})[d]?.confirmed).length;
             const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
             const entry = {trade, date, existing, remaining, weekend:isWeekend(date)};
             const isEffectivelyPast = date < today || (date === today && past4pmSGT);
@@ -3691,7 +3691,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                     const isIndicative = !autoFilledPrice && livePrice !== null;
                     const scenario = f?.scenario || (priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null);
                     const isKO = priceForScenario !== null ? accIsKO(s.trade, priceForScenario) : false;
-                    const confirmedBefore = Object.entries(s.trade.fixings||{}).filter(([d,fx])=>fx.confirmed&&d<s.date).length;
+                    const sched_r = buildAccSchedule(s.trade); const confirmedBefore = sched_r.filter(d=>d<s.date&&(s.trade.fixings||{})[d]?.confirmed).length;
                     // Use pre-calculated amounts from code.gs if available, else compute
                     const amounts = f?.autoFilled
                         ? { cryptoQty: f.cryptoDelivery||0, baseAmount: f.baseReturned||0, cryptoCcy: accBaseAsset(s.trade.underlyingPair), remainingAfter: f.remainingAfter }
@@ -3817,7 +3817,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
 
     const schedule    = buildAccSchedule(trade);
     const fixings     = trade.fixings || {};
-    const confirmed   = Object.values(fixings||{}).filter(f=>f.confirmed);
+    const confirmed   = schedule.filter(d=>fixings[d]?.confirmed).map(d=>fixings[d]);
     // Recompute with truncation so display is always correct even for older trades
     const amount2     = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
     const amount1     = trunc2(amount2 / 2);
@@ -3926,7 +3926,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                 const fp = fixing?.price ? parseFloat(fixing.price) : null;
                                 const scenario = fixing?.scenario || (fp !== null ? accScenario(trade, fp) : null);
                                 const isKO = fp !== null ? accIsKO(trade, fp) : false;
-                                const confirmedBefore = Object.entries(fixings).filter(([d,f])=>f.confirmed&&d<date).length;
+                                const confirmedBefore = schedule.filter(d=>d<date&&fixings[d]?.confirmed).length;
                                 // Use pre-calculated amounts from auto-fill if available
                                 const amounts = fixing?.autoFilled
                                     ? { cryptoQty: fixing.cryptoDelivery||0, baseAmount: fixing.baseReturned||0, cryptoCcy: accBaseAsset(trade.underlyingPair), remainingAfter: fixing.remainingAfter }
@@ -3939,7 +3939,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                 // Hide future rows if trade is KO'd or Matured — no more settlements
                                 const tradeEnded = ['Knocked Out','Matured'].includes(trade.status);
                                 // Find the date when trade ended (last confirmed fixing)
-                                const lastConfirmed = Object.entries(fixings).filter(([d,f])=>f.confirmed).sort((a,b)=>b[0].localeCompare(a[0])).map(([d,f])=>({...f,date:d}))[0];
+                                const lastConfirmed = schedule.filter(d=>fixings[d]?.confirmed).sort((a,b)=>b.localeCompare(a)).map(d=>({...fixings[d],date:d}))[0];
                                 const endDate = lastConfirmed?.date;
                                 if (tradeEnded && endDate && date > endDate) return null; // hide post-KO/maturity rows
                                 // Remaining notional after this fixing.
@@ -4330,7 +4330,7 @@ const AccumulatorModule = ({prices}) => {
 
         const scenario = existingFix?.scenario || accScenario(trade, fp);
         const isKO = accIsKO(trade, fp);
-        const confirmedBefore = Object.entries(fixings).filter(([d,f]) => f.confirmed && d < date).length;
+        const schedForConfirm = buildAccSchedule(trade); const confirmedBefore = schedForConfirm.filter(d => d < date && fixings[d]?.confirmed).length;
         // Use pre-calculated amounts from auto-fill if available
         const cryptoQty = existingFix?.cryptoDelivery ?? accAmounts(trade, scenario, confirmedBefore, isKO).cryptoQty;
         const baseAmount = existingFix?.baseReturned ?? accAmounts(trade, scenario, confirmedBefore, isKO).baseAmount;
