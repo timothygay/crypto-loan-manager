@@ -3625,7 +3625,9 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                 const isKOConfirmed = koFixing?.confirmed || false;
                 if (!isKOConfirmed) {
                     const confirmedBefore = Object.entries(trade.fixings||{}).filter(([d,f])=>f.confirmed&&d<koDate).length;
-                    const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
+                    // Use remainingAfter from the KO fixing entry if available (most accurate)
+                    // Falls back to calculation if not present
+                    const remaining = koFixing?.remainingAfter ?? Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
                     const isEffectivelyPast = koDate < today || (koDate === today && past4pmSGT);
                     const entry = {trade, date:koDate, existing:koFixing||null, remaining, weekend:isWeekend(koDate), isKOReturn:true};
                     if (isEffectivelyPast && koDate >= past30) overdue.push(entry);
