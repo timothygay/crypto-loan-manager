@@ -3704,10 +3704,15 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                         : isPast ? 'bg-amber-900/15 border-amber-800/30'
                         : isKO ? 'bg-orange-900/10' : s.weekend ? 'bg-amber-900/10' : '';
                     const displayAmounts = s.isKOReturn ? {
-                        cryptoQty: amounts?.cryptoQty||0,
-                        cryptoCcy: amounts?.cryptoCcy||accBaseAsset(s.trade.underlyingPair),
-                        baseAmount: s.remaining,
+                        // For KO return rows, read directly from the fixing entry.
+                        // f.baseReturned = settlement amt + remaining balance (combined)
+                        // f.cryptoDelivery = settlement crypto (0 for mid-period KO)
+                        // Fall back to s.remaining only if no auto-filled entry exists.
+                        cryptoQty: f?.cryptoDelivery ?? amounts?.cryptoQty ?? 0,
+                        cryptoCcy: accBaseAsset(s.trade.underlyingPair),
+                        baseAmount: f?.baseReturned ?? s.remaining,
                         baseCcy: s.trade.notionalCurrency,
+                        remainingAfter: f?.remainingAfter ?? 0,
                     } : amounts;
                     return (
                         <tr key={i} className={`border-b border-slate-800/50 ${rowBg}`}>
@@ -3740,14 +3745,14 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                             </td>
                             <td className="px-3 py-2.5 mono text-yellow-400">
                                 {displayAmounts?.baseAmount>0
-                                    ? <span>{s.trade.notionalCurrency} {fmt(displayAmounts.baseAmount,2)}{s.isKOReturn&&<span className="text-orange-400/70 text-[9px] ml-1">remaining balance</span>}{isKO&&!s.isKOReturn&&!isIndicative&&<span className="text-orange-400/70 text-[9px] ml-1">incl. remaining</span>}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
+                                    ? <span>{s.trade.notionalCurrency} {fmt(displayAmounts.baseAmount,2)}{s.isKOReturn&&displayAmounts.cryptoQty===0&&<span className="text-orange-400/70 text-[9px] ml-1">remaining balance</span>}{s.isKOReturn&&displayAmounts.cryptoQty>0&&<span className="text-orange-400/70 text-[9px] ml-1">incl. remaining</span>}{isKO&&!s.isKOReturn&&!isIndicative&&<span className="text-orange-400/70 text-[9px] ml-1">incl. remaining</span>}{isIndicative&&<span className="text-slate-600 text-[9px] ml-0.5">~</span>}</span>
                                     : '—'}
                             </td>
                             <td className="px-3 py-2.5 mono text-orange-400">
                                 {s.trade.knockOutEnabled?`$${fmt(parseFloat(s.trade.knockOutPrice),2)}`:'—'}
                             </td>
                             <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
-                            <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(amounts?.remainingAfter ?? s.remaining, 2)}</td>
+                            <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.isKOReturn ? (displayAmounts?.remainingAfter ?? 0) : (amounts?.remainingAfter ?? s.remaining), 2)}</td>
                             <td className="px-3 py-2.5">
                                 {isPast ? (
                                     <div className="flex gap-1 flex-wrap">
@@ -3937,8 +3942,14 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                 const lastConfirmed = Object.entries(fixings).filter(([d,f])=>f.confirmed).sort((a,b)=>b[0].localeCompare(a[0])).map(([d,f])=>({...f,date:d}))[0];
                                 const endDate = lastConfirmed?.date;
                                 if (tradeEnded && endDate && date > endDate) return null; // hide post-KO/maturity rows
-                                // Remaining notional after this fixing
-                                const notionalAfter = Math.max(0, notional - (confirmedBefore + (isConf?1:0)) * amount2);
+                                // Remaining notional after this fixing.
+                                // Use stored remainingAfter from fixing object if available (handles KO correctly).
+                                // For KO on settlement date, remainingAfter=0 (everything returned).
+                                // Falls back to calculation for unconfirmed/legacy entries.
+                                const calcNotionalAfter = Math.max(0, notional - (confirmedBefore + (isConf?1:0)) * amount2);
+                                const notionalAfter = (fixing?.remainingAfter !== undefined && fixing?.remainingAfter !== null)
+                                    ? fixing.remainingAfter
+                                    : calcNotionalAfter;
                                 return (
                                     <tr key={date} className={`border-b border-slate-800/40 ${weekend?'bg-amber-900/10':''} ${isKO&&isConf?'bg-orange-900/15':''} ${isFuture&&!tradeEnded?'opacity-50':''}`}>
                                         <td className="py-2 pr-3 text-slate-500">{i+1}</td>
