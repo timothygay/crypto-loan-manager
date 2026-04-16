@@ -3555,7 +3555,7 @@ const accTradeToRow = (t) => [
     t.amount1, t.amount2,
     t.upfrontFee||0, t.upfrontAmount||0, t.upfrontFeeUnderlying||t.notionalCurrency||'USDT',
     t.status,
-    JSON.stringify(t.fixings||[]),
+    JSON.stringify(t.fixings||{}),
     t.createdAt||new Date().toISOString()
 ];
 
@@ -3569,7 +3569,18 @@ const accRowToTrade = (r) => ({
     amount1:r[15], amount2:r[16],
     upfrontFee:r[17]||0, upfrontAmount:r[18]||0, upfrontFeeUnderlying:r[19]||'',
     status:r[20],
-    fixings: (() => { try { return JSON.parse(r[21]||'[]'); } catch { return []; } })(),
+    fixings: (() => { try {
+        const raw = JSON.parse(r[21]||'{}');
+        // code.gs writes fixings as object keyed by date: {"2026-04-15":{price,scenario,...}}
+        // Legacy format was array: [{date,fixingPrice,confirmed}]
+        // Normalise both to object format for consistent UI handling.
+        if (Array.isArray(raw)) {
+            const obj = {};
+            raw.forEach(f => { if (f.date) obj[f.date] = { price: f.fixingPrice, scenario: f.scenario, confirmed: f.confirmed||false, cryptoDelivery: f.cryptoDelivery, baseReturned: f.baseReturned, remainingAfter: f.remainingAfter, isKO: f.isKO||false, autoFilled: f.autoFilled||false }; });
+            return obj;
+        }
+        return raw || {};
+    } catch { return {}; } })(),
     createdAt:r[22],
 });
 
@@ -3583,7 +3594,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
     const portfolioTotals = {};
     activeTrades.forEach(t => {
         const sched = buildAccSchedule(t);
-        const confirmedCount = (t.fixings||[]).filter(f=>f.confirmed).length;
+        const confirmedCount = Object.values(t.fixings||{}).filter(f=>f.confirmed).length;
         const amount2dash = trunc2((parseFloat(t.notionalAmount)||0) / (parseInt(t.tenorValue)||1));
         const remaining = Math.max(0, parseFloat(t.notionalAmount) - confirmedCount * amount2dash);
         const ccy = t.notionalCurrency;
@@ -3606,14 +3617,14 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
 
         if (trade.status === 'Knocked Out') {
             // KO'd trade: show the KO fixing date entry so remaining can be confirmed
-            const koFixing = (trade.fixings||[]).find(f=>f.isKO);
-            const lastConfirmed = (trade.fixings||[]).filter(f=>f.confirmed).sort((a,b)=>b.date.localeCompare(a.date))[0];
+            const koFixingEntry = Object.entries(trade.fixings||{}).find(([d,f])=>f.isKO); const koFixing = koFixingEntry ? {...koFixingEntry[1], date:koFixingEntry[0]} : null;
+            const lastConfirmed = Object.entries(trade.fixings||{}).filter(([d,f])=>f.confirmed).sort((a,b)=>b[0].localeCompare(a[0])).map(([d,f])=>({...f,date:d}))[0];
             // Use KO fixing date, or last confirmed date as fallback
             const koDate = koFixing?.date || lastConfirmed?.date || null;
             if (koDate) {
                 const isKOConfirmed = koFixing?.confirmed || false;
                 if (!isKOConfirmed) {
-                    const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<koDate).length;
+                    const confirmedBefore = Object.entries(trade.fixings||{}).filter(([d,f])=>f.confirmed&&d<koDate).length;
                     const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
                     const isEffectivelyPast = koDate < today || (koDate === today && past4pmSGT);
                     const entry = {trade, date:koDate, existing:koFixing||null, remaining, weekend:isWeekend(koDate), isKOReturn:true};
@@ -3626,9 +3637,9 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
 
         // Active trades: show all unconfirmed settlement dates
         sched.forEach(date => {
-            const existing = (trade.fixings||[]).find(f=>f.date===date);
+            const existing = (trade.fixings||{})[date] || null;
             if (existing?.confirmed) return;
-            const confirmedBefore = (trade.fixings||[]).filter(f=>f.confirmed&&f.date<date).length;
+            const confirmedBefore = Object.entries(trade.fixings||{}).filter(([d,f])=>f.confirmed&&d<date).length;
             const remaining = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
             const entry = {trade, date, existing, remaining, weekend:isWeekend(date)};
             const isEffectivelyPast = date < today || (date === today && past4pmSGT);
@@ -3667,19 +3678,22 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
             {/* Settlements table renderer — shared by overdue and upcoming */}
             {(()=>{
                 const renderRow = (s, i, isPast) => {
-                    const f = s.existing;
-                    // isPast already accounts for 4pm cutoff (today after 4pm → isPast=true).
-                    // For upcoming rows (isPast=false): show live indicative price.
-                    // For overdue rows (isPast=true): show stored price or "price needed".
-                    const priceForScenario = f?.fixingPrice
-                        ? parseFloat(f.fixingPrice)
-                        : isPast ? null
-                        : (prices[accBaseAsset(s.trade.underlyingPair)] || null);
-                    const isIndicative = !f?.fixingPrice && priceForScenario !== null;
-                    const scenario = priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null;
+                    const f = s.existing; // fixing object for this date from fixings obj, or null
+                    // Price resolution:
+                    // 1. Auto-filled by code.gs (f.price) — use directly, no fetch needed
+                    // 2. Upcoming row — use live price as indicative
+                    // 3. Overdue without auto-fill — show "price needed"
+                    const autoFilledPrice = f?.price ? parseFloat(f.price) : null;
+                    const livePrice = !isPast ? (prices[accBaseAsset(s.trade.underlyingPair)] || null) : null;
+                    const priceForScenario = autoFilledPrice ?? livePrice;
+                    const isIndicative = !autoFilledPrice && livePrice !== null;
+                    const scenario = f?.scenario || (priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null);
                     const isKO = priceForScenario !== null ? accIsKO(s.trade, priceForScenario) : false;
-                    const confirmedBefore = (s.trade.fixings||[]).filter(f=>f.confirmed&&f.date<s.date).length;
-                    const amounts = scenario ? accAmounts(s.trade, scenario, confirmedBefore, isKO) : null;
+                    const confirmedBefore = Object.entries(s.trade.fixings||{}).filter(([d,fx])=>fx.confirmed&&d<s.date).length;
+                    // Use pre-calculated amounts from code.gs if available, else compute
+                    const amounts = f?.autoFilled
+                        ? { cryptoQty: f.cryptoDelivery||0, baseAmount: f.baseReturned||0, cryptoCcy: accBaseAsset(s.trade.underlyingPair), remainingAfter: f.remainingAfter }
+                        : (scenario ? accAmounts(s.trade, scenario, confirmedBefore, isKO) : null);
                     const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
                     const tradeIsEnded = ['Knocked Out','Matured'].includes(s.trade.status);
                     const rowBg = s.isKOReturn
@@ -3706,10 +3720,10 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                             </td>
                             <td className="px-3 py-2.5 text-slate-400">{dayName(s.date)}</td>
                             <td className="px-3 py-2.5 mono">
-                                {f?.fixingPrice
-                                    ? <span className="text-white">${fmt(parseFloat(f.fixingPrice),2)}</span>
+                                {autoFilledPrice
+                                    ? <span className="text-white">${fmt(autoFilledPrice,2)}</span>
                                     : isIndicative
-                                        ? <span className="text-slate-400">${fmt(priceForScenario,2)} <span className="text-slate-600 text-[9px]">live</span></span>
+                                        ? <span className="text-slate-400">${fmt(livePrice,2)} <span className="text-slate-600 text-[9px]">live</span></span>
                                         : <span className="text-red-400/70 text-[10px]">price needed</span>}
                             </td>
                             <td className="px-3 py-2.5">
@@ -3731,20 +3745,17 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                                 {s.trade.knockOutEnabled?`$${fmt(parseFloat(s.trade.knockOutPrice),2)}`:'—'}
                             </td>
                             <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
-                            <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.remaining,2)}</td>
+                            <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(amounts?.remainingAfter ?? s.remaining, 2)}</td>
                             <td className="px-3 py-2.5">
                                 {isPast ? (
                                     <div className="flex gap-1 flex-wrap">
-                                        {!f?.fixingPrice&&(
-                                            <button onClick={()=>onFetchPrice(s.trade.id,s.date,s.trade.underlyingPair)}
-                                                className="px-2 py-1 bg-cyan-900/30 hover:bg-cyan-900/50 border border-cyan-500/30 rounded text-cyan-400 text-[10px] transition-colors flex items-center gap-1">
-                                                ↻ Fetch
-                                            </button>
-                                        )}
-                                        <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
-                                            className="px-2 py-1 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-500/30 rounded text-amber-400 text-[10px] transition-colors whitespace-nowrap">
-                                            ✓ Confirm
-                                        </button>
+                                        {autoFilledPrice
+                                            ? <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
+                                                className="px-2 py-1 bg-green-600/20 hover:bg-green-600/40 border border-green-500/30 rounded text-green-400 text-[10px] transition-colors whitespace-nowrap">
+                                                ✓ Confirm
+                                              </button>
+                                            : <span className="text-slate-500 text-[10px]">Awaiting 4pm SGT fixing</span>
+                                        }
                                     </div>
                                 ) : <span className="text-slate-600 text-[10px]">Pending</span>}
                             </td>
@@ -3798,8 +3809,8 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
     const today = todayUTC();
 
     const schedule    = buildAccSchedule(trade);
-    const fixings     = trade.fixings || [];
-    const confirmed   = fixings.filter(f=>f.confirmed);
+    const fixings     = trade.fixings || {};
+    const confirmed   = Object.values(fixings||{}).filter(f=>f.confirmed);
     // Recompute with truncation so display is always correct even for older trades
     const amount2     = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
     const amount1     = trunc2(amount2 / 2);
@@ -3904,12 +3915,15 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                         </thead>
                         <tbody>
                             {schedule.map((date, i) => {
-                                const fixing = fixings.find(f=>f.date===date);
-                                const fp = fixing?.fixingPrice ? parseFloat(fixing.fixingPrice) : null;
-                                const scenario = fp !== null ? accScenario(trade, fp) : null;
+                                const fixing = fixings[date] || null; // fixings is now object keyed by date
+                                const fp = fixing?.price ? parseFloat(fixing.price) : null;
+                                const scenario = fixing?.scenario || (fp !== null ? accScenario(trade, fp) : null);
                                 const isKO = fp !== null ? accIsKO(trade, fp) : false;
-                                const confirmedBefore = fixings.filter(f=>f.confirmed&&f.date<date).length;
-                                const amounts = scenario ? accAmounts(trade, scenario, confirmedBefore, isKO) : null;
+                                const confirmedBefore = Object.entries(fixings).filter(([d,f])=>f.confirmed&&d<date).length;
+                                // Use pre-calculated amounts from auto-fill if available
+                                const amounts = fixing?.autoFilled
+                                    ? { cryptoQty: fixing.cryptoDelivery||0, baseAmount: fixing.baseReturned||0, cryptoCcy: accBaseAsset(trade.underlyingPair), remainingAfter: fixing.remainingAfter }
+                                    : (scenario ? accAmounts(trade, scenario, confirmedBefore, isKO) : null);
                                 const ss = scenario ? ACC_SCENARIO_STYLE[scenario] : null;
                                 const isPast = date < today;
                                 const isConf = fixing?.confirmed;
@@ -3918,7 +3932,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                 // Hide future rows if trade is KO'd or Matured — no more settlements
                                 const tradeEnded = ['Knocked Out','Matured'].includes(trade.status);
                                 // Find the date when trade ended (last confirmed fixing)
-                                const lastConfirmed = fixings.filter(f=>f.confirmed).sort((a,b)=>b.date.localeCompare(a.date))[0];
+                                const lastConfirmed = Object.entries(fixings).filter(([d,f])=>f.confirmed).sort((a,b)=>b[0].localeCompare(a[0])).map(([d,f])=>({...f,date:d}))[0];
                                 const endDate = lastConfirmed?.date;
                                 if (tradeEnded && endDate && date > endDate) return null; // hide post-KO/maturity rows
                                 // Remaining notional after this fixing
@@ -4052,7 +4066,7 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
             amount2: trunc2(amount2).toFixed(2),
             upfrontAmount: upfrontAmount.toFixed(2),
             upfrontFeeUnderlying: feeUnderlying,
-            fixings: trade?.fixings || [],
+            fixings: trade?.fixings || {},
             createdAt: trade?.createdAt || new Date().toISOString(),
         });
     };
@@ -4224,8 +4238,8 @@ const AccumulatorModule = ({prices}) => {
                     // Include past dates AND today if past 4pm SGT
                     const isOverdue = date<today || (date===today && past4pm);
                     if(!isOverdue||date<past30) return;
-                    const existing=(trade.fixings||[]).find(f=>f.date===date);
-                    if(existing?.fixingPrice) return; // already have price
+                    const existing=(trade.fixings||{})[date]||null;
+                    if(existing?.price) return; // already have price from auto-fill
                     toFetch.push({tradeId:trade.id,date,symbol});
                 });
             });
@@ -4238,14 +4252,9 @@ const AccumulatorModule = ({prices}) => {
                 const price=await fetchBinanceFixing(symbol,date);
                 setTrades(prev=>prev.map(trade=>{
                     if(trade.id!==tradeId) return trade;
-                    const fixings=[...(trade.fixings||[])];
-                    const idx=fixings.findIndex(f=>f.date===date);
-                    if(idx>=0){
-                        if(fixings[idx].fixingPrice) return trade;
-                        fixings[idx]={...fixings[idx],fixingPrice:price.toFixed(2)};
-                    } else {
-                        fixings.push({date,fixingPrice:price.toFixed(2),confirmed:false});
-                    }
+                    const fixings={...(trade.fixings||{})};
+                    if(fixings[date]?.price) return trade; // already filled
+                    fixings[date]={...(fixings[date]||{}),price:price.toFixed(2),confirmed:false};
                     const updated={...trade,fixings};
                     pushTrade(updated);
                     return updated;
@@ -4283,10 +4292,8 @@ const AccumulatorModule = ({prices}) => {
         setTrades(prev => {
             const updated = prev.map(trade => {
                 if (trade.id !== tradeId) return trade;
-                const fixings = [...(trade.fixings||[])];
-                const idx = fixings.findIndex(f=>f.date===date);
-                if (idx >= 0) fixings[idx] = {...fixings[idx], fixingPrice, confirmed:false};
-                else fixings.push({date, fixingPrice, confirmed:false});
+                const fixings = {...(trade.fixings||{})};
+                fixings[date] = {...(fixings[date]||{}), price: fixingPrice, confirmed:false};
                 const updated = {...trade, fixings};
                 pushTrade(updated);
                 return updated;
@@ -4302,18 +4309,19 @@ const AccumulatorModule = ({prices}) => {
         const currentTrades = trades;
         const trade = currentTrades.find(t => t.id === tradeId);
         if (!trade) return;
-        const fixings = [...(trade.fixings||[])];
-        const idx = fixings.findIndex(f => f.date === date);
-        if (idx < 0) return;
-        const fp = parseFloat(fixings[idx].fixingPrice);
-        if (!fp) { alert('No fixing price for this date. Please fetch or enter a price first.'); return; }
+        const fixings = {...(trade.fixings||{})};
+        const existingFix = fixings[date];
+        // Use auto-filled price from code.gs if available, else no price
+        const fp = existingFix?.price ? parseFloat(existingFix.price) : null;
+        if (!fp) { alert('No fixing price yet for this date. Prices are auto-filled at 4pm SGT by the Apps Script trigger.'); return; }
 
-        const scenario = accScenario(trade, fp);
+        const scenario = existingFix?.scenario || accScenario(trade, fp);
         const isKO = accIsKO(trade, fp);
-        const confirmedBefore = fixings.filter(f => f.confirmed).length;
-        const amounts = accAmounts(trade, scenario, confirmedBefore, isKO);
-        const amount2 = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
-        const remainingAfter = Math.max(0, parseFloat(trade.notionalAmount) - (confirmedBefore + 1) * amount2);
+        const confirmedBefore = Object.entries(fixings).filter(([d,f]) => f.confirmed && d < date).length;
+        // Use pre-calculated amounts from auto-fill if available
+        const cryptoQty = existingFix?.cryptoDelivery ?? accAmounts(trade, scenario, confirmedBefore, isKO).cryptoQty;
+        const baseAmount = existingFix?.baseReturned ?? accAmounts(trade, scenario, confirmedBefore, isKO).baseAmount;
+        const remainingAfter = existingFix?.remainingAfter ?? Math.max(0, parseFloat(trade.notionalAmount) - (confirmedBefore + 1) * trunc2((parseFloat(trade.notionalAmount)||0)/(parseInt(trade.tenorValue)||1)));
         const schedule = buildAccSchedule(trade);
         const isLast = date === schedule[schedule.length-1];
         let newStatus = trade.status;
@@ -4329,9 +4337,9 @@ const AccumulatorModule = ({prices}) => {
             confirmedAt: new Date().toISOString(),
             scenario,
             isKO: isKO ? 'YES' : 'NO',
-            cryptoQty: amounts.cryptoQty,
-            cryptoCcy: amounts.cryptoCcy,
-            baseAmount: amounts.baseAmount,
+            cryptoQty,
+            cryptoCcy: accBaseAsset(trade.underlyingPair),
+            baseAmount,
             notionalCcy: trade.notionalCurrency,
             remainingAfter,
             fixingPrice: fp,
@@ -4339,9 +4347,9 @@ const AccumulatorModule = ({prices}) => {
             koPrice: trade.knockOutEnabled ? trade.knockOutPrice : '',
         };
 
-        // Update fixings array
-        fixings[idx] = {...fixings[idx], confirmed:true, scenario, isKO,
-            cryptoQty: amounts.cryptoQty, baseAmount: amounts.baseAmount};
+        // Mark fixing as confirmed in object
+        fixings[date] = {...(fixings[date]||{}), price: fp, scenario, confirmed: true, isKO,
+            cryptoDelivery: cryptoQty, baseReturned: baseAmount, remainingAfter};
         const updatedTrade = {...trade, fixings, status:newStatus};
 
         // Update state and push trade
