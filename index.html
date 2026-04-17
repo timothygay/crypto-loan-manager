@@ -3785,6 +3785,9 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                             <td className="px-3 py-2.5 mono text-orange-400">
                                 {s.trade.knockOutEnabled?`$${fmt(parseFloat(s.trade.knockOutPrice),2)}`:'—'}
                             </td>
+                            <td className="px-3 py-2.5 mono text-teal-400">
+                                {s.trade.bufferEnabled?`$${fmt(parseFloat(s.trade.bufferPrice),2)}`:'—'}
+                            </td>
                             <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
                             <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.isKOReturn ? (displayAmounts?.remainingAfter ?? 0) : (amounts?.remainingAfter ?? s.remaining), 2)}</td>
                             <td className="px-3 py-2.5">
@@ -3803,7 +3806,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                         </tr>
                     );
                 };
-                const headers = ['Client','Underlying','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Strike','Remaining','Action'];
+                const headers = ['Client','Underlying','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Buffer','Strike','Remaining','Action'];
                 const thead = (<thead><tr className="border-b border-slate-800 bg-slate-900/40">{headers.map(h=>(<th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>))}</tr></thead>);
                 return (<>
                     {/* Overdue settlements */}
