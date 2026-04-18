@@ -2614,16 +2614,24 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                     const underlyings = s.trade.underlyings||[];
                     const isStableNotional = !isCrypto(s.trade.notionalCurrency);
                     // Maturity outcome for display
+                    // Build maturity reference info — show KO price if KO'd, strike if matured/exercised
                     let maturityNote = null;
+                    let maturityRef = null; // secondary reference price line
                     if (s.isMaturity) {
                         if (s.trade.status==='Exercised') {
                             maturityNote = s.trade.worstOffPair
                                 ? `Exercised — worst-of ${s.trade.worstOffPair} @ $${fmt(parseFloat(s.trade.worstOffStrike),2)}`
                                 : 'Exercised';
+                            // Show strike for each underlying as reference
+                            maturityRef = underlyings.map(u=>({label: u.pair + ' Strike', value: '$'+fmt(parseFloat(u.strikePrice)||0,2), color:'text-purple-400'}));
                         } else if (s.trade.status==='Knocked Out') {
                             maturityNote = 'Knocked Out';
+                            // Show KO price for each underlying as reference
+                            maturityRef = underlyings.filter(u=>u.koEnabled).map(u=>({label: u.pair + ' KO', value: '$'+fmt(parseFloat(u.koPrice)||0,2), color:'text-orange-400'}));
                         } else {
                             maturityNote = 'Matured — notional returned';
+                            // Show strike for each underlying as reference
+                            maturityRef = underlyings.map(u=>({label: u.pair + ' Strike', value: '$'+fmt(parseFloat(u.strikePrice)||0,2), color:'text-purple-400'}));
                         }
                     }
                     const rowBg = isPast
@@ -2655,7 +2663,22 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                                             </div>;
                                         })}
                                     </div>;
-                                })() : <span className="text-slate-600">—</span>}
+                                })() : (()=>{
+                                    // Upcoming: show live price for each underlying
+                                    const underlyings=s.trade.underlyings||[];
+                                    return <div className="space-y-0.5">
+                                        {underlyings.map(u=>{
+                                            const liveP=getPriceForPair(u.pair,prices);
+                                            return <div key={u.pair} className="flex items-center gap-1">
+                                                {underlyings.length>1&&<span className="text-slate-500 text-[9px]">{u.pair}</span>}
+                                                {liveP>0
+                                                    ?<span className="text-slate-300">${fmt(liveP,2)}<span className="text-slate-600 text-[9px] ml-0.5">live</span></span>
+                                                    :<span className="text-slate-600">—</span>
+                                                }
+                                            </div>;
+                                        })}
+                                    </div>;
+                                })()}
                             </td>
                             <td className="px-3 py-2.5 mono text-yellow-400 font-medium">
                                 {s.isMaturity
@@ -2666,7 +2689,15 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                             <td className="px-3 py-2.5 text-slate-400">{s.trade.couponCurrency}</td>
                             <td className="px-3 py-2.5">
                                 {maturityNote
-                                    ? <span className={`text-xs ${s.trade.status==='Exercised'?'text-purple-400':s.trade.status==='Knocked Out'?'text-orange-400':'text-blue-400'}`}>{maturityNote}</span>
+                                    ? <div className="space-y-0.5">
+                                        <span className={`text-xs font-medium ${s.trade.status==='Exercised'?'text-purple-400':s.trade.status==='Knocked Out'?'text-orange-400':'text-blue-400'}`}>{maturityNote}</span>
+                                        {maturityRef&&maturityRef.map((r,ri)=>(
+                                            <div key={ri} className="flex items-center gap-1.5">
+                                                <span className="text-slate-500 text-[10px]">{r.label}:</span>
+                                                <span className={`mono text-[10px] font-medium ${r.color}`}>{r.value}</span>
+                                            </div>
+                                        ))}
+                                      </div>
                                     : <div className="space-y-0.5">
                                         {underlyings.map((u,ui)=>{
                                             const liveP=getPriceForPair(u.pair,prices);
