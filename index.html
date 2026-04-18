@@ -2657,6 +2657,17 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                                     </div>
                                 }
                             </td>
+                            <td className="px-3 py-2.5 mono text-violet-400">
+                                {(()=>{
+                                    const paid=(s.trade.paidSettlements||[]).length;
+                                    const total=buildFCNSchedule(s.trade).length;
+                                    // Which period number is this settlement?
+                                    const sched=buildFCNSchedule(s.trade);
+                                    const idx=sched.findIndex(x=>x.date===s.date);
+                                    const periodNum=idx>=0?idx+1:paid+1;
+                                    return <span className="text-[11px]">{periodNum}/{total}</span>;
+                                })()}
+                            </td>
                             <td className="px-3 py-2.5">
                                 {s.isMaturity
                                     ?<span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-[10px]">MATURITY</span>
@@ -2674,7 +2685,7 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                         </tr>
                     );
                 };
-                const fcnHeaders = ['Client','Date','Day','Fixing Price','Coupon','CCY','Underlying(s) — KO / Strike','Type','Action'];
+                const fcnHeaders = ['Client','Date','Day','Fixing Price','Coupon','CCY','Underlying(s) — KO / Strike','Progress','Type','Action'];
                 const fcnThead = (<thead><tr className="border-b border-slate-800 bg-slate-900/40">{fcnHeaders.map(h=>(<th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>))}</tr></thead>);
                 return (<>
                     {overdueF.length>0&&(
@@ -2753,7 +2764,7 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus}) => {
             </div>
 
             {/* Metric cards */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 mb-3">
                 {[
                     ['Notional',`${fmtFCN(trade.notionalAmount,trade.notionalCurrency)} ${trade.notionalCurrency}`,underlyings.map(u=>u.pair).join(', ')||'—','text-white'],
                     ['Coupon Rate',`${parseFloat(trade.couponRate||0).toFixed(2)}% APR`,`${trade.settlementFrequency} · ${trade.couponCurrency}`,'text-yellow-400'],
@@ -2761,6 +2772,7 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus}) => {
                     ['P&L Collected',fmtFCNCompact(couponsCollected,trade.couponCurrency),`${paidSettlements.length}/${schedule.length} paid`,'text-cyan-400'],
                     ['Next Settlement',nextSettlement?nextSettlement.date:'None',nextSettlement?dayName(nextSettlement.date):'—',(isWeekend(nextSettlement?.date||'2000-01-01')&&nextSettlement)?'text-amber-400':'text-slate-300'],
                     ['Settlement Freq',trade.settlementFrequency,`${schedule.length} total`,'text-slate-300'],
+                    ['Progress',`${paidSettlements.length}/${schedule.length} coupons paid`,paidSettlements.length===schedule.length?'✓ fully paid':paidSettlements.length===0?'no payments yet':`${schedule.length-paidSettlements.length} remaining`,'text-violet-400'],
                 ].map(([lbl,val,sub,cls])=>(
                     <div key={lbl} className="card-inner p-3">
                         <p className="text-xs text-slate-400 mb-1 truncate">{lbl}</p>
