@@ -2343,6 +2343,9 @@ const FCN_STATUS_BADGE = {
 // Get live price for an underlying pair (e.g. "BTC/USDT" → prices["BTC"])
 const getPriceForPair = (pair, prices) => {
     if (!pair) return 0;
+    const quote = pair.split('/')[1];
+    // For USDC pairs, use the full pair key to get the USDC-quoted price
+    if (quote === 'USDC' && prices[pair]) return prices[pair];
     const base = pair.split('/')[0];
     return prices[base] || 0;
 };
@@ -3468,6 +3471,12 @@ const FCNModule = ({prices}) => {
 const ACC_UNDERLYING_SYMBOLS = { 'BTC/USDT':'BTCUSDT','BTC/USDC':'BTCUSDC','ETH/USDT':'ETHUSDT','ETH/USDC':'ETHUSDC','ADA/USDT':'ADAUSDT','ADA/USDC':'ADAUSDC','XRP/USDT':'XRPUSDT','XRP/USDC':'XRPUSDC' };
 const ACC_PAIRS = Object.keys(ACC_UNDERLYING_SYMBOLS);
 const accBaseAsset = (pair) => (pair||'').split('/')[0]; // BTC/USDT → BTC
+// Get live price for a pair — uses full pair key for USDC (to distinguish from USDT)
+const accLivePrice = (pair, prices) => {
+    const quote = (pair||'').split('/')[1];
+    if (quote === 'USDC') return prices[pair] || 0; // 'BTC/USDC' key
+    return prices[accBaseAsset(pair)] || 0; // 'BTC' key (USDT default)
+};
 
 // Build settlement schedule for an accumulator
 const buildAccSchedule = (trade) => {
@@ -3732,7 +3741,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                     // 2. Upcoming row — use live price as indicative
                     // 3. Overdue without auto-fill — show "price needed"
                     const autoFilledPrice = f?.price ? parseFloat(f.price) : null;
-                    const livePrice = !isPast ? (prices[accBaseAsset(s.trade.underlyingPair)] || null) : null;
+                    const livePrice = !isPast ? (accLivePrice(s.trade.underlyingPair, prices) || null) : null;
                     const priceForScenario = autoFilledPrice ?? livePrice;
                     const isIndicative = !autoFilledPrice && livePrice !== null;
                     const scenario = f?.scenario || (priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null);
@@ -3875,7 +3884,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
     // amount2 already recomputed above with truncation
     const pctUsed     = notional > 0 ? ((notional-remaining)/notional)*100 : 0;
     const statusCls   = ACC_STATUS_BADGE[trade.status] || ACC_STATUS_BADGE['Active'];
-    const livePrice   = prices[accBaseAsset(trade.underlyingPair)] || 0;
+    const livePrice   = accLivePrice(trade.underlyingPair, prices);
     const binanceSymbol = ACC_UNDERLYING_SYMBOLS[trade.underlyingPair] || '';
 
     // Fetch fixing price via Binance Price Index (termsheet benchmark)
@@ -4552,17 +4561,26 @@ const App = () => {
 
     const fetchBinancePrices=useCallback(async()=>{
         try {
-            const [btc,eth,ada,xrp]=await Promise.allSettled([
+            const [btc,eth,ada,xrp,btcUsdc,ethUsdc,adaUsdc,xrpUsdc]=await Promise.allSettled([
                 fetchBinanceLive('BTCUSDT'),
                 fetchBinanceLive('ETHUSDT'),
                 fetchBinanceLive('ADAUSDT'),
                 fetchBinanceLive('XRPUSDT'),
+                fetchBinanceLive('BTCUSDC'),
+                fetchBinanceLive('ETHUSDC'),
+                fetchBinanceLive('ADAUSDC'),
+                fetchBinanceLive('XRPUSDC'),
             ]);
             setBinancePrices(p=>({
                 BTC:btc.status==='fulfilled'?btc.value:p.BTC,
                 ETH:eth.status==='fulfilled'?eth.value:p.ETH,
                 ADA:ada.status==='fulfilled'?ada.value:p.ADA,
                 XRP:xrp.status==='fulfilled'?xrp.value:p.XRP,
+                // USDC variants — keyed as "BTC/USDC" so lookups can use the full pair
+                'BTC/USDC':btcUsdc.status==='fulfilled'?btcUsdc.value:p['BTC/USDC']||0,
+                'ETH/USDC':ethUsdc.status==='fulfilled'?ethUsdc.value:p['ETH/USDC']||0,
+                'ADA/USDC':adaUsdc.status==='fulfilled'?adaUsdc.value:p['ADA/USDC']||0,
+                'XRP/USDC':xrpUsdc.status==='fulfilled'?xrpUsdc.value:p['XRP/USDC']||0,
             }));
             setBinanceUpdate(new Date());
         } catch(e){console.error('Binance price error',e);}
