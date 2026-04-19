@@ -2712,13 +2712,15 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}, onScro
                                     const strikeP=worstU?parseFloat(worstU.strikePrice):0;
                                     const notionalF=parseFloat(s.trade.notionalAmount)||0;
                                     if(isStableN){
+                                        // Stablecoin notional → client gets crypto (notional ÷ strike)
                                         const cryptoAmt=strikeP>0?notionalF/strikeP:0;
                                         const cryptoBase=(worstU?.pair||'').split('/')[0];
-                                        return <span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-purple-400">+ {cryptoAmt.toFixed(8)} {cryptoBase} (exercised)</span></span>;
+                                        return <span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-purple-400">+ {cryptoAmt.toFixed(8)} {cryptoBase} (exercised @ ${fmt(strikeP,2)})</span></span>;
                                     } else {
+                                        // Crypto notional → client gets stablecoin (notional × strike)
                                         const stableAmt=notionalF*strikeP;
                                         const quoteCcy=(worstU?.pair||'').split('/')[1]||'USDT';
-                                        return <span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-purple-400">+ {fmt(stableAmt,2)} {quoteCcy} (exercised)</span></span>;
+                                        return <span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-purple-400">+ {fmt(stableAmt,2)} {quoteCcy} (exercised @ ${fmt(strikeP,2)})</span></span>;
                                     }
                                 })()
                                 :fmtFCNCompact(s.coupon,s.trade.couponCurrency)}
@@ -3027,7 +3029,6 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus,onConfirmPayme
                                                             return isStableN ? fp<parseFloat(u.strikePrice) : fp>parseFloat(u.strikePrice);
                                                         });
                                                         if(exercised){
-                                                            // Exercise: stablecoin→ notional÷strike in crypto; crypto→ notional×strike in stablecoin
                                                             const worstU = underlyings.find(u=>{
                                                                 const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);
                                                                 return fp>0&&(isStableN?fp<parseFloat(u.strikePrice):fp>parseFloat(u.strikePrice));
@@ -3035,15 +3036,15 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus,onConfirmPayme
                                                             const strikeP = worstU?parseFloat(worstU.strikePrice):0;
                                                             const notionalF = parseFloat(trade.notionalAmount)||0;
                                                             if(isStableN){
-                                                                // Returns crypto: notional ÷ strike
+                                                                // Stablecoin notional exercised → client gets crypto (notional ÷ strike)
                                                                 const cryptoAmt = strikeP>0?notionalF/strikeP:0;
                                                                 const cryptoBase=(worstU?.pair||'').split('/')[0];
-                                                                return <span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-purple-300">{cryptoAmt.toFixed(8)} {cryptoBase} (exercised)</span></span>;
+                                                                return <span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-purple-300">{cryptoAmt.toFixed(8)} {cryptoBase} (exercised @ ${fmt(strikeP,2)})</span></span>;
                                                             } else {
-                                                                // Returns stablecoin: notional × strike
+                                                                // Crypto notional exercised → client gets stablecoin (notional × strike)
                                                                 const stableAmt = notionalF*strikeP;
                                                                 const quoteCcy=(worstU?.pair||'').split('/')[1]||'USDT';
-                                                                return <span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-purple-300">{fmt(stableAmt,2)} {quoteCcy} (exercised)</span></span>;
+                                                                return <span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-purple-300">{fmt(stableAmt,2)} {quoteCcy} (exercised @ ${fmt(strikeP,2)})</span></span>;
                                                             }
                                                         }
                                                         // Matured normally: coupon + full notional returned in original ccy
