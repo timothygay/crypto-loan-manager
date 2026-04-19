@@ -24,7 +24,13 @@
         .badge-repaid { background: rgba(148,163,184,0.15); color: #94a3b8; border: 1px solid rgba(148,163,184,0.3); }
         .badge-expiring { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
         .trigger-row { background: rgba(239,68,68,0.07); }
-        .card { background: rgba(15,23,42,0.6); border: 1px solid rgba(51,65,85,0.8); border-radius: 12px; }
+        .card { background: rgba(15,23,42,0.6); border: 1px solid rgba(51,65,85,0.8); border-radius: 12px; transition: box-shadow 0.3s, border-color 0.3s; }
+        .trade-highlight { animation: tradeHighlight 1.8s ease-out forwards; }
+        @keyframes tradeHighlight {
+            0%   { box-shadow: 0 0 0 3px rgba(99,179,237,0.8), 0 0 30px rgba(99,179,237,0.4); border-color: rgba(99,179,237,0.8); }
+            60%  { box-shadow: 0 0 0 2px rgba(99,179,237,0.4), 0 0 15px rgba(99,179,237,0.2); border-color: rgba(99,179,237,0.4); }
+            100% { box-shadow: none; border-color: rgba(51,65,85,0.8); }
+        }
         .card-inner { background: rgba(15,23,42,0.8); border: 1px solid rgba(51,65,85,0.5); border-radius: 8px; }
         .gradient-text { background: linear-gradient(135deg, #38bdf8, #22d3ee, #34d399); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
         .btn-primary { background: linear-gradient(135deg, #0ea5e9, #06b6d4); transition: all 0.2s; }
@@ -2477,7 +2483,7 @@ const rowToTrade = (r) => ({
 const pairToSymbol = (pair) => { const [b,q]=(pair||'').split('/'); return (b||'')+(q||'USDT'); };
 
 // ─── FCN DASHBOARD ────────────────────────────────────────────────────────────
-const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
+const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}, onScrollToTrade}) => {
     const today = todayUTC();
     const in7 = new Date(new Date().getTime()+7*86400000).toISOString().split('T')[0];
     const activeTrades = trades.filter(t=>t.status==='Active');
@@ -2640,7 +2646,7 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                         ? 'bg-amber-900/15'
                         : s.isMaturity ? 'bg-cyan-900/10' : s.weekend ? 'bg-amber-900/10' : '';
                     return (
-                        <tr key={i} className={`border-b border-slate-800/50 ${rowBg}`}>
+                        <tr key={i} onClick={()=>onScrollToTrade&&onScrollToTrade(s.trade.id)} className={`border-b border-slate-800/50 ${rowBg} ${onScrollToTrade?'cursor-pointer hover:bg-slate-800/40':''}`}>
                             <td className="px-3 py-2.5 font-medium text-slate-200">
                                 {s.trade.clientName}
                                 {isPast&&<span className="ml-1.5 px-1 py-0.5 bg-amber-900/40 text-amber-400 rounded text-[9px]">OVERDUE</span>}
@@ -2858,7 +2864,7 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus,onConfirmPayme
     const fcnCardUpfrontFee=parseFloat(trade.upfrontFee)||0;
 
     return (
-        <div className={`card p-5 ${trade.status!=='Active'?'opacity-80':''}`}>
+        <div id={`trade-${trade.id}`} className={`card p-5 ${trade.status!=='Active'?'opacity-80':''}`}>
             <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
                 <div>
                     <div className="flex items-center gap-2 flex-wrap mb-1">
@@ -3590,7 +3596,7 @@ const FCNModule = ({prices}) => {
 
     return(
         <div>
-            <FCNDashboard trades={trades} prices={prices} onConfirmPayment={confirmPayment} fixingPrices={fixingPrices}/>
+            <FCNDashboard trades={trades} prices={prices} onConfirmPayment={confirmPayment} fixingPrices={fixingPrices} onScrollToTrade={(id)=>scrollToTrade(id,setFilterStatus)}/>
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
                     <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5">
@@ -3632,6 +3638,22 @@ const FCNModule = ({prices}) => {
 const ACC_UNDERLYING_SYMBOLS = { 'BTC/USDT':'BTCUSDT','BTC/USDC':'BTCUSDC','ETH/USDT':'ETHUSDT','ETH/USDC':'ETHUSDC','ADA/USDT':'ADAUSDT','ADA/USDC':'ADAUSDC','XRP/USDT':'XRPUSDT','XRP/USDC':'XRPUSDC' };
 const ACC_PAIRS = Object.keys(ACC_UNDERLYING_SYMBOLS);
 const accBaseAsset = (pair) => (pair||'').split('/')[0]; // BTC/USDT → BTC
+
+// ─── SCROLL TO TRADE CARD ────────────────────────────────────────────────────
+// Called when a dashboard settlement row is clicked.
+// Scrolls to the trade card, briefly highlights it, and resets filter if needed.
+const scrollToTrade = (tradeId, setFilter) => {
+    // Reset filter to 'all' so card is visible
+    if (setFilter) setFilter('all');
+    // Use setTimeout to allow filter re-render before scrolling
+    setTimeout(() => {
+        const el = document.getElementById('trade-' + tradeId);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('trade-highlight');
+        setTimeout(() => el.classList.remove('trade-highlight'), 1800);
+    }, 80);
+};
 // Get live price for a pair — uses full pair key for USDC (to distinguish from USDT)
 const accLivePrice = (pair, prices) => {
     const quote = (pair||'').split('/')[1];
@@ -3797,7 +3819,7 @@ const accRowToTrade = (r) => ({
 });
 
 // ─── ACCUMULATOR DASHBOARD ────────────────────────────────────────────────────
-const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) => {
+const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, onScrollToTrade}) => {
     const today = todayUTC();
     const in7 = new Date(new Date().getTime()+7*86400000).toISOString().split('T')[0];
     const activeTrades = trades.filter(t=>t.status==='Active');
@@ -3931,7 +3953,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice}) =
                         remainingAfter: f?.remainingAfter ?? 0,
                     } : amounts;
                     return (
-                        <tr key={i} className={`border-b border-slate-800/50 ${rowBg}`}>
+                        <tr key={i} onClick={()=>onScrollToTrade&&onScrollToTrade(s.trade.id)} className={`border-b border-slate-800/50 ${rowBg} ${onScrollToTrade?'cursor-pointer hover:bg-slate-800/40':''}`}>
                             <td className="px-3 py-2.5 font-medium text-slate-200">
                                 {s.trade.clientName}
                                 {s.isKOReturn&&<span className="ml-1.5 px-1 py-0.5 bg-orange-900/50 text-orange-300 rounded text-[9px]">KO — RETURN</span>}
@@ -4066,7 +4088,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
     };
 
     return (
-        <div className={`card p-5 ${trade.status!=='Active'?'opacity-80':''}`}>
+        <div id={`trade-${trade.id}`} className={`card p-5 ${trade.status!=='Active'?'opacity-80':''}`}>
             {/* Header */}
             <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
                 <div>
@@ -4635,7 +4657,7 @@ const AccumulatorModule = ({prices}) => {
 
     return (
         <div>
-            <AccumulatorDashboard trades={trades} prices={prices} onConfirmFixing={confirmFixing} onFetchPrice={async(tradeId,date,pair)=>{
+            <AccumulatorDashboard trades={trades} prices={prices} onConfirmFixing={confirmFixing} onScrollToTrade={(id)=>scrollToTrade(id,setFilterStatus)} onFetchPrice={async(tradeId,date,pair)=>{
                 const symbol=ACC_UNDERLYING_SYMBOLS[pair]||'';
                 if(!symbol) return;
                 try{
