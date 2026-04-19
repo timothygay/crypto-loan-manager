@@ -2503,14 +2503,16 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
     const overdueF = [], upcoming = [];
     trades.forEach(trade => {
         if (!['Active','Knocked Out','Exercised','Matured'].includes(trade.status)) return;
+        const tradeIsEnded = ['Knocked Out','Exercised','Matured'].includes(trade.status);
         const sched = buildFCNSchedule(trade);
         sched.forEach(({date,isMaturity}) => {
             if ((trade.paidSettlements||[]).includes(date)) return;
-            const coupon = calcFCNCoupon(trade, date); // Act/365: pass settlement date for actual days
+            const coupon = calcFCNCoupon(trade, date);
             const entry = {trade,date,isMaturity,coupon,weekend:isWeekend(date)};
             const isEffectivelyPast = date < today || (date === today && fcnPast4pm);
             if (isEffectivelyPast && date >= past30fcn) overdueF.push(entry);
-            else if (!isEffectivelyPast && date <= in7) upcoming.push(entry);
+            // Only show upcoming for Active trades — KO'd/Exercised/Matured have no future obligations
+            else if (!isEffectivelyPast && date <= in7 && !tradeIsEnded) upcoming.push(entry);
         });
     });
     overdueF.sort((a,b)=>b.date.localeCompare(a.date));
@@ -2831,7 +2833,12 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus}) => {
                     ['P&L Collected',fmtFCNCompact(couponsCollected,trade.couponCurrency),`${paidSettlements.length}/${schedule.length} paid`,'text-cyan-400'],
                     ['Next Settlement',nextSettlement?nextSettlement.date:'None',nextSettlement?dayName(nextSettlement.date):'—',(isWeekend(nextSettlement?.date||'2000-01-01')&&nextSettlement)?'text-amber-400':'text-slate-300'],
                     ['Settlement Freq',trade.settlementFrequency,`${schedule.length} total`,'text-slate-300'],
-                    ['Progress',`${paidSettlements.length}/${schedule.length} coupons paid`,paidSettlements.length===schedule.length?'✓ fully paid':paidSettlements.length===0?'no payments yet':`${schedule.length-paidSettlements.length} remaining`,'text-violet-400'],
+                    ['Progress',`${paidSettlements.length}/${schedule.length} coupons paid`,(()=>{
+                        if(['Knocked Out','Exercised','Matured'].includes(trade.status)) return '✓ trade ended — 0 remaining';
+                        if(paidSettlements.length===schedule.length) return '✓ fully paid';
+                        if(paidSettlements.length===0) return 'no payments yet';
+                        return `${schedule.length-paidSettlements.length} remaining`;
+                    })(),'text-violet-400'],
                 ].map(([lbl,val,sub,cls])=>(
                     <div key={lbl} className="card-inner p-3">
                         <p className="text-xs text-slate-400 mb-1 truncate">{lbl}</p>
