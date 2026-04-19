@@ -2683,12 +2683,68 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                                 })()}
                             </td>
                             <td className="px-3 py-2.5 mono text-yellow-400 font-medium">
-                                {s.isMaturity
-                                    ?<span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-slate-500">+ notional</span></span>
-                                    :fmtFCNCompact(s.coupon,s.trade.couponCurrency)
-                                }
+                                {s.isMaturity?(()=>{
+                                    const isStableN=!isCrypto(s.trade.notionalCurrency);
+                                    const underlyingsM=s.trade.underlyings||[];
+                                    // Check if KO triggered (from settlementFixings)
+                                    const pm=(s.trade.settlementFixings||{})[s.date];
+                                    const koTriggered = pm&&typeof pm==='object'&&underlyingsM.some(u=>{
+                                        if(!u.koEnabled) return false;
+                                        const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);
+                                        return fp>0&&(isStableN?fp>=parseFloat(u.koPrice):fp<=parseFloat(u.koPrice));
+                                    });
+                                    const exercised = !koTriggered&&pm&&typeof pm==='object'&&underlyingsM.some(u=>{
+                                        const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);
+                                        return fp>0&&(isStableN?fp<parseFloat(u.strikePrice):fp>parseFloat(u.strikePrice));
+                                    });
+                                    if(koTriggered||!exercised){
+                                        // KO or normal maturity: return notional in original ccy
+                                        return <span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-slate-400">+ {fmtFCN(s.trade.notionalAmount,s.trade.notionalCurrency)} {s.trade.notionalCurrency} returned</span></span>;
+                                    }
+                                    // Exercised: stablecoin→crypto; crypto→stablecoin
+                                    const worstU=underlyingsM.find(u=>{const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);return fp>0&&(isStableN?fp<parseFloat(u.strikePrice):fp>parseFloat(u.strikePrice));});
+                                    const strikeP=worstU?parseFloat(worstU.strikePrice):0;
+                                    const notionalF=parseFloat(s.trade.notionalAmount)||0;
+                                    if(isStableN){
+                                        const cryptoAmt=strikeP>0?notionalF/strikeP:0;
+                                        const cryptoBase=(worstU?.pair||'').split('/')[0];
+                                        return <span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-purple-400">+ {cryptoAmt.toFixed(8)} {cryptoBase} (exercised)</span></span>;
+                                    } else {
+                                        const stableAmt=notionalF*strikeP;
+                                        const quoteCcy=(worstU?.pair||'').split('/')[1]||'USDT';
+                                        return <span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-purple-400">+ {fmt(stableAmt,2)} {quoteCcy} (exercised)</span></span>;
+                                    }
+                                })()
+                                :fmtFCNCompact(s.coupon,s.trade.couponCurrency)}
                             </td>
                             <td className="px-3 py-2.5 text-slate-400">{s.trade.couponCurrency}</td>
+                            <td className="px-3 py-2.5">
+                                {(()=>{
+                                    // Derive indicative scenario from live prices
+                                    const isStableN = !isCrypto(s.trade.notionalCurrency);
+                                    const underlyingsS = s.trade.underlyings||[];
+                                    // Check KO: stablecoin→ price>=KO triggers KO; crypto→ price<=KO triggers KO
+                                    const koHit = underlyingsS.find(u=>{
+                                        if(!u.koEnabled) return false;
+                                        const lp = getPriceForPair(u.pair, prices);
+                                        if(!lp) return false;
+                                        return isStableN ? lp >= parseFloat(u.koPrice) : lp <= parseFloat(u.koPrice);
+                                    });
+                                    if(koHit) return <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-900/40 text-orange-400">🔴 KNOCK-OUT</span>;
+                                    if(s.isMaturity){
+                                        // At maturity: stablecoin→ any price<strike = exercised; crypto→ price>strike = exercised
+                                        const exerciseHit = underlyingsS.find(u=>{
+                                            const lp = getPriceForPair(u.pair, prices);
+                                            if(!lp) return false;
+                                            return isStableN ? lp < parseFloat(u.strikePrice) : lp > parseFloat(u.strikePrice);
+                                        });
+                                        if(exerciseHit) return <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-900/40 text-purple-400">⚠️ EXERCISE</span>;
+                                        return <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-900/40 text-blue-400">✅ MATURED</span>;
+                                    }
+                                    // Regular coupon date
+                                    return <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-900/30 text-green-400">✅ COUPON</span>;
+                                })()}
+                            </td>
                             <td className="px-3 py-2.5">
                                 {maturityNote
                                     ? <div className="space-y-0.5">
@@ -2711,7 +2767,7 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                                                     <span className="text-slate-500 text-[10px]">{u.pair}</span>
                                                     {ko&&<><span className={`mono text-[10px] ${isAboveKO?'text-red-400':'text-orange-400'}`}>${fmt(ko,2)}</span><span className="text-slate-600 text-[9px]">KO</span></>}
                                                     <span className="mono text-[10px] text-purple-400">${fmt(strike,2)}</span><span className="text-slate-600 text-[9px]">STRIKE</span>
-                                                    {!isPast&&liveP>0&&<span className="text-slate-500 text-[9px]">live:${fmt(liveP,2)}</span>}
+                                                    {/* live price removed — shown in Fixing Price column instead */}
                                                 </div>
                                             );
                                         })}
@@ -2746,7 +2802,7 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
                         </tr>
                     );
                 };
-                const fcnHeaders = ['Client','Date','Day','Fixing Price','Coupon','CCY','Underlying(s) — KO / Strike','Progress','Type','Action'];
+                const fcnHeaders = ['Client','Date','Day','Fixing Price','Coupon','CCY','Scenario','Underlying(s) — KO / Strike','Progress','Type','Action'];
                 const fcnThead = (<thead><tr className="border-b border-slate-800 bg-slate-900/40">{fcnHeaders.map(h=>(<th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>))}</tr></thead>);
                 return (<>
                     {overdueF.length>0&&(
@@ -2783,7 +2839,7 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}}) => {
 };
 
 // ─── FCN ORDER CARD ───────────────────────────────────────────────────────────
-const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus}) => {
+const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus,onConfirmPayment}) => {
     const [expanded,setExpanded]=useState(false);
     const schedule=buildFCNSchedule(trade);
     const today=todayUTC();
@@ -2887,7 +2943,7 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus}) => {
                     <table className="w-full text-xs">
                         <thead>
                             <tr className="border-b border-slate-800 text-slate-400">
-                                {['#','Date','Day','Fixing Price','KO Check','Coupon','Type','Status'].map(h=><th key={h} className="text-left pb-2 pr-3 whitespace-nowrap">{h}</th>)}
+                                {['#','Date','Day','Fixing Price','KO Check','Coupon','Type','Status',''].map(h=><th key={h} className="text-left pb-2 pr-3 whitespace-nowrap">{h}</th>)}
                             </tr>
                         </thead>
                         <tbody>
@@ -2953,10 +3009,41 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus}) => {
                                             </td>
                                             <td className="py-1.5 pr-3 mono text-yellow-400">
                                                 {isThisKO
-                                                    ?<span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-slate-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency}</span></span>
-                                                    :isMaturity
-                                                        ?<span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-slate-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency}</span></span>
-                                                        :fmtFCNCompact(couponForDate,trade.couponCurrency)
+                                                    // KO: coupon + full notional returned in original currency (no conversion)
+                                                    ?<span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-orange-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency} returned</span></span>
+                                                    :isMaturity?(()=>{
+                                                        const isStableN=!isCrypto(trade.notionalCurrency);
+                                                        const pm=sf[date];
+                                                        // Check if exercised: stablecoin→ any price<strike; crypto→ price>strike
+                                                        const exercised = pm && typeof pm==='object' && underlyings.some(u=>{
+                                                            const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);
+                                                            if(!fp) return false;
+                                                            return isStableN ? fp<parseFloat(u.strikePrice) : fp>parseFloat(u.strikePrice);
+                                                        });
+                                                        if(exercised){
+                                                            // Exercise: stablecoin→ notional÷strike in crypto; crypto→ notional×strike in stablecoin
+                                                            const worstU = underlyings.find(u=>{
+                                                                const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);
+                                                                return fp>0&&(isStableN?fp<parseFloat(u.strikePrice):fp>parseFloat(u.strikePrice));
+                                                            });
+                                                            const strikeP = worstU?parseFloat(worstU.strikePrice):0;
+                                                            const notionalF = parseFloat(trade.notionalAmount)||0;
+                                                            if(isStableN){
+                                                                // Returns crypto: notional ÷ strike
+                                                                const cryptoAmt = strikeP>0?notionalF/strikeP:0;
+                                                                const cryptoBase=(worstU?.pair||'').split('/')[0];
+                                                                return <span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-purple-300">{cryptoAmt.toFixed(8)} {cryptoBase} (exercised)</span></span>;
+                                                            } else {
+                                                                // Returns stablecoin: notional × strike
+                                                                const stableAmt = notionalF*strikeP;
+                                                                const quoteCcy=(worstU?.pair||'').split('/')[1]||'USDT';
+                                                                return <span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-purple-300">{fmt(stableAmt,2)} {quoteCcy} (exercised)</span></span>;
+                                                            }
+                                                        }
+                                                        // Matured normally: coupon + full notional returned in original ccy
+                                                        return <span>{fmtFCNCompact(couponForDate,trade.couponCurrency)} + <span className="text-blue-300">{fmtFCN(trade.notionalAmount,trade.notionalCurrency)} {trade.notionalCurrency} returned</span></span>;
+                                                    })()
+                                                    :fmtFCNCompact(couponForDate,trade.couponCurrency)
                                                 }
                                             </td>
                                             <td className="py-1.5 pr-3">
@@ -2968,7 +3055,18 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus}) => {
                                                 }
                                             </td>
                                             <td className="py-1.5">
-                                                {isPaid?<span className="text-green-400">✓ Paid</span>:isPast?<span className="text-red-400">Unpaid</span>:<span className="text-slate-500">Pending</span>}
+                                                {isPaid
+                                                    ?<span className="text-green-400">✓ Paid</span>
+                                                    :isPast?<span className="text-red-400">Unpaid</span>
+                                                    :<span className="text-slate-500">Pending</span>}
+                                            </td>
+                                            <td className="py-1.5">
+                                                {isPast&&!isPaid&&onConfirmPayment&&(
+                                                    <button onClick={()=>onConfirmPayment(trade.id,date)}
+                                                        className="px-2 py-0.5 bg-green-900/30 border border-green-500/30 rounded text-green-400 text-[10px] hover:bg-green-900/50 whitespace-nowrap">
+                                                        ✓ Confirm
+                                                    </button>
+                                                )}
                                             </td>
                                         </tr>
                                     );
@@ -3517,7 +3615,7 @@ const FCNModule = ({prices}) => {
             )}
             {filtered.length===0
                 ?<div className="card p-12 text-center"><p className="text-slate-400">No FCN trades found.</p></div>
-                :<div className="space-y-3">{filtered.map(t=><FCNOrderCard key={t.id} trade={t} prices={prices} onEdit={setEditingTrade} onDelete={deleteTrade} onResetStatus={resetTradeStatus}/>)}</div>
+                :<div className="space-y-3">{filtered.map(t=><FCNOrderCard key={t.id} trade={t} prices={prices} onEdit={setEditingTrade} onDelete={deleteTrade} onResetStatus={resetTradeStatus} onConfirmPayment={confirmPayment}/>)}</div>
             }
             {showAdd&&<FCNFormModal onSave={addTrade} onClose={()=>setShowAdd(false)}/>}
             {editingTrade&&<FCNFormModal trade={editingTrade} onSave={updateTrade} onClose={()=>setEditingTrade(null)}/>}
