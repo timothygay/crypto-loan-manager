@@ -2692,23 +2692,32 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}, onScro
                                 {s.isMaturity?(()=>{
                                     const isStableN=!isCrypto(s.trade.notionalCurrency);
                                     const underlyingsM=s.trade.underlyings||[];
-                                    // Check if KO triggered (from settlementFixings)
+                                    // Use stored fixing prices if available, else fall back to live prices
                                     const pm=(s.trade.settlementFixings||{})[s.date];
-                                    const koTriggered = pm&&typeof pm==='object'&&underlyingsM.some(u=>{
+                                    const getPx=(u)=>{
+                                        const sym=pairToSymbol(u.pair);
+                                        const stored=pm&&typeof pm==='object'?parseFloat(pm[sym]||0):0;
+                                        return stored>0?stored:getPriceForPair(u.pair,prices);
+                                    };
+                                    const koTriggered = underlyingsM.some(u=>{
                                         if(!u.koEnabled) return false;
-                                        const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);
+                                        const fp=getPx(u);
                                         return fp>0&&(isStableN?fp>=parseFloat(u.koPrice):fp<=parseFloat(u.koPrice));
                                     });
-                                    const exercised = !koTriggered&&pm&&typeof pm==='object'&&underlyingsM.some(u=>{
-                                        const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);
+                                    const exercised = !koTriggered&&underlyingsM.some(u=>{
+                                        const fp=getPx(u);
                                         return fp>0&&(isStableN?fp<parseFloat(u.strikePrice):fp>parseFloat(u.strikePrice));
                                     });
-                                    if(koTriggered||!exercised){
-                                        // KO or normal maturity: return notional in original ccy
+                                    if(koTriggered){
+                                        // KO: return notional in original ccy
+                                        return <span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-orange-400">+ {fmtFCN(s.trade.notionalAmount,s.trade.notionalCurrency)} {s.trade.notionalCurrency} returned (KO)</span></span>;
+                                    }
+                                    if(!exercised){
+                                        // Normal maturity: return notional in original ccy
                                         return <span>{fmtFCNCompact(s.coupon,s.trade.couponCurrency)} <span className="text-slate-400">+ {fmtFCN(s.trade.notionalAmount,s.trade.notionalCurrency)} {s.trade.notionalCurrency} returned</span></span>;
                                     }
                                     // Exercised: stablecoin→crypto; crypto→stablecoin
-                                    const worstU=underlyingsM.find(u=>{const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);return fp>0&&(isStableN?fp<parseFloat(u.strikePrice):fp>parseFloat(u.strikePrice));});
+                                    const worstU=underlyingsM.find(u=>{const fp=getPx(u);return fp>0&&(isStableN?fp<parseFloat(u.strikePrice):fp>parseFloat(u.strikePrice));});
                                     const strikeP=worstU?parseFloat(worstU.strikePrice):0;
                                     const notionalF=parseFloat(s.trade.notionalAmount)||0;
                                     if(isStableN){
@@ -2728,28 +2737,30 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}, onScro
                             <td className="px-3 py-2.5 text-slate-400">{s.trade.couponCurrency}</td>
                             <td className="px-3 py-2.5">
                                 {(()=>{
-                                    // Derive indicative scenario from live prices
                                     const isStableN = !isCrypto(s.trade.notionalCurrency);
                                     const underlyingsS = s.trade.underlyings||[];
-                                    // Check KO: stablecoin→ price>=KO triggers KO; crypto→ price<=KO triggers KO
+                                    // Use stored fixing if available, else live price
+                                    const pmS=(s.trade.settlementFixings||{})[s.date];
+                                    const getPxS=(u)=>{
+                                        const sym=pairToSymbol(u.pair);
+                                        const stored=pmS&&typeof pmS==='object'?parseFloat(pmS[sym]||0):0;
+                                        return stored>0?stored:getPriceForPair(u.pair,prices);
+                                    };
+                                    // KO check
                                     const koHit = underlyingsS.find(u=>{
                                         if(!u.koEnabled) return false;
-                                        const lp = getPriceForPair(u.pair, prices);
-                                        if(!lp) return false;
-                                        return isStableN ? lp >= parseFloat(u.koPrice) : lp <= parseFloat(u.koPrice);
+                                        const fp=getPxS(u); if(!fp) return false;
+                                        return isStableN ? fp >= parseFloat(u.koPrice) : fp <= parseFloat(u.koPrice);
                                     });
                                     if(koHit) return <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-900/40 text-orange-400">🔴 KNOCK-OUT</span>;
                                     if(s.isMaturity){
-                                        // At maturity: stablecoin→ any price<strike = exercised; crypto→ price>strike = exercised
                                         const exerciseHit = underlyingsS.find(u=>{
-                                            const lp = getPriceForPair(u.pair, prices);
-                                            if(!lp) return false;
-                                            return isStableN ? lp < parseFloat(u.strikePrice) : lp > parseFloat(u.strikePrice);
+                                            const fp=getPxS(u); if(!fp) return false;
+                                            return isStableN ? fp < parseFloat(u.strikePrice) : fp > parseFloat(u.strikePrice);
                                         });
                                         if(exerciseHit) return <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-900/40 text-purple-400">⚠️ EXERCISE</span>;
                                         return <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-900/40 text-blue-400">✅ MATURED</span>;
                                     }
-                                    // Regular coupon date
                                     return <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-900/30 text-green-400">✅ COUPON</span>;
                                 })()}
                             </td>
