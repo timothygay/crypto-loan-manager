@@ -3112,8 +3112,8 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
 
     const initUnderlyings = trade?.underlyings?.length ? trade.underlyings : [defaultUnderlying(trade?.notionalCurrency||'BTC')];
 
-    const [form,setForm]=useState(trade||{
-        clientName:'',tradeDate:todayLocal(),tenorValue:3,tenorUnit:'months',
+    const [form,setForm]=useState(trade?{...trade,tradeId:trade.id}:{
+        tradeId:'',clientName:'',tradeDate:todayLocal(),tenorValue:3,tenorUnit:'months',
         notionalCurrency:'BTC',notionalAmount:'',
         couponCurrency:'USDT',couponSameAsNotional:false,
         couponRate:'',settlementFrequency:'Monthly',
@@ -3169,7 +3169,7 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
         if(!form.couponRate) return alert('Coupon Rate required');
         if(!underlyings.length) return alert('At least one underlying pair required');
         if(underlyings.some(u=>!u.pair||!u.spotRef||!u.strikePrice)) return alert('Each underlying needs pair, spot ref and strike price');
-        const id=trade?trade.id:`FCN-${Date.now()}`;
+        const id=trade?(form.tradeId?.trim()||trade.id):(form.tradeId?.trim()||'');
         onSave({...form,id,maturityDate,underlyings,
             upfrontFee:form.upfrontFee||'0.00',
             upfrontFeeUnderlying:fcnFeeUnderlying,
@@ -3199,6 +3199,7 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
     return(
         <Modal title={trade?`Edit: ${trade.id}`:'New FCN Trade'} onClose={onClose} wide>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2"><Field label="Trade ID"><Input value={form.tradeId||''} onChange={f('tradeId')} placeholder="e.g. FCN-2026-001"/></Field></div>
                 <div className="md:col-span-2"><Field label="Client Name"><Input value={form.clientName} onChange={f('clientName')} placeholder="Client name"/></Field></div>
                 <Field label="Trade Date"><Input type="date" value={form.tradeDate} onChange={f('tradeDate')}/></Field>
                 <Field label="Tenor">
@@ -4275,8 +4276,8 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
 
 // ─── ACCUMULATOR FORM MODAL ───────────────────────────────────────────────────
 const AccumulatorFormModal = ({trade, onSave, onClose}) => {
-    const [form, setForm] = useState(trade || {
-        clientName:'', tradeDate:todayLocal(), tenorValue:52, tenorUnit:'weeks',
+    const [form, setForm] = useState(trade ? {...trade, tradeId:trade.id} : {
+        tradeId:'', clientName:'', tradeDate:todayLocal(), tenorValue:52, tenorUnit:'weeks',
         notionalCurrency:'USDT', notionalAmount:'',
         underlyingPair:'BTC/USDT', spotReferencePrice:'',
         strikePrice:'', knockOutEnabled:false, knockOutPrice:'',
@@ -4328,7 +4329,7 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
         if (!form.spotReferencePrice) return alert('Spot Reference Price required');
         if (form.knockOutEnabled && !form.knockOutPrice) return alert('KO Price required when KO is enabled');
         if (form.bufferEnabled && !form.bufferPrice) return alert('Buffer Price required when Buffer is enabled');
-        const id = trade ? trade.id : `ACC-${Date.now()}`;
+        const id = trade ? (form.tradeId?.trim() || trade.id) : (form.tradeId?.trim() || '');
         onSave({
             ...form, id, maturityDate,
             amount1: trunc2(amount1).toFixed(2),
@@ -4345,6 +4346,9 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
     return (
         <Modal title={trade?`Edit: ${trade.id}`:'New Accumulator Trade'} onClose={onClose} wide>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                    <Field label="Trade ID"><Input value={form.tradeId||''} onChange={f('tradeId')} placeholder="e.g. ACC-2026-001"/></Field>
+                </div>
                 <div className="md:col-span-2">
                     <Field label="Client Name"><Input value={form.clientName} onChange={f('clientName')} placeholder="Client name"/></Field>
                 </div>
