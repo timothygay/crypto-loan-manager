@@ -3593,7 +3593,8 @@ const FCNModule = ({prices}) => {
         setSheetsLoading(true);
         try {
             const res=await fcnSheetsCall(config.scriptUrl,{action:'readFCNOrders'});
-            if(res.values&&res.values.length) setTrades(res.values.filter(r=>r[0]&&r[1]).map(rowToTrade));
+            // Always replace trades from sheet — even empty sheet clears stale localStorage data
+            if(res.success!==false) setTrades((res.values||[]).filter(r=>r[0]&&r[1]).map(rowToTrade));
         } catch(e){alert('FCN sync error: '+e.message);}
         setSheetsLoading(false);
     };
@@ -4658,7 +4659,8 @@ const AccumulatorModule = ({prices}) => {
         setSheetsLoading(true);
         try {
             const res = await accSheetsCall(config.scriptUrl, {action:'readAccOrders'});
-            if (res.values?.length) setTrades(res.values.filter(r=>r[0]&&r[1]).map(accRowToTrade));
+            // Always replace trades from sheet — even empty sheet clears stale localStorage data
+            if (res.success !== false) setTrades((res.values||[]).filter(r=>r[0]&&r[1]).map(accRowToTrade));
         } catch(e) { alert('Accumulator sync error: '+e.message); }
         setSheetsLoading(false);
     };
