@@ -3169,12 +3169,13 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
         if(!form.couponRate) return alert('Coupon Rate required');
         if(!underlyings.length) return alert('At least one underlying pair required');
         if(underlyings.some(u=>!u.pair||!u.spotRef||!u.strikePrice)) return alert('Each underlying needs pair, spot ref and strike price');
+        const fcnOriginalId=trade?trade.id:null;
         const id=trade?(form.tradeId?.trim()||trade.id):(form.tradeId?.trim()||'');
         onSave({...form,id,maturityDate,underlyings,
             upfrontFee:form.upfrontFee||'0.00',
             upfrontFeeUnderlying:fcnFeeUnderlying,
             upfrontAmount:fcnUpfrontAmount.toFixed(isCrypto(fcnFeeUnderlying)?8:2),
-            paidSettlements:trade?.paidSettlements||[],createdAt:trade?.createdAt||new Date().toISOString()});
+            paidSettlements:trade?.paidSettlements||[],createdAt:trade?.createdAt||new Date().toISOString()},fcnOriginalId);
     };
 
     const notionalDp=isCrypto(form.notionalCurrency)?8:2;
@@ -3502,15 +3503,17 @@ const FCNModule = ({prices}) => {
     // from incorrectly triggering KO/Exercised/Matured status changes.
     // useEffect([prices]) removed — no live barrier updates.
 
-    const pushTrade=async(trade)=>{
+    const pushTrade=async(trade,originalId=null)=>{
         if(!config.scriptUrl) return;
         try {
-            await fcnSheetsCall(config.scriptUrl,{action:'upsertFCNOrder',values:JSON.stringify(tradToRow(trade))});
+            const fcnParams={action:'upsertFCNOrder',values:JSON.stringify(tradToRow(trade))};
+            if(originalId&&originalId!==trade.id) fcnParams.originalId=originalId;
+            await fcnSheetsCall(config.scriptUrl,fcnParams);
         } catch(e){console.error('FCN push failed:',e.message);}
     };
 
-    const addTrade=async(t)=>{ const trade={...t,createdAt:new Date().toISOString()}; setTrades(p=>[...p,trade]); setShowAdd(false); await pushTrade(trade); };
-    const updateTrade=async(t)=>{ setTrades(p=>p.map(x=>x.id===t.id?t:x)); setEditingTrade(null); await pushTrade(t); };
+    const addTrade=async(t)=>{ const trade={...t,createdAt:new Date().toISOString()}; setTrades(p=>[...p,trade]); setShowAdd(false); await pushTrade(trade,null); };
+    const updateTrade=async(t,originalId=null)=>{ const matchId=originalId||t.id; setTrades(p=>p.map(x=>x.id===matchId?t:x)); setEditingTrade(null); await pushTrade(t,originalId); };
     const deleteTrade=(id)=>{ if(confirm('Delete this FCN trade?')) setTrades(p=>p.filter(t=>t.id!==id)); };
     const resetTradeStatus=(id)=>{
         // Reset to Active so fcnBarrierCheck can re-derive status from stored fixing prices
@@ -4330,6 +4333,7 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
         if (!form.spotReferencePrice) return alert('Spot Reference Price required');
         if (form.knockOutEnabled && !form.knockOutPrice) return alert('KO Price required when KO is enabled');
         if (form.bufferEnabled && !form.bufferPrice) return alert('Buffer Price required when Buffer is enabled');
+        const originalId = trade ? trade.id : null; // original ID before any edit
         const id = trade ? (form.tradeId?.trim() || trade.id) : (form.tradeId?.trim() || '');
         onSave({
             ...form, id, maturityDate,
@@ -4339,7 +4343,7 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
             upfrontFeeUnderlying: feeUnderlying,
             fixings: trade?.fixings || {},
             createdAt: trade?.createdAt || new Date().toISOString(),
-        });
+        }, originalId);
     };
 
     const schedPreview = maturityDate ? buildAccSchedule({...form,maturityDate}).length : 0;
@@ -4544,18 +4548,24 @@ const AccumulatorModule = ({prices}) => {
         return()=>clearInterval(t);
     },[trades.length]); // also re-run when new trades load
 
-    const pushTrade = async (trade) => {
+    const pushTrade = async (trade, originalId=null) => {
         if (!config.scriptUrl) return;
         try {
-            await accSheetsCall(config.scriptUrl, {action:'upsertAccOrder', values:JSON.stringify(accTradeToRow(trade))});
+            const params = {action:'upsertAccOrder', values:JSON.stringify(accTradeToRow(trade))};
+            if (originalId && originalId !== trade.id) params.originalId = originalId;
+            await accSheetsCall(config.scriptUrl, params);
         } catch(e) { console.error('Acc Sheets push failed:', e.message); }
     };
 
     const addTrade = async (t) => {
-        setTrades(p=>[...p, t]); setShowAdd(false); await pushTrade(t);
+        setTrades(p=>[...p, t]); setShowAdd(false); await pushTrade(t, null);
     };
-    const updateTrade = async (t) => {
-        setTrades(p=>p.map(x=>x.id===t.id?t:x)); setEditingTrade(null); await pushTrade(t);
+    const updateTrade = async (t, originalId=null) => {
+        // Match by originalId in state (in case Trade ID was changed)
+        const matchId = originalId || t.id;
+        setTrades(p=>p.map(x=>x.id===matchId?t:x));
+        setEditingTrade(null);
+        await pushTrade(t, originalId);
     };
     const deleteTrade = (id) => {
         if (confirm('Delete this Accumulator trade?')) setTrades(p=>p.filter(t=>t.id!==id));
