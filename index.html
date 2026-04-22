@@ -3524,70 +3524,40 @@ const FCNModule = ({prices}) => {
             return reset;
         }));
     };
-    const confirmPayment=async(tradeId,date)=>{
-        // Compute everything from current trades state BEFORE calling setTrades —
-        // same fix as Accumulator: setTrades updater runs asynchronously so
-        // variables set inside it are not available in the code that follows.
-        const trade=trades.find(t=>t.id===tradeId);
-        if(!trade) return;
-
-        // Build updated trade
-        const paid=[...(trade.paidSettlements||[])];
-        if(!paid.includes(date)) paid.push(date);
-        const updatedTrade={...trade,paidSettlements:paid};
-
-        // Build settlement log entry synchronously
-        const sched=buildFCNSchedule(trade);
-        const settlementEntry=sched.find(s=>s.date===date);
-        const isMaturity=settlementEntry?.isMaturity||false;
-        const coupon=calcFCNCoupon(trade,date); // Act/365 for this specific settlement
-        const underlyingPairs=(trade.underlyings||[]).map(u=>u.pair).join(', ');
-        let maturityType='—', notionalReturned=0;
-        if(isMaturity){
-            if(trade.status==='Exercised'){
-                maturityType=`Exercised — worst-of ${trade.worstOffPair||'N/A'} @ ${trade.worstOffStrike||'N/A'}`;
-                notionalReturned=0;
-            } else if(trade.status==='Knocked Out'){
-                maturityType='Knocked Out — notional returned';
-                notionalReturned=parseFloat(trade.notionalAmount)||0;
-            } else {
-                maturityType='Matured — notional returned';
-                notionalReturned=parseFloat(trade.notionalAmount)||0;
-            }
+    const confirmPayment = async (tradeId, date) => {
+        if (!config.scriptUrl) {
+            alert('FCN script URL not configured. Go to Settings to add it.');
+            return;
         }
-        const logEntry={
-            tradeId:trade.id, clientName:trade.clientName,
-            settlementDate:date, confirmedAt:new Date().toISOString(),
-            type:isMaturity?'MATURITY':'COUPON',
-            couponAmount:coupon.toFixed(isCrypto(trade.couponCurrency)?8:2),
-            couponCcy:trade.couponCurrency,
-            notionalReturned:notionalReturned.toFixed(isCrypto(trade.notionalCurrency)?8:2),
-            notionalCcy:trade.notionalCurrency,
-            maturityType,
-            underlyingPairs,
-            kiTriggered:trade.knockInTriggered?'YES':'NO',
-            tradeStatus:trade.status,
-        };
+        try {
+            // Call FCN Apps Script to flip Confirmed = YES on the existing
+            // FCN_Settlements row (written by runDailyFCNCheck at 4:05pm SGT).
+            // Does NOT create a new row — only marks the existing one confirmed.
+            await fcnSheetsCall(config.scriptUrl, {
+                action: 'confirmFCNSettlement',
+                tradeId: tradeId,
+                settlementDate: date,
+            });
 
-        // Update state and push trade
-        setTrades(prev=>prev.map(t=>t.id===tradeId?updatedTrade:t));
-        pushTrade(updatedTrade);
-
-        // Log to FCN_Settlements sheet — guaranteed non-null now
-        if(config.scriptUrl){
-            try{
-                await fcnSheetsCall(config.scriptUrl,{
-                    action:'logFCNSettlement',
-                    values:JSON.stringify([
-                        logEntry.tradeId, logEntry.clientName,
-                        logEntry.settlementDate, logEntry.confirmedAt,
-                        logEntry.type, logEntry.couponAmount, logEntry.couponCcy,
-                        logEntry.notionalReturned, logEntry.notionalCcy,
-                        logEntry.maturityType, logEntry.underlyingPairs,
-                        logEntry.kiTriggered, logEntry.tradeStatus,
-                    ])
+            // Update paidSettlements in local state + FCN_Orders so the UI
+            // dashboard reflects the confirmed payment immediately.
+            setTrades(prev => {
+                const updated = prev.map(t => {
+                    if (t.id !== tradeId) return t;
+                    const paid = [...(t.paidSettlements || [])];
+                    if (!paid.includes(date)) paid.push(date);
+                    return { ...t, paidSettlements: paid };
                 });
-            } catch(e){console.error('FCN settlement log failed:',e.message);}
+                const trade = updated.find(t => t.id === tradeId);
+                if (trade) pushTrade(trade);
+                return updated;
+            });
+
+        } catch(e) {
+            // FCN_Settlements row doesn't exist yet — runDailyFCNCheck hasn't run.
+            alert('Could not confirm settlement for ' + tradeId + ' / ' + date + '.\n\n'
+                + 'Reason: ' + e.message + '\n\n'
+                + 'Wait until after 4:05pm SGT, or run testRunTodayFCNCheck() in the FCN Apps Script.');
         }
     };
 
