@@ -752,7 +752,7 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                                             {fmt(g.ratio,1)}%
                                         </span>
                                     </div>
-                                    <p className="text-lg font-bold mono text-white">{fmtCrypto(g.totalCollateral,4)} {g.type}</p>
+                                    <p className="text-lg font-bold mono text-white">{fmtCrypto(g.totalCollateral,8)} {g.type}</p>
                                     <p className="text-xs text-slate-500">≈${fmt(g.totalCollVal,0)} · vs ${fmt(g.totalLoan,0)} loans</p>
                                     {/* Visual ratio bar */}
                                     <div className="mt-1.5 h-1 bg-slate-700 rounded-full overflow-hidden">
