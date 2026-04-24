@@ -47,9 +47,78 @@
         .trading-desk { background: linear-gradient(135deg, rgba(6,182,212,0.05), rgba(16,185,129,0.03)); border: 1px solid rgba(6,182,212,0.18); border-radius: 12px; }
         .sell-row { background: rgba(239,68,68,0.05); }
         .base-row { background: rgba(6,182,212,0.05); }
+
+        /* ── LIGHT MODE ─────────────────────────────────────────────────── */
+        .light { background-color: #f1f5f9; color: #0f172a; }
+        .light .card { background: rgba(255,255,255,0.85); border-color: rgba(203,213,225,0.9); }
+        .light .card-inner { background: rgba(241,245,249,0.9); border-color: rgba(203,213,225,0.7); }
+        .light .tab-active { color: #0891b2; border-bottom-color: #0891b2; }
+        .light .tab-inactive { color: #64748b; }
+        .light .tab-inactive:hover { color: #0f172a; border-bottom-color: #94a3b8; }
+        .light .btn-secondary { background: rgba(226,232,240,0.9); border-color: rgba(148,163,184,0.8); color: #1e293b; }
+        .light .btn-secondary:hover { background: rgba(203,213,225,0.9); }
+        .light .mono { color: #1e293b; }
+        .light .text-white { color: #0f172a !important; }
+        .light .text-slate-300 { color: #334155 !important; }
+        .light .text-slate-400 { color: #475569 !important; }
+        .light .text-slate-500 { color: #64748b !important; }
+        .light .text-slate-600 { color: #94a3b8 !important; }
+        .light .border-slate-700 { border-color: #cbd5e1 !important; }
+        .light .border-slate-800 { border-color: #e2e8f0 !important; }
+        .light .bg-slate-800 { background: #e2e8f0 !important; }
+        .light .bg-slate-900 { background: #f8fafc !important; }
+        .light .bg-slate-950 { background: #f1f5f9 !important; }
+        .light .bg-black\/80 { background: rgba(15,23,42,0.7) !important; }
+        .light input, .light select, .light textarea {
+            background: #f8fafc !important;
+            border-color: #cbd5e1 !important;
+            color: #0f172a !important;
+        }
+        .light input::placeholder { color: #94a3b8 !important; }
+        .light .trading-desk { background: linear-gradient(135deg, rgba(6,182,212,0.06), rgba(16,185,129,0.04)); border-color: rgba(6,182,212,0.25); }
+        .light .trigger-row { background: rgba(239,68,68,0.06); }
+        .light .base-row { background: rgba(6,182,212,0.07); }
+        .light .sell-row { background: rgba(239,68,68,0.06); }
+        .light .drill-back { color: #0891b2; }
+        .light .drill-back:hover { color: #0e7490; }
+        .light .bg-slate-900\/40 { background: rgba(248,250,252,0.95) !important; }
+        .light .bg-slate-900\/60 { background: rgba(248,250,252,0.95) !important; }
+        .light .bg-slate-800\/50 { background: rgba(226,232,240,0.6) !important; }
+        .light .bg-slate-800\/60 { background: rgba(226,232,240,0.7) !important; }
+        .light .bg-slate-700 { background: #cbd5e1 !important; }
+        .light .border-slate-800\/50 { border-color: rgba(203,213,225,0.8) !important; }
+        .light .border-slate-800\/30 { border-color: rgba(203,213,225,0.6) !important; }
+        .light .border-slate-800\/40 { border-color: rgba(203,213,225,0.7) !important; }
+        .light .bg-red-900\/20 { background: rgba(254,226,226,0.8) !important; }
+        .light .bg-amber-900\/10 { background: rgba(255,251,235,0.8) !important; }
+        .light .bg-amber-900\/15 { background: rgba(255,251,235,0.9) !important; }
+        .light .bg-amber-900\/30 { background: rgba(254,243,199,0.9) !important; }
+        .light .bg-green-900\/20 { background: rgba(220,252,231,0.8) !important; }
+        .light .bg-cyan-900\/10 { background: rgba(236,254,255,0.8) !important; }
+        .light .bg-cyan-900\/20 { background: rgba(207,250,254,0.8) !important; }
+        .light .bg-orange-900\/15 { background: rgba(255,237,213,0.9) !important; }
+        .light .bg-orange-900\/20 { background: rgba(255,237,213,0.9) !important; }
+        .light .bg-violet-900\/20 { background: rgba(245,243,255,0.9) !important; }
+        .light .bg-yellow-900\/20 { background: rgba(254,252,232,0.9) !important; }
+        .light .bg-blue-900\/20 { background: rgba(219,234,254,0.8) !important; }
+        .light .bg-purple-900\/20 { background: rgba(243,232,255,0.8) !important; }
+        .light .border-yellow-500\/20 { border-color: rgba(234,179,8,0.35) !important; }
+        .light .border-orange-500\/20 { border-color: rgba(249,115,22,0.35) !important; }
+        .light .border-green-500\/30 { border-color: rgba(34,197,94,0.4) !important; }
+        .light .border-cyan-500\/20 { border-color: rgba(6,182,212,0.35) !important; }
+        .light .border-red-500\/40 { border-color: rgba(239,68,68,0.5) !important; }
+        .light .border-amber-500\/40 { border-color: rgba(245,158,11,0.5) !important; }
+        .light .bg-red-900\/30 { background: rgba(254,226,226,0.9) !important; }
+        .light .bg-amber-900\/40 { background: rgba(254,243,199,0.9) !important; }
+        .light .table-row-hover:hover { background: rgba(203,213,225,0.4); }
+        /* theme toggle button */
+        .theme-toggle { position: fixed; bottom: 20px; right: 20px; z-index: 1000; width: 44px; height: 44px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.25); transition: all 0.2s; }
+        .dark .theme-toggle { background: #1e293b; }
+        .light .theme-toggle { background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,0.12); }
+        .theme-toggle:hover { transform: scale(1.1); }
     </style>
 </head>
-<body class="bg-slate-950 text-white min-h-screen">
+<body class="bg-slate-950 text-white min-h-screen dark">
 <div id="auth-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);align-items:center;justify-content:center;"></div>
 <div id="root"></div>
 <script>
@@ -3524,40 +3593,70 @@ const FCNModule = ({prices}) => {
             return reset;
         }));
     };
-    const confirmPayment = async (tradeId, date) => {
-        if (!config.scriptUrl) {
-            alert('FCN script URL not configured. Go to Settings to add it.');
-            return;
+    const confirmPayment=async(tradeId,date)=>{
+        // Compute everything from current trades state BEFORE calling setTrades —
+        // same fix as Accumulator: setTrades updater runs asynchronously so
+        // variables set inside it are not available in the code that follows.
+        const trade=trades.find(t=>t.id===tradeId);
+        if(!trade) return;
+
+        // Build updated trade
+        const paid=[...(trade.paidSettlements||[])];
+        if(!paid.includes(date)) paid.push(date);
+        const updatedTrade={...trade,paidSettlements:paid};
+
+        // Build settlement log entry synchronously
+        const sched=buildFCNSchedule(trade);
+        const settlementEntry=sched.find(s=>s.date===date);
+        const isMaturity=settlementEntry?.isMaturity||false;
+        const coupon=calcFCNCoupon(trade,date); // Act/365 for this specific settlement
+        const underlyingPairs=(trade.underlyings||[]).map(u=>u.pair).join(', ');
+        let maturityType='—', notionalReturned=0;
+        if(isMaturity){
+            if(trade.status==='Exercised'){
+                maturityType=`Exercised — worst-of ${trade.worstOffPair||'N/A'} @ ${trade.worstOffStrike||'N/A'}`;
+                notionalReturned=0;
+            } else if(trade.status==='Knocked Out'){
+                maturityType='Knocked Out — notional returned';
+                notionalReturned=parseFloat(trade.notionalAmount)||0;
+            } else {
+                maturityType='Matured — notional returned';
+                notionalReturned=parseFloat(trade.notionalAmount)||0;
+            }
         }
-        try {
-            // Call FCN Apps Script to flip Confirmed = YES on the existing
-            // FCN_Settlements row (written by runDailyFCNCheck at 4:05pm SGT).
-            // Does NOT create a new row — only marks the existing one confirmed.
-            await fcnSheetsCall(config.scriptUrl, {
-                action: 'confirmFCNSettlement',
-                tradeId: tradeId,
-                settlementDate: date,
-            });
+        const logEntry={
+            tradeId:trade.id, clientName:trade.clientName,
+            settlementDate:date, confirmedAt:new Date().toISOString(),
+            type:isMaturity?'MATURITY':'COUPON',
+            couponAmount:coupon.toFixed(isCrypto(trade.couponCurrency)?8:2),
+            couponCcy:trade.couponCurrency,
+            notionalReturned:notionalReturned.toFixed(isCrypto(trade.notionalCurrency)?8:2),
+            notionalCcy:trade.notionalCurrency,
+            maturityType,
+            underlyingPairs,
+            kiTriggered:trade.knockInTriggered?'YES':'NO',
+            tradeStatus:trade.status,
+        };
 
-            // Update paidSettlements in local state + FCN_Orders so the UI
-            // dashboard reflects the confirmed payment immediately.
-            setTrades(prev => {
-                const updated = prev.map(t => {
-                    if (t.id !== tradeId) return t;
-                    const paid = [...(t.paidSettlements || [])];
-                    if (!paid.includes(date)) paid.push(date);
-                    return { ...t, paidSettlements: paid };
+        // Update state and push trade
+        setTrades(prev=>prev.map(t=>t.id===tradeId?updatedTrade:t));
+        pushTrade(updatedTrade);
+
+        // Log to FCN_Settlements sheet — guaranteed non-null now
+        if(config.scriptUrl){
+            try{
+                await fcnSheetsCall(config.scriptUrl,{
+                    action:'logFCNSettlement',
+                    values:JSON.stringify([
+                        logEntry.tradeId, logEntry.clientName,
+                        logEntry.settlementDate, logEntry.confirmedAt,
+                        logEntry.type, logEntry.couponAmount, logEntry.couponCcy,
+                        logEntry.notionalReturned, logEntry.notionalCcy,
+                        logEntry.maturityType, logEntry.underlyingPairs,
+                        logEntry.kiTriggered, logEntry.tradeStatus,
+                    ])
                 });
-                const trade = updated.find(t => t.id === tradeId);
-                if (trade) pushTrade(trade);
-                return updated;
-            });
-
-        } catch(e) {
-            // FCN_Settlements row doesn't exist yet — runDailyFCNCheck hasn't run.
-            alert('Could not confirm settlement for ' + tradeId + ' / ' + date + '.\n\n'
-                + 'Reason: ' + e.message + '\n\n'
-                + 'Wait until after 4:05pm SGT, or run testRunTodayFCNCheck() in the FCN Apps Script.');
+            } catch(e){console.error('FCN settlement log failed:',e.message);}
         }
     };
 
@@ -4719,6 +4818,28 @@ const AccumulatorModule = ({prices}) => {
 
 const App = () => {
     const [tab,setTab]=useState('ssps');
+    // Persist theme preference across sessions
+    const [isLight, setIsLight] = useState(()=>{
+        try { return localStorage.getItem('cpb_theme')==='light'; } catch { return false; }
+    });
+
+    // Apply theme class to <body> whenever it changes
+    useEffect(()=>{
+        const body = document.body;
+        if (isLight) {
+            body.classList.remove('dark');
+            body.classList.add('light');
+            body.style.backgroundColor = '#f1f5f9';
+            body.style.color = '#0f172a';
+        } else {
+            body.classList.remove('light');
+            body.classList.add('dark');
+            body.style.backgroundColor = '';
+            body.style.color = '';
+        }
+        try { localStorage.setItem('cpb_theme', isLight ? 'light' : 'dark'); } catch {}
+    }, [isLight]);
+
     // Bybit prices — Loans + SSPS only (BTC, ETH)
     const [bybitPrices,setBybitPrices]=useState({BTC:0,ETH:0});
     const [bybitUpdate,setBybitUpdate]=useState(null);
@@ -4774,11 +4895,13 @@ const App = () => {
     },[]);
 
     return(
-        <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
+        <div className={`min-h-screen ${isLight ? 'bg-slate-100' : 'bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950'} text-white`}>
             <div className="w-full px-6 md:px-10 py-6">
-                <div className="mb-6">
-                    <h1 className="text-3xl font-bold gradient-text mb-1">Crypto Prime Broker</h1>
-                    <p className="text-slate-500 text-sm">Internal Portfolio Management System</p>
+                <div className="flex items-start justify-between mb-6">
+                    <div>
+                        <h1 className="text-3xl font-bold gradient-text mb-1">Crypto Prime Broker</h1>
+                        <p className="text-slate-500 text-sm">Internal Portfolio Management System</p>
+                    </div>
                 </div>
                 <PriceTicker bybitPrices={bybitPrices} binancePrices={binancePrices} bybitUpdate={bybitUpdate} binanceUpdate={binanceUpdate}/>
                 <div className="flex gap-1 mb-6 border-b border-slate-800">
@@ -4788,6 +4911,14 @@ const App = () => {
                 </div>
                 {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:<AccumulatorModule prices={binancePrices}/>}
             </div>
+            {/* Floating theme toggle — fixed bottom-right */}
+            <button
+                onClick={()=>setIsLight(v=>!v)}
+                className="theme-toggle"
+                title={isLight ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
+            >
+                {isLight ? '🌙' : '☀️'}
+            </button>
         </div>
     );
 };
