@@ -1,0 +1,7 @@
+{
+  "name": "crypto-loan-manager",
+  "version": "1.0.0",
+  "dependencies": {
+    "bybit-api": "^3.10.0"
+  }
+}
