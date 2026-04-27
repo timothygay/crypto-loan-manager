@@ -21,22 +21,6 @@ function buildHeaders(apiKey, apiSecret, queryString) {
     };
 }
 
-// Returns { ok, status, json, rawText } — never throws
-async function bybitFetch(path, params, apiKey, apiSecret) {
-    const queryString = new URLSearchParams(params).toString();
-    const url         = `${BYBIT_BASE}${path}${queryString ? '?' + queryString : ''}`;
-    const headers     = buildHeaders(apiKey, apiSecret, queryString);
-    let rawText = '';
-    try {
-        const res = await fetch(url, { headers });
-        rawText   = await res.text();
-        const json = JSON.parse(rawText);
-        return { ok: true, status: res.status, json, rawText };
-    } catch (e) {
-        return { ok: false, status: 0, json: null, rawText, parseError: e.message };
-    }
-}
-
 module.exports = async function handler(req, res) {
     if (req.method !== 'GET') {
         return res.status(405).json({ error: 'Method not allowed' });
@@ -45,99 +29,70 @@ module.exports = async function handler(req, res) {
     const apiKey    = process.env.BYBIT_TRS_API_KEY;
     const apiSecret = process.env.BYBIT_TRS_API_SECRET;
 
+    // ── STEP 1: Check env vars are present ──────────────────────────────────
+    // Show first/last 4 chars of key so you can confirm it's the right one
+    // without exposing the full value
+    const keyPreview    = apiKey    ? `${apiKey.slice(0,4)}...${apiKey.slice(-4)}`    : 'NOT SET';
+    const secretPreview = apiSecret ? `${apiSecret.slice(0,4)}...${apiSecret.slice(-4)}` : 'NOT SET';
+
     if (!apiKey || !apiSecret) {
         return res.status(500).json({
-            error: 'Missing env vars: BYBIT_TRS_API_KEY or BYBIT_TRS_API_SECRET not set.',
+            stage: 'env-check',
+            error: 'Missing environment variables',
+            BYBIT_TRS_API_KEY:    keyPreview,
+            BYBIT_TRS_API_SECRET: secretPreview,
         });
     }
 
-    // ── Step 1: Try sub-member lookup (works if key is on master account) ──
-    let subUid = null;
-    const subFetch = await bybitFetch(
-        '/v5/user/query-sub-members',
-        { limit: '100' },
-        apiKey, apiSecret
-    );
-    if (subFetch.ok && subFetch.json?.retCode === 0) {
-        const members = subFetch.json.result?.subMembers || [];
-        const match = members.find(m =>
-            (m.username   || '').toLowerCase() === SUBACCT_NAME.toLowerCase() ||
-            (m.memberName || '').toLowerCase() === SUBACCT_NAME.toLowerCase()
+    // ── STEP 2: Check what region/IP this function is running from ──────────
+    let serverIp = 'unknown';
+    try {
+        const ipRes = await fetch('https://api.ipify.org?format=json');
+        const ipJson = await ipRes.json();
+        serverIp = ipJson.ip;
+    } catch(e) {
+        serverIp = 'fetch-failed: ' + e.message;
+    }
+
+    // ── STEP 3: Hit Bybit public endpoint (no auth) to confirm reachability ─
+    let publicTest = {};
+    try {
+        const pubRes  = await fetch('https://api.bybit.com/v5/market/time');
+        const pubText = await pubRes.text();
+        publicTest = {
+            status:      pubRes.status,
+            rawResponse: pubText.slice(0, 200),
+        };
+    } catch(e) {
+        publicTest = { error: e.message };
+    }
+
+    // ── STEP 4: Hit authenticated endpoint ──────────────────────────────────
+    let authTest = {};
+    try {
+        const queryString = 'accountType=UNIFIED';
+        const headers     = buildHeaders(apiKey, apiSecret, queryString);
+        const authRes     = await fetch(
+            `${BYBIT_BASE}/v5/account/wallet-balance?${queryString}`,
+            { headers }
         );
-        if (match) subUid = match.uid;
-    }
-    // Log what happened so we can see it in Vercel function logs
-    console.log('sub-member lookup:', {
-        retCode: subFetch.json?.retCode,
-        retMsg:  subFetch.json?.retMsg,
-        subUid,
-        rawPreview: subFetch.rawText?.slice(0, 200),
-    });
-
-    // ── Step 2: Fetch wallet balance ────────────────────────────────────────
-    const walletParams = { accountType: 'UNIFIED' };
-    if (subUid) walletParams.memberId = subUid;
-
-    const walletFetch = await bybitFetch(
-        '/v5/account/wallet-balance',
-        walletParams,
-        apiKey, apiSecret
-    );
-
-    console.log('wallet fetch:', {
-        retCode: walletFetch.json?.retCode,
-        retMsg:  walletFetch.json?.retMsg,
-        parseError: walletFetch.parseError,
-        rawPreview: walletFetch.rawText?.slice(0, 300),
-    });
-
-    // If we couldn't even parse JSON, return the raw text so we can see it
-    if (!walletFetch.ok) {
-        return res.status(500).json({
-            error:      `Bybit returned non-JSON response: ${walletFetch.parseError}`,
-            rawResponse: walletFetch.rawText?.slice(0, 500) || '(empty)',
-            subUidFound: subUid,
-            step:       'wallet-balance',
-        });
+        const authText = await authRes.text();
+        authTest = {
+            status:      authRes.status,
+            rawResponse: authText.slice(0, 500),
+        };
+    } catch(e) {
+        authTest = { error: e.message };
     }
 
-    const walletJson = walletFetch.json;
-
-    // Bybit API-level error
-    if (walletJson.retCode !== 0) {
-        return res.status(500).json({
-            error:      `Bybit API error ${walletJson.retCode}: ${walletJson.retMsg}`,
-            subUidFound: subUid,
-            step:       'wallet-balance',
-        });
-    }
-
-    const account = walletJson.result?.list?.[0];
-    if (!account) {
-        return res.status(500).json({
-            error:      'Bybit returned success but no account data in result.list[0]',
-            rawResult:  JSON.stringify(walletJson.result).slice(0, 300),
-            subUidFound: subUid,
-        });
-    }
-
-    const totalNav = parseFloat(account.totalEquity || 0);
-    const assets   = (account.coin || [])
-        .filter(c => parseFloat(c.walletBalance || 0) !== 0 || parseFloat(c.usdValue || 0) > 0.01)
-        .map(c => ({
-            coin:                c.coin,
-            walletBalance:       parseFloat(c.walletBalance       || 0),
-            availableToWithdraw: parseFloat(c.availableToWithdraw || 0),
-            unrealisedPnl:       parseFloat(c.unrealisedPnl       || 0),
-            usdValue:            parseFloat(c.usdValue            || 0),
-        }));
-
-    res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
     return res.status(200).json({
-        totalNav,
-        assets,
-        subaccount: SUBACCT_NAME,
-        subUidFound: subUid,
-        fetchedAt:  new Date().toISOString(),
+        stage:                'full-diagnostic',
+        envVars: {
+            BYBIT_TRS_API_KEY:    keyPreview,
+            BYBIT_TRS_API_SECRET: secretPreview,
+        },
+        serverIp,
+        publicBybitTest:  publicTest,
+        authBybitTest:    authTest,
     });
 };
