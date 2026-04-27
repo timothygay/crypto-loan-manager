@@ -9,16 +9,43 @@ function sign(secret, payload) {
     return crypto.createHmac('sha256', secret).update(payload).digest('hex');
 }
 
-function buildHeaders(apiKey, apiSecret, queryString) {
+// Bybit V5 GET signature:
+// paramString = raw query string (e.g. "accountType=UNIFIED")
+// sigPayload  = timestamp + apiKey + recvWindow + paramString
+// signature   = HMAC-SHA256(sigPayload, apiSecret)
+function buildHeaders(apiKey, apiSecret, paramString) {
     const timestamp  = Date.now().toString();
-    const sigPayload = timestamp + apiKey + RECV_WINDOW + (queryString || '');
+    const sigPayload = timestamp + apiKey + RECV_WINDOW + paramString;
+    const signature  = sign(apiSecret, sigPayload);
     return {
         'X-BAPI-API-KEY':     apiKey,
         'X-BAPI-TIMESTAMP':   timestamp,
         'X-BAPI-RECV-WINDOW': RECV_WINDOW,
-        'X-BAPI-SIGN':        sign(apiSecret, sigPayload),
-        'Content-Type':       'application/json',
+        'X-BAPI-SIGN':        signature,
     };
+}
+
+// Build param string exactly as Bybit expects — no URLencoding of values
+function toParamString(params) {
+    return Object.entries(params)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('&');
+}
+
+async function bybitGet(path, params, apiKey, apiSecret) {
+    const paramString = toParamString(params);
+    const url         = `${BYBIT_BASE}${path}?${paramString}`;
+    const headers     = buildHeaders(apiKey, apiSecret, paramString);
+    const res         = await fetch(url, { headers });
+    const text        = await res.text();
+    let json;
+    try { json = JSON.parse(text); } catch(e) {
+        throw new Error(`Non-JSON from Bybit (${res.status}): ${text.slice(0,200)}`);
+    }
+    if (json.retCode !== 0) {
+        throw new Error(`Bybit error ${json.retCode}: ${json.retMsg}`);
+    }
+    return json.result;
 }
 
 module.exports = async function handler(req, res) {
@@ -29,70 +56,67 @@ module.exports = async function handler(req, res) {
     const apiKey    = process.env.BYBIT_TRS_API_KEY;
     const apiSecret = process.env.BYBIT_TRS_API_SECRET;
 
-    // ── STEP 1: Check env vars are present ──────────────────────────────────
-    // Show first/last 4 chars of key so you can confirm it's the right one
-    // without exposing the full value
-    const keyPreview    = apiKey    ? `${apiKey.slice(0,4)}...${apiKey.slice(-4)}`    : 'NOT SET';
-    const secretPreview = apiSecret ? `${apiSecret.slice(0,4)}...${apiSecret.slice(-4)}` : 'NOT SET';
-
     if (!apiKey || !apiSecret) {
         return res.status(500).json({
-            stage: 'env-check',
-            error: 'Missing environment variables',
-            BYBIT_TRS_API_KEY:    keyPreview,
-            BYBIT_TRS_API_SECRET: secretPreview,
+            error: 'BYBIT_TRS_API_KEY or BYBIT_TRS_API_SECRET not set in Vercel environment variables.',
         });
     }
 
-    // ── STEP 2: Check what region/IP this function is running from ──────────
-    let serverIp = 'unknown';
     try {
-        const ipRes = await fetch('https://api.ipify.org?format=json');
-        const ipJson = await ipRes.json();
-        serverIp = ipJson.ip;
-    } catch(e) {
-        serverIp = 'fetch-failed: ' + e.message;
-    }
+        // ── Step 1: Try sub-member lookup to find SMA01 UID ─────────────────
+        let subUid = null;
+        try {
+            const subResult = await bybitGet(
+                '/v5/user/query-sub-members',
+                { limit: '100' },
+                apiKey, apiSecret
+            );
+            const members = subResult?.subMembers || [];
+            const match   = members.find(m =>
+                (m.username   || '').toLowerCase() === SUBACCT_NAME.toLowerCase() ||
+                (m.memberName || '').toLowerCase() === SUBACCT_NAME.toLowerCase()
+            );
+            if (match) subUid = match.uid;
+        } catch(e) {
+            // Non-fatal — key may belong to the subaccount itself
+            console.warn('Sub-member lookup failed (non-fatal):', e.message);
+        }
 
-    // ── STEP 3: Hit Bybit public endpoint (no auth) to confirm reachability ─
-    let publicTest = {};
-    try {
-        const pubRes  = await fetch('https://api.bybit.com/v5/market/time');
-        const pubText = await pubRes.text();
-        publicTest = {
-            status:      pubRes.status,
-            rawResponse: pubText.slice(0, 200),
-        };
-    } catch(e) {
-        publicTest = { error: e.message };
-    }
+        // ── Step 2: Fetch wallet balance ─────────────────────────────────────
+        const walletParams = { accountType: 'UNIFIED' };
+        if (subUid) walletParams.memberId = subUid;
 
-    // ── STEP 4: Hit authenticated endpoint ──────────────────────────────────
-    let authTest = {};
-    try {
-        const queryString = 'accountType=UNIFIED';
-        const headers     = buildHeaders(apiKey, apiSecret, queryString);
-        const authRes     = await fetch(
-            `${BYBIT_BASE}/v5/account/wallet-balance?${queryString}`,
-            { headers }
+        const walletResult = await bybitGet(
+            '/v5/account/wallet-balance',
+            walletParams,
+            apiKey, apiSecret
         );
-        const authText = await authRes.text();
-        authTest = {
-            status:      authRes.status,
-            rawResponse: authText.slice(0, 500),
-        };
-    } catch(e) {
-        authTest = { error: e.message };
-    }
 
-    return res.status(200).json({
-        stage:                'full-diagnostic',
-        envVars: {
-            BYBIT_TRS_API_KEY:    keyPreview,
-            BYBIT_TRS_API_SECRET: secretPreview,
-        },
-        serverIp,
-        publicBybitTest:  publicTest,
-        authBybitTest:    authTest,
-    });
+        const account = walletResult?.list?.[0];
+        if (!account) throw new Error('No account data in Bybit response');
+
+        const totalNav = parseFloat(account.totalEquity || 0);
+        const assets   = (account.coin || [])
+            .filter(c => parseFloat(c.walletBalance || 0) !== 0 || parseFloat(c.usdValue || 0) > 0.01)
+            .map(c => ({
+                coin:                c.coin,
+                walletBalance:       parseFloat(c.walletBalance       || 0),
+                availableToWithdraw: parseFloat(c.availableToWithdraw || 0),
+                unrealisedPnl:       parseFloat(c.unrealisedPnl       || 0),
+                usdValue:            parseFloat(c.usdValue            || 0),
+            }));
+
+        res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
+        return res.status(200).json({
+            totalNav,
+            assets,
+            subaccount: SUBACCT_NAME,
+            subUidFound: subUid,
+            fetchedAt:  new Date().toISOString(),
+        });
+
+    } catch(err) {
+        console.error('bybit-trs error:', err.message);
+        return res.status(500).json({ error: err.message });
+    }
 };
