@@ -1,12 +1,9 @@
 {
   "version": 2,
-  "regions": ["sin1"],
+  "regions": ["cdg1"],
   "functions": {
     "api/prices.js": {
       "maxDuration": 10
-    },
-    "api/bybit-trs.js": {
-      "regions": ["lhr1"]
     }
   }
 }
