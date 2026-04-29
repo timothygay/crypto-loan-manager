@@ -4959,8 +4959,13 @@ const ACCPriceLadder = ({config}) => {
                 strikeAbs:   r[7]  || '',
                 koPct:       r[8]  || '',
                 koAbs:       r[9]  || '',
-                upfrontPct:  r[10] || '',
-                // r[11] = Leverage — loaded but not shown on UI
+                // Upfront displayed = Upfront % / Leverage (col 11)
+                upfrontPct:  (() => {
+                    const raw      = parseFloat((r[10]||'').replace('%',''));
+                    const leverage = parseFloat(r[11]) || 1;
+                    if (isNaN(raw)) return r[10] || '';
+                    return (raw / leverage).toFixed(2) + '%';
+                })(),
                 uploadedAt:  r[12] || '',
             }));
             setRows(data);
