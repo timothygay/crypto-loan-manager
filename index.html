@@ -4148,15 +4148,6 @@ const ACC_STATUS_BADGE = {
     'Matured':     'bg-blue-500/15 text-blue-400 border-blue-500/30',
 };
 
-// Sheets call
-const accSheetsCall = async (url, payload) => {
-    const qs = Object.entries(payload).map(([k,v])=>`${k}=${encodeURIComponent(typeof v==='object'?JSON.stringify(v):v)}`).join('&');
-    const res = await fetch(`${url}?${qs}`);
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error||'Accumulator Sheets error');
-    return data;
-};
-
 const accTradeToRow = (t) => [
     t.id, t.clientName, t.tradeDate, t.tenorValue, t.tenorUnit, t.maturityDate,
     t.notionalCurrency, t.notionalAmount, t.underlyingPair, t.spotReferencePrice,
