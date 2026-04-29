@@ -3400,6 +3400,213 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
     );
 };
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FCN PRICE LADDER
+// ═══════════════════════════════════════════════════════════════════════════════
+const FCNPriceLadder = ({config, prices}) => {
+    const [rows, setRows]           = useState([]);
+    const [loading, setLoading]     = useState(false);
+    const [lastUpdated, setLastUpdated] = useState(null);
+    const [filterType, setFilterType]   = useState('all');
+    const [filterAsset, setFilterAsset] = useState('all');
+    const [filterTenor, setFilterTenor] = useState('all');
+    const [filterUpfront, setFilterUpfront] = useState('all');
+    const [filterCouponMin, setFilterCouponMin] = useState('');
+
+    const fetchLadder = async () => {
+        if (!config.scriptUrl) return;
+        setLoading(true);
+        try {
+            const res  = await fcnSheetsCall(config.scriptUrl, {action: 'readPriceLadder'});
+            const data = (res.values || []).map(r => ({
+                date:           r[0]  || '',
+                type:           r[1]  || '',
+                notionalCcy:    r[2]  || '',
+                asset:          r[3]  || '',
+                tenor:          r[4]  || '',
+                spotRef:        r[5]  || '',
+                strikePct:      r[6]  || '',
+                strikeAbs:      r[7]  || '',
+                koPct:          r[8]  || '',
+                koAbs:          r[9]  || '',
+                upfrontPct:     r[10] || '',
+                couponPct:      r[11] || '',
+                uploadedAt:     r[12] || '',
+            }));
+            setRows(data);
+            if (data.length > 0) setLastUpdated(data[0].uploadedAt);
+        } catch(e) { console.error('Price ladder fetch failed:', e.message); }
+        setLoading(false);
+    };
+
+    useEffect(() => { fetchLadder(); }, [config.scriptUrl]);
+
+    // Unique filter options from data
+    const types    = [...new Set(rows.map(r => r.type))].filter(Boolean);
+    const assets   = [...new Set(rows.map(r => r.asset))].filter(Boolean);
+    const tenors   = [...new Set(rows.map(r => r.tenor))].filter(Boolean).sort();
+    const upfronts = [...new Set(rows.map(r => r.upfrontPct))].filter(Boolean).sort();
+
+    const filtered = rows.filter(r => {
+        if (filterType   !== 'all' && r.type      !== filterType)   return false;
+        if (filterAsset  !== 'all' && r.asset     !== filterAsset)  return false;
+        if (filterTenor  !== 'all' && r.tenor     !== filterTenor)  return false;
+        if (filterUpfront !== 'all' && r.upfrontPct !== filterUpfront) return false;
+        if (filterCouponMin) {
+            const coupon = parseFloat(r.couponPct);
+            const min    = parseFloat(filterCouponMin);
+            if (!isNaN(coupon) && !isNaN(min) && coupon * 100 < min) return false;
+        }
+        return true;
+    });
+
+    const today = todayUTC();
+    const dataDate = rows[0]?.date || '';
+    const isStale  = dataDate && dataDate !== today;
+
+    if (!config.scriptUrl) {
+        return (
+            <div className="card p-8 text-center">
+                <p className="text-slate-400 text-sm">Configure your FCN Apps Script URL in the Config tab to view price ladders.</p>
+            </div>
+        );
+    }
+
+    return (
+        <div>
+            {/* Header */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>
+                    <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"/>
+                        FCN Price Ladder
+                        {dataDate && <span className="text-xs font-normal text-slate-500 ml-1">· {dataDate}</span>}
+                    </h2>
+                    {lastUpdated && <p className="text-xs text-slate-500 mt-0.5">Uploaded at {lastUpdated}</p>}
+                </div>
+                <button onClick={fetchLadder} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
+                    <Icon.Refresh spin={loading}/> Refresh
+                </button>
+            </div>
+
+            {/* Stale data warning */}
+            {isStale && (
+                <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg p-3 mb-4 text-xs text-amber-400 flex items-center gap-2">
+                    <Icon.Alert/> Price ladder is from {dataDate} — today's quotes have not been uploaded yet.
+                </div>
+            )}
+
+            {/* No data */}
+            {!loading && rows.length === 0 && (
+                <div className="card p-8 text-center">
+                    <p className="text-slate-400 text-sm">No price ladder data found. Run the Python upload script to populate.</p>
+                </div>
+            )}
+
+            {rows.length > 0 && (
+                <>
+                    {/* Filters */}
+                    <div className="flex flex-wrap gap-2 mb-4 items-center">
+                        {/* Type */}
+                        <Select value={filterType} onChange={e=>setFilterType(e.target.value)} className="w-auto text-xs px-2 py-1.5">
+                            <option value="all">All Types</option>
+                            {types.map(t=><option key={t}>{t}</option>)}
+                        </Select>
+                        {/* Asset */}
+                        <Select value={filterAsset} onChange={e=>setFilterAsset(e.target.value)} className="w-auto text-xs px-2 py-1.5">
+                            <option value="all">All Assets</option>
+                            {assets.map(a=><option key={a}>{a}</option>)}
+                        </Select>
+                        {/* Tenor */}
+                        <Select value={filterTenor} onChange={e=>setFilterTenor(e.target.value)} className="w-auto text-xs px-2 py-1.5">
+                            <option value="all">All Tenors</option>
+                            {tenors.map(t=><option key={t}>{t}</option>)}
+                        </Select>
+                        {/* Upfront */}
+                        <Select value={filterUpfront} onChange={e=>setFilterUpfront(e.target.value)} className="w-auto text-xs px-2 py-1.5">
+                            <option value="all">All Upfront</option>
+                            {upfronts.map(u=><option key={u}>{u}</option>)}
+                        </Select>
+                        {/* Min coupon */}
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-slate-400">Min coupon</span>
+                            <input
+                                type="number" placeholder="e.g. 10" step="0.5" min="0"
+                                value={filterCouponMin}
+                                onChange={e=>setFilterCouponMin(e.target.value)}
+                                className="w-20 px-2 py-1.5 bg-slate-800 rounded-lg border border-slate-700 focus:border-cyan-500 focus:outline-none text-white text-xs mono"
+                            />
+                            <span className="text-xs text-slate-500">% p.a.</span>
+                        </div>
+                        {/* Reset */}
+                        {(filterType!=='all'||filterAsset!=='all'||filterTenor!=='all'||filterUpfront!=='all'||filterCouponMin) && (
+                            <button onClick={()=>{setFilterType('all');setFilterAsset('all');setFilterTenor('all');setFilterUpfront('all');setFilterCouponMin('');}}
+                                className="btn-secondary px-2 py-1.5 rounded-lg text-xs text-slate-400">
+                                Reset
+                            </button>
+                        )}
+                        <span className="text-xs text-slate-500 ml-auto">{filtered.length} of {rows.length} rows</span>
+                    </div>
+
+                    {/* Table */}
+                    <div className="card overflow-hidden">
+                        <div className="overflow-x-auto scrollbar-hide">
+                            <table className="w-full text-xs">
+                                <thead>
+                                    <tr className="border-b border-slate-800 bg-slate-900/40">
+                                        {['Type','Notional CCY','Asset','Tenor','Spot Ref','Strike','KO','Upfront','Coupon p.a.'].map(h=>(
+                                            <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filtered.length === 0 ? (
+                                        <tr><td colSpan="9" className="px-3 py-8 text-center text-slate-500">No rows match current filters</td></tr>
+                                    ) : filtered.map((r, i) => {
+                                        const isBull = r.type === 'Bullish';
+                                        const couponNum = parseFloat(r.couponPct) * 100;
+                                        const couponColor = couponNum >= 15 ? 'text-green-400' : couponNum >= 8 ? 'text-cyan-400' : 'text-slate-300';
+                                        return (
+                                            <tr key={i} className={`border-b border-slate-800/50 ${i%2===1?'bg-slate-900/20':''}`}>
+                                                <td className="px-3 py-2.5">
+                                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${isBull?'bg-green-500/15 text-green-400':'bg-red-500/15 text-red-400'}`}>
+                                                        {r.type}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2.5 text-slate-300">{r.notionalCcy}</td>
+                                                <td className="px-3 py-2.5">
+                                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${r.asset==='BTC'?'bg-orange-500/15 text-orange-400':'bg-purple-500/15 text-purple-400'}`}>
+                                                        {r.asset}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2.5 text-slate-300 mono">{r.tenor}</td>
+                                                <td className="px-3 py-2.5 text-slate-300 mono">{r.spotRef}</td>
+                                                <td className="px-3 py-2.5 mono">
+                                                    <span className="text-white">{r.strikeAbs}</span>
+                                                    <span className="text-slate-500 ml-1">({r.strikePct})</span>
+                                                </td>
+                                                <td className="px-3 py-2.5 mono">
+                                                    <span className="text-white">{r.koAbs}</span>
+                                                    <span className="text-slate-500 ml-1">({r.koPct})</span>
+                                                </td>
+                                                <td className="px-3 py-2.5 mono text-slate-300">{r.upfrontPct}</td>
+                                                <td className={`px-3 py-2.5 mono font-semibold ${couponColor}`}>
+                                                    {r.couponPct ? (parseFloat(r.couponPct)*100).toFixed(2)+'%' : '—'}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
+
 // ─── FCN MODULE ───────────────────────────────────────────────────────────────
 const FCNModule = ({prices}) => {
     const [trades,setTrades]=useState(()=>{try{return JSON.parse(localStorage.getItem('cpb_fcn_trades')||'[]');}catch{return[];}});
@@ -3680,8 +3887,21 @@ const FCNModule = ({prices}) => {
         return true;
     });
 
+    const [fcnSubTab, setFcnSubTab] = useState('trades');
+
     return(
         <div>
+            {/* FCN sub-tabs */}
+            <div className="flex gap-1 mb-5 border-b border-slate-800">
+                {[['trades','Trades & Settlements'],['ladder','Price Ladder']].map(([id,label])=>(
+                    <button key={id} onClick={()=>setFcnSubTab(id)}
+                        className={`px-4 py-2 text-sm font-medium transition-all ${fcnSubTab===id?'tab-active':'tab-inactive'}`}>
+                        {label}
+                    </button>
+                ))}
+            </div>
+
+            {fcnSubTab==='ladder' ? <FCNPriceLadder config={config} prices={prices}/> : (<>
             <FCNDashboard trades={trades} prices={prices} onConfirmPayment={confirmPayment} fixingPrices={fixingPrices} onScrollToTrade={(id)=>scrollToTrade(id,setFilterStatus)}/>
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
@@ -3711,6 +3931,7 @@ const FCNModule = ({prices}) => {
             }
             {showAdd&&<FCNFormModal onSave={addTrade} onClose={()=>setShowAdd(false)}/>}
             {editingTrade&&<FCNFormModal trade={editingTrade} onSave={updateTrade} onClose={()=>setEditingTrade(null)}/>}
+            </>)}
         </div>
     );
 };
