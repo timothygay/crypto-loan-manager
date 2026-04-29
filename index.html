@@ -2517,6 +2517,14 @@ const fcnSheetsCall = async (url, payload) => {
     return data;
 };
 
+const accSheetsCall = async (url, payload) => {
+    const qs = Object.entries(payload).map(([k,v])=>`${k}=${encodeURIComponent(typeof v==='object'?JSON.stringify(v):v)}`).join('&');
+    const res = await fetch(`${url}?${qs}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error||'Accumulator Sheets error');
+    return data;
+};
+
 // Serialize trade for Sheets (underlyings as JSON string in one column)
 const tradToRow = (trade) => [
     trade.id, trade.clientName, trade.tradeDate, trade.tenorValue, trade.tenorUnit,
@@ -4911,6 +4919,246 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
 };
 
 // ─── ACCUMULATOR MODULE ───────────────────────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ACC PRICE LADDER — Accumulator / Decumulator
+// ═══════════════════════════════════════════════════════════════════════════════
+const ACCPriceLadder = ({config}) => {
+    const [rows, setRows]               = useState([]);
+    const [loading, setLoading]         = useState(false);
+    const [lastUpdated, setLastUpdated] = useState(null);
+    const [filterType, setFilterType]   = useState('all');
+    const [filterAsset, setFilterAsset] = useState('all');
+    const [filterTenor, setFilterTenor] = useState('all');
+    const [filterUpfront, setFilterUpfront] = useState('all');
+    const [hiddenRows, setHiddenRows]   = useState(()=>{
+        try { return new Set(JSON.parse(localStorage.getItem('cpb_acc_ladder_hidden')||'[]')); }
+        catch { return new Set(); }
+    });
+
+    const saveHidden = (set) => {
+        localStorage.setItem('cpb_acc_ladder_hidden', JSON.stringify([...set]));
+        setHiddenRows(new Set(set));
+    };
+
+    const rowKey = (r) => [r.date, r.type, r.asset, r.tenor, r.strikePct, r.upfrontPct].join('|');
+
+    const toggleHidden = (r) => {
+        const k = rowKey(r);
+        const next = new Set(hiddenRows);
+        next.has(k) ? next.delete(k) : next.add(k);
+        saveHidden(next);
+    };
+
+    const fetchLadder = async () => {
+        if (!config.scriptUrl) return;
+        setLoading(true);
+        try {
+            const res  = await accSheetsCall(config.scriptUrl, {action: 'readAccPriceLadder'});
+            const data = (res.values || []).map(r => ({
+                date:        r[0]  || '',
+                type:        r[1]  || '',
+                notionalCcy: r[2]  || '',
+                asset:       r[3]  || '',
+                tenor:       r[4]  || '',
+                spotRef:     r[5]  || '',
+                strikePct:   r[6]  || '',
+                strikeAbs:   r[7]  || '',
+                koPct:       r[8]  || '',
+                koAbs:       r[9]  || '',
+                upfrontPct:  r[10] || '',
+                // r[11] = Leverage — loaded but not shown on UI
+                uploadedAt:  r[12] || '',
+            }));
+            setRows(data);
+            if (data.length > 0) setLastUpdated(data[0].uploadedAt);
+        } catch(e) { console.error('ACC Price ladder fetch failed:', e.message); }
+        setLoading(false);
+    };
+
+    useEffect(() => { fetchLadder(); }, [config.scriptUrl]);
+
+    const downloadExcel = () => {
+        const visibleRows = filtered.filter(r => !hiddenRows.has(rowKey(r)));
+        const headers = ['Type','Notional CCY','Asset','Tenor','Spot Ref','Strike %','Strike $','KO %','KO $','Upfront'];
+        const csvRows = visibleRows.map(r => [
+            r.type, r.notionalCcy, r.asset, r.tenor, r.spotRef,
+            r.strikePct, r.strikeAbs, r.koPct, r.koAbs, r.upfrontPct,
+        ]);
+        const csv = [headers, ...csvRows].map(row =>
+            row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')
+        ).join('\n');
+        const blob = new Blob([csv], {type:'text/csv'});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `acc_price_ladder_${rows[0]?.date||'export'}.csv`;
+        a.click();
+    };
+
+    const types    = [...new Set(rows.map(r => r.type))].filter(Boolean);
+    const assets   = [...new Set(rows.map(r => r.asset))].filter(Boolean);
+    const tenors   = [...new Set(rows.map(r => r.tenor))].filter(Boolean).sort();
+    const upfronts = [...new Set(rows.map(r => r.upfrontPct))].filter(Boolean).sort();
+
+    const filtered = rows.filter(r => {
+        if (filterType    !== 'all' && r.type       !== filterType)    return false;
+        if (filterAsset   !== 'all' && r.asset      !== filterAsset)   return false;
+        if (filterTenor   !== 'all' && r.tenor      !== filterTenor)   return false;
+        if (filterUpfront !== 'all' && r.upfrontPct !== filterUpfront) return false;
+        return true;
+    });
+
+    const sorted = [...filtered].sort((a,b) => {
+        const aH = hiddenRows.has(rowKey(a)) ? 1 : 0;
+        const bH = hiddenRows.has(rowKey(b)) ? 1 : 0;
+        return aH - bH;
+    });
+
+    const visibleCount = filtered.filter(r => !hiddenRows.has(rowKey(r))).length;
+    const today    = todayUTC();
+    const dataDate = rows[0]?.date || '';
+    const isStale  = dataDate && dataDate !== today;
+
+    if (!config.scriptUrl) {
+        return (
+            <div className="card p-8 text-center">
+                <p className="text-slate-400 text-sm">Configure your Accumulator Apps Script URL in Config to view price ladders.</p>
+            </div>
+        );
+    }
+
+    return (
+        <div>
+            {/* Header */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>
+                    <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-violet-400 inline-block"/>
+                        Accumulator Price Ladder
+                        {dataDate && <span className="text-xs font-normal text-slate-500 ml-1">· {dataDate}</span>}
+                    </h2>
+                    {lastUpdated && <p className="text-xs text-slate-500 mt-0.5">Uploaded at {lastUpdated}</p>}
+                </div>
+                <div className="flex items-center gap-2">
+                    <button onClick={downloadExcel} disabled={filtered.length===0}
+                        className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-green-400">
+                        <Icon.Download/> Export CSV
+                    </button>
+                    <button onClick={fetchLadder} disabled={loading}
+                        className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
+                        <Icon.Refresh spin={loading}/> Refresh
+                    </button>
+                </div>
+            </div>
+
+            {isStale && (
+                <div className="bg-amber-900/20 border border-amber-500/30 rounded-lg p-3 mb-4 text-xs text-amber-400 flex items-center gap-2">
+                    <Icon.Alert/> Price ladder is from {dataDate} — today's quotes have not been uploaded yet.
+                </div>
+            )}
+
+            {!loading && rows.length === 0 && (
+                <div className="card p-8 text-center">
+                    <p className="text-slate-400 text-sm">No price ladder data found. Run the Python upload script to populate.</p>
+                </div>
+            )}
+
+            {rows.length > 0 && (
+                <>
+                    {/* Filters */}
+                    <div className="flex flex-wrap gap-2 mb-4 items-center">
+                        <Select value={filterType} onChange={e=>setFilterType(e.target.value)} className="w-auto text-xs px-2 py-1.5">
+                            <option value="all">All Types</option>
+                            {types.map(t=><option key={t}>{t}</option>)}
+                        </Select>
+                        <Select value={filterAsset} onChange={e=>setFilterAsset(e.target.value)} className="w-auto text-xs px-2 py-1.5">
+                            <option value="all">All Assets</option>
+                            {assets.map(a=><option key={a}>{a}</option>)}
+                        </Select>
+                        <Select value={filterTenor} onChange={e=>setFilterTenor(e.target.value)} className="w-auto text-xs px-2 py-1.5">
+                            <option value="all">All Tenors</option>
+                            {tenors.map(t=><option key={t}>{t}</option>)}
+                        </Select>
+                        <Select value={filterUpfront} onChange={e=>setFilterUpfront(e.target.value)} className="w-auto text-xs px-2 py-1.5">
+                            <option value="all">All Upfront</option>
+                            {upfronts.map(u=><option key={u}>{u}</option>)}
+                        </Select>
+                        {(filterType!=='all'||filterAsset!=='all'||filterTenor!=='all'||filterUpfront!=='all') && (
+                            <button onClick={()=>{setFilterType('all');setFilterAsset('all');setFilterTenor('all');setFilterUpfront('all');}}
+                                className="btn-secondary px-2 py-1.5 rounded-lg text-xs text-slate-400">Reset</button>
+                        )}
+                        <span className="text-xs text-slate-500 ml-auto">
+                            {visibleCount} visible · {filtered.length - visibleCount} hidden · {filtered.length} filtered
+                            {hiddenRows.size > 0 && (
+                                <button onClick={()=>saveHidden(new Set())}
+                                    className="ml-2 text-amber-400 hover:text-amber-300 underline">
+                                    Unhide all
+                                </button>
+                            )}
+                        </span>
+                    </div>
+
+                    {/* Table */}
+                    <div className="card overflow-hidden">
+                        <div className="overflow-x-auto scrollbar-hide">
+                            <table className="w-full text-xs">
+                                <thead>
+                                    <tr className="border-b border-slate-800 bg-slate-900/40">
+                                        <th className="px-3 py-2.5 text-slate-400 font-medium w-8"></th>
+                                        {['Type','Notional CCY','Asset','Tenor','Spot Ref','Strike','KO','Upfront'].map(h=>(
+                                            <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {sorted.length === 0 ? (
+                                        <tr><td colSpan="9" className="px-3 py-8 text-center text-slate-500">No rows match current filters</td></tr>
+                                    ) : sorted.map((r, i) => {
+                                        const isHidden = hiddenRows.has(rowKey(r));
+                                        const isAccum  = r.type === 'Accumulator';
+                                        return (
+                                            <tr key={i} className={`border-b border-slate-800/50 transition-opacity ${isHidden?'opacity-30':''}  ${i%2===1&&!isHidden?'bg-slate-900/20':''}`}>
+                                                <td className="px-3 py-2.5 text-center">
+                                                    <input type="checkbox" checked={isHidden}
+                                                        onChange={()=>toggleHidden(r)}
+                                                        title={isHidden?'Show row':'Hide row from client view'}
+                                                        className="accent-slate-500 cursor-pointer"/>
+                                                </td>
+                                                <td className="px-3 py-2.5">
+                                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${isAccum?'bg-violet-500/15 text-violet-400':'bg-orange-500/15 text-orange-400'}`}>
+                                                        {r.type}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2.5 text-slate-300">{r.notionalCcy}</td>
+                                                <td className="px-3 py-2.5">
+                                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${r.asset==='BTC'?'bg-orange-500/15 text-orange-400':'bg-purple-500/15 text-purple-400'}`}>
+                                                        {r.asset}
+                                                    </span>
+                                                </td>
+                                                <td className="px-3 py-2.5 text-slate-300 mono">{r.tenor}</td>
+                                                <td className="px-3 py-2.5 text-slate-300 mono">{r.spotRef}</td>
+                                                <td className="px-3 py-2.5 mono">
+                                                    <span className="text-white">{r.strikeAbs}</span>
+                                                    <span className="text-slate-500 ml-1">({r.strikePct})</span>
+                                                </td>
+                                                <td className="px-3 py-2.5 mono">
+                                                    <span className="text-white">{r.koAbs}</span>
+                                                    <span className="text-slate-500 ml-1">({r.koPct})</span>
+                                                </td>
+                                                <td className="px-3 py-2.5 mono text-slate-300">{r.upfrontPct}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
+
 const AccumulatorModule = ({prices}) => {
     const [trades, setTrades] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_acc_trades')||'[]');}catch{return[];} });
     const [config, setConfig] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_acc_config')||'{}');}catch{return{};} });
@@ -5111,8 +5359,20 @@ const AccumulatorModule = ({prices}) => {
         return true;
     });
 
+    const [accSubTab, setAccSubTab] = useState('trades');
+
     return (
         <div>
+            <div className="flex gap-1 mb-5 border-b border-slate-800">
+                {[['trades','Trades & Settlements'],['ladder','Price Ladder']].map(([id,label])=>(
+                    <button key={id} onClick={()=>setAccSubTab(id)}
+                        className={`px-4 py-2 text-sm font-medium transition-all ${accSubTab===id?'tab-active':'tab-inactive'}`}>
+                        {label}
+                    </button>
+                ))}
+            </div>
+
+            {accSubTab==='ladder' ? <ACCPriceLadder config={config}/> : (<>
             <AccumulatorDashboard trades={trades} prices={prices} onConfirmFixing={confirmFixing} onScrollToTrade={(id)=>scrollToTrade(id,setFilterStatus)} onFetchPrice={async(tradeId,date,pair)=>{
                 const symbol=ACC_UNDERLYING_SYMBOLS[pair]||'';
                 if(!symbol) return;
@@ -5171,6 +5431,7 @@ const AccumulatorModule = ({prices}) => {
 
             {showAdd && <AccumulatorFormModal onSave={addTrade} onClose={()=>setShowAdd(false)}/>}
             {editingTrade && <AccumulatorFormModal trade={editingTrade} onSave={updateTrade} onClose={()=>setEditingTrade(null)}/>}
+            </>)}
         </div>
     );
 };
