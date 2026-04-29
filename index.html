@@ -3611,7 +3611,11 @@ const FCNPriceLadder = ({config, prices}) => {
                                 <tbody>
                                     {filtered.length === 0 ? (
                                         <tr><td colSpan="10" className="px-3 py-8 text-center text-slate-500">No rows match current filters</td></tr>
-                                    ) : filtered.map((r, i) => {
+                                    ) : [...filtered].sort((a,b) => {
+                                        const aH = hiddenRows.has(rowKey(a)) ? 1 : 0;
+                                        const bH = hiddenRows.has(rowKey(b)) ? 1 : 0;
+                                        return aH - bH;
+                                    }).map((r, i) => {
                                         const isHidden = hiddenRows.has(rowKey(r));
                                         const isBull   = r.type === 'Bullish';
                                         const cn = couponNum(r);
