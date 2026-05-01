@@ -864,36 +864,6 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                                     </tr>
                                 );
                             })}
-                            {/* Mid-period KO row — shown when KO date is not a settlement date */}
-                            {trade.status==='Knocked Out'&&(()=>{
-                                const mpKO=Object.entries(fixings||{}).find(([d,f])=>f.isKO&&!schedule.includes(d));
-                                if(!mpKO) return null;
-                                const [koD,koF]=mpKO;
-                                return (
-                                    <tr key="ko-return-row" className="border-b border-slate-800/40 bg-orange-900/15">
-                                        <td className="py-2 pr-3 text-orange-400 text-[10px] font-bold">KO</td>
-                                        <td className="py-2 pr-3 mono text-orange-300 font-medium">{koD}</td>
-                                        <td className="py-2 pr-3 text-orange-400">{dayName(koD)}</td>
-                                        <td className="py-2 pr-3 mono text-white">{koF.price?'$'+fmt(parseFloat(koF.price),2):'—'}</td>
-                                        <td className="py-2 pr-3"><span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-900/40 text-orange-400">KNOCK-OUT</span></td>
-                                        <td className="py-2 pr-3 mono text-cyan-400">—</td>
-                                        <td className="py-2 pr-3 mono text-yellow-400">
-                                            {koF.baseReturned>0?<span>{trade.notionalCurrency} {fmt(koF.baseReturned,2)}<span className="text-orange-400/70 text-[9px] ml-1">remaining balance</span></span>:'—'}
-                                        </td>
-                                        <td className="py-2 pr-3 mono text-slate-400">{trade.notionalCurrency} {fmt(koF.remainingAfter??0,2)}</td>
-                                        <td className="py-2 pr-3">
-                                            {koF.confirmed
-                                                ?<span className="text-orange-400 font-medium">✓ KO Confirmed</span>
-                                                :<button onClick={()=>onConfirmFixing(trade.id,koD)}
-                                                    className="px-2 py-0.5 bg-green-900/30 border border-green-500/30 rounded text-green-400 text-[10px] hover:bg-green-900/50">
-                                                    ✓ Confirm
-                                                </button>
-                                            }
-                                        </td>
-                                        <td/>
-                                    </tr>
-                                );
-                            })()}
                         </tbody>
                         <tfoot>
                             <tr className="border-t border-slate-600">
@@ -984,13 +954,18 @@ const LoanModule = ({prices}) => {
         const today = new Date();
         let end;
         const isOpenTerm = !loan.maturityDate || loan.maturityDate === '';
-        if (isOpenTerm) {
-            // Open-term: accrue to today if Active, or to today if no maturity to cap at
+        const isTerminated = loan.status === 'Early Terminated';
+        const isRepaid     = loan.status === 'Repaid';
+
+        // If loan has an explicit endDate (early termination / repayment date), use that
+        if (loan.endDate && (isTerminated || (isRepaid && isOpenTerm))) {
+            end = new Date(loan.endDate);
+        } else if (isOpenTerm) {
+            // Open-term with no end date: accrue to today
             end = today;
         } else {
             const mat = new Date(loan.maturityDate);
-            // If Active: accrue to today (or maturity if already past)
-            // If Matured/Repaid: accrue only to maturity date (stop on that date)
+            // Fixed term: Active accrues to today (capped at maturity), others stop at maturity
             end = (loan.status === 'Active') ? (today < mat ? today : mat) : mat;
         }
         const days = Math.floor((end - start) / 86400000);
@@ -1088,6 +1063,7 @@ const LoanModule = ({prices}) => {
                     interestPaid:+r[8], tenor:(r[9]===''||r[9]==='null'||r[9]===null)?null:+r[9],
                     startDate:normaliseDate(r[10]),
                     maturityDate:(r[11]===''||r[11]==='Open Term')?'':normaliseDate(r[11]),
+                    endDate: r[24] ? normaliseDate(r[24]) : '',
                     marginCallThreshold:+r[12], originalCollateralRatio:+r[13],
                     status:r[14], createdAt:r[15],
                     secured: r[16]===false||r[16]==='false'||r[16]==='Unsecured' ? false : true
@@ -1225,6 +1201,7 @@ const LoanModule = ({prices}) => {
         if (filterStatus==='active') return l.status==='Active';
         if (filterStatus==='matured') return l.status==='Matured';
         if (filterStatus==='repaid') return l.status==='Repaid';
+        if (filterStatus==='early-terminated') return l.status==='Early Terminated';
         if (filterStatus==='at-risk') return calcMetrics(l).atRisk;
         if (filterStatus==='unsecured') return l.secured===false||l.secured==='false';
         if (filterStatus==='open-term') return !l.maturityDate||l.maturityDate==='';
@@ -1236,7 +1213,7 @@ const LoanModule = ({prices}) => {
             <LoanDashboard loans={loans} prices={prices} calcMetrics={calcMetrics}/>
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
-                    <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5"><option value="all">All</option><option value="active">Active</option><option value="at-risk">At Risk</option><option value="matured">Matured</option><option value="repaid">Repaid</option><option value="unsecured">Unsecured</option><option value="open-term">Open Term</option></Select>
+                    <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5"><option value="all">All</option><option value="active">Active</option><option value="at-risk">At Risk</option><option value="matured">Matured</option><option value="repaid">Repaid</option><option value="early-terminated">Early Terminated</option><option value="unsecured">Unsecured</option><option value="open-term">Open Term</option></Select>
                     {config.scriptUrl&&<button onClick={fetchSheets} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={loading}/> Sync</button>}
                     <button onClick={exportCSV} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Download/> Export</button>
                     <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Config</button>
@@ -1291,10 +1268,15 @@ const LoanModule = ({prices}) => {
                                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${loan.status==='Active'?'badge-active':loan.status==='Matured'?'badge-matured':'badge-repaid'}`}>{loan.status}</span>
                                             {m.isUnsecured&&<span className="px-2 py-0.5 rounded-full text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30">Unsecured</span>}
                                             {(!loan.maturityDate||loan.maturityDate==='')&&<span className="px-2 py-0.5 rounded-full text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30">Open Term</span>}
+                                            {loan.status==='Early Terminated'&&<span className="px-2 py-0.5 rounded-full text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30">Early Terminated</span>}
                                             {m.atRisk&&<span className="px-2 py-0.5 rounded-full text-xs bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1"><Icon.Alert/> Margin Call</span>}
                                         </div>
                                         <p className="text-xs text-slate-500 mono mt-0.5">
-                                            {loan.id} · {fmtDate(loan.startDate)} → {loan.maturityDate?fmtDate(loan.maturityDate):'Open Term'} {loan.tenor?`(${loan.tenor}d)`:''}
+                                            {loan.id} · {fmtDate(loan.startDate)} → {
+                                                loan.status==='Early Terminated'&&loan.endDate ? <span>{fmtDate(loan.endDate)} <span className="text-orange-400/80">(early terminated)</span></span> :
+                                                loan.status==='Repaid'&&loan.endDate&&(!loan.maturityDate||loan.maturityDate==='') ? <span>{fmtDate(loan.endDate)} <span className="text-green-400/80">(repaid)</span></span> :
+                                                loan.maturityDate?fmtDate(loan.maturityDate):'Open Term'
+                                            } {loan.tenor&&!loan.endDate?`(${loan.tenor}d)`:''}
                                         </p>
                                     </div>
                                     <button onClick={()=>setEditingLoan(loan)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>
@@ -1345,6 +1327,7 @@ const LoanFormModal = ({title,loan,onSave,onClose,calcTenor})=>{
             ...form,
             secured: isSecured,
             maturityDate: isOpenTerm ? '' : form.maturityDate,
+            endDate: form.endDate || '',
             tenor: isOpenTerm ? null : tenor,
             // Clear collateral fields if unsecured
             collateralAmount: isSecured ? form.collateralAmount : 0,
@@ -1402,7 +1385,13 @@ const LoanFormModal = ({title,loan,onSave,onClose,calcTenor})=>{
                 <div className={isSecured?'':''+disabledCls}>
                     <Field label="Original Collateral Ratio (%)"><Input type="number" value={isSecured?form.originalCollateralRatio:''} onChange={f('originalCollateralRatio')} disabled={!isSecured} placeholder={!isSecured?'N/A':''}/></Field>
                 </div>
-                {loan&&<Field label="Status"><Select value={form.status} onChange={f('status')}><option>Active</option><option>Matured</option><option>Repaid</option><option>Defaulted</option></Select></Field>}
+                {loan&&<Field label="Status"><Select value={form.status} onChange={f('status')}><option>Active</option><option>Matured</option><option>Repaid</option><option>Early Terminated</option><option>Defaulted</option></Select></Field>}
+                {/* End date for Early Terminated or Repaid open-term loans */}
+                {loan&&(form.status==='Early Terminated'||form.status==='Repaid')&&(
+                    <Field label={form.status==='Early Terminated'?'Early Termination Date':'Repayment Date'}>
+                        <Input type="date" value={form.endDate||''} onChange={f('endDate')} placeholder="YYYY-MM-DD"/>
+                    </Field>
+                )}
             </div>
             <div className="flex gap-2 mt-5">
                 <button onClick={handleSave} className="btn-primary flex-1 px-4 py-2 rounded-lg font-semibold text-sm">{loan?'Update':'Create'} Loan</button>
