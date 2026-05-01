@@ -550,6 +550,7 @@ const PriceTicker = ({bybitPrices, binancePrices, bybitUpdate, binanceUpdate}) =
 const LoanDashboard = ({loans, prices, calcMetrics}) => {
     const [lastRefresh, setLastRefresh] = React.useState(new Date());
     const [showInterestModal, setShowInterestModal] = React.useState(null); // 'prev' | 'curr'
+    const [showCPModal, setShowCPModal] = React.useState(null); // counterparty name or null
     const [showMCModal, setShowMCModal] = React.useState(false);
 
     // Auto-refresh every 60 seconds
@@ -567,13 +568,13 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
     const calcMonthInterest = (loan, year, month) => {
         // month is 0-indexed (Jan=0)
         if (!loan.startDate) return 0;
-        const loanStart = new Date(loan.startDate);
+        const loanStart = new Date(loan.startDate+'T00:00:00Z');
         const isOpenTerm = !loan.maturityDate || loan.maturityDate === '';
         // For open-term Active loans: no maturity cap — accrue to end of period
         // For matured/repaid open-term: use today as the cap (best approximation)
         const loanEnd = isOpenTerm
             ? (loan.status === 'Active' ? new Date(9999,0,1) : new Date())
-            : new Date(loan.maturityDate);
+            : new Date(loan.maturityDate+'T00:00:00Z');
         // Period: 1st of month to last day of month (or today if current month)
         const periodStart = new Date(year, month, 1);
         const isCurrentMonth = (year === today.getFullYear() && month === today.getMonth());
@@ -724,7 +725,10 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                     {/* Counterparty breakdown */}
                     <div className="space-y-1.5">
                         {counterparties.map(cp => (
-                            <div key={cp.name} className="flex items-center justify-between">
+                            <div key={cp.name}
+                                className="flex items-center justify-between cursor-pointer rounded px-1 py-0.5 hover:bg-slate-800/50 transition-colors"
+                                onClick={()=>setShowCPModal(showCPModal===cp.name?null:cp.name)}
+                                title="Click to see secured/unsecured breakdown">
                                 <span className="text-xs text-slate-300 truncate max-w-[55%]">{cp.name}</span>
                                 <div className="flex items-center gap-2">
                                     <div className="w-16 h-1 bg-slate-700 rounded-full overflow-hidden">
@@ -735,6 +739,60 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                             </div>
                         ))}
                     </div>
+                    {showCPModal && (()=>{
+                        const cpLoans   = activeLoans.filter(l=>l.counterparty===showCPModal);
+                        const secured   = cpLoans.filter(l=>l.secured!==false);
+                        const unsecured = cpLoans.filter(l=>l.secured===false);
+                        const secTotal  = secured.reduce((s,l)=>s+l.loanAmount,0);
+                        const unsecTotal= unsecured.reduce((s,l)=>s+l.loanAmount,0);
+                        const total     = secTotal+unsecTotal;
+                        return (
+                            <div className="mt-2 bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
+                                <div className="flex justify-between items-center mb-2">
+                                    <span className="text-xs font-semibold text-slate-200">{showCPModal}</span>
+                                    <button onClick={()=>setShowCPModal(null)} className="text-slate-500 hover:text-slate-300 text-sm">✕</button>
+                                </div>
+                                {secured.length>0&&(
+                                    <div className="mb-2">
+                                        <div className="flex justify-between text-xs mb-0.5">
+                                            <span className="text-green-400">🔒 Secured</span>
+                                            <span className="mono text-slate-200">${fmt(secTotal,0)}</span>
+                                        </div>
+                                        <div className="h-1 bg-slate-700 rounded-full overflow-hidden mb-1">
+                                            <div className="h-full bg-green-500 rounded-full" style={{width:`${total>0?(secTotal/total)*100:0}%`}}/>
+                                        </div>
+                                        {secured.map(l=>(
+                                            <div key={l.id} className="flex justify-between text-[10px] mono text-slate-400 pl-1">
+                                                <span>{l.id}</span><span>${fmt(l.loanAmount,0)} {l.underlying}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {unsecured.length>0&&(
+                                    <div>
+                                        <div className="flex justify-between text-xs mb-0.5">
+                                            <span className="text-blue-400">📋 Unsecured</span>
+                                            <span className="mono text-slate-200">${fmt(unsecTotal,0)}</span>
+                                        </div>
+                                        <div className="h-1 bg-slate-700 rounded-full overflow-hidden mb-1">
+                                            <div className="h-full bg-blue-500 rounded-full" style={{width:`${total>0?(unsecTotal/total)*100:0}%`}}/>
+                                        </div>
+                                        {unsecured.map(l=>(
+                                            <div key={l.id} className="flex justify-between text-[10px] mono text-slate-400 pl-1">
+                                                <span>{l.id}</span><span>${fmt(l.loanAmount,0)} {l.underlying}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {secured.length>0&&unsecured.length>0&&(
+                                    <div className="mt-2 pt-2 border-t border-slate-700/50 flex justify-between text-xs">
+                                        <span className="text-slate-400">Total</span>
+                                        <span className="mono text-white font-semibold">${fmt(total,0)}</span>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })()}
                 </div>
 
                 {/* 2 — Collateral by type */}
@@ -845,8 +903,8 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                             {(showInterestModal==='prev'?prevInterestRows:currInterestRows).map(({loan,interest}) => {
                                 const yr  = showInterestModal==='prev'?prevYear:today.getFullYear();
                                 const mo  = showInterestModal==='prev'?prevMonth:today.getMonth();
-                                const loanStart  = new Date(loan.startDate);
-                                const loanEnd    = new Date(loan.maturityDate);
+                                const loanStart  = new Date(loan.startDate+'T00:00:00Z');
+                                const loanEnd    = loan.endDate ? new Date(loan.endDate+'T00:00:00Z') : loan.maturityDate ? new Date(loan.maturityDate+'T00:00:00Z') : new Date();
                                 const periodStart = new Date(yr, mo, 1);
                                 const isCurrentMonth = (yr===today.getFullYear()&&mo===today.getMonth());
                                 const periodEnd = isCurrentMonth ? today : new Date(yr, mo+1, 0, 23, 59, 59, 999);
@@ -950,7 +1008,7 @@ const LoanModule = ({prices}) => {
 
     const calcInterest = (loan) => {
         if (!loan.startDate) return 0;
-        const start = new Date(loan.startDate);
+        const start = new Date(loan.startDate+'T00:00:00Z');
         const today = new Date();
         let end;
         const isOpenTerm = !loan.maturityDate || loan.maturityDate === '';
@@ -959,12 +1017,12 @@ const LoanModule = ({prices}) => {
 
         // If loan has an explicit endDate (early termination / repayment date), use that
         if (loan.endDate && (isTerminated || (isRepaid && isOpenTerm))) {
-            end = new Date(loan.endDate);
+            end = new Date(loan.endDate+'T00:00:00Z');
         } else if (isOpenTerm) {
             // Open-term with no end date: accrue to today
             end = today;
         } else {
-            const mat = new Date(loan.maturityDate);
+            const mat = new Date(loan.maturityDate+'T00:00:00Z');
             // Fixed term: Active accrues to today (capped at maturity), others stop at maturity
             end = (loan.status === 'Active') ? (today < mat ? today : mat) : mat;
         }
@@ -1072,7 +1130,7 @@ const LoanModule = ({prices}) => {
                 // Skip open-term loans (no maturityDate) — they never auto-mature
                 const toMature = fetchedLoans.filter(l => {
                     if (l.status !== 'Active' || !l.maturityDate) return false;
-                    const mat = new Date(l.maturityDate); mat.setHours(0,0,0,0);
+                    const mat = new Date(l.maturityDate+'T00:00:00Z');
                     return mat < today;
                 });
                 for (const loan of toMature) {
