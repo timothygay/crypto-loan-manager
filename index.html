@@ -653,9 +653,9 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
     const in7days = new Date(today.getTime() + 7 * 86400000);
     const expiring = activeLoans.filter(l => {
         if (!l.maturityDate || l.maturityDate === '') return false; // open-term never expires
-        const mat = new Date(l.maturityDate);
+        const mat = new Date(l.maturityDate+'T00:00:00Z');
         return mat >= today && mat <= in7days;
-    }).sort((a,b) => new Date(a.maturityDate) - new Date(b.maturityDate));
+    }).sort((a,b) => new Date(a.maturityDate+'T00:00:00Z') - new Date(b.maturityDate+'T00:00:00Z'));
 
     const refreshLabel = lastRefresh.toLocaleTimeString('en-SG', {hour:'2-digit', minute:'2-digit'});
 
