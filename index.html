@@ -1121,10 +1121,11 @@ const LoanModule = ({prices}) => {
                     interestPaid:+r[8], tenor:(r[9]===''||r[9]==='null'||r[9]===null)?null:+r[9],
                     startDate:normaliseDate(r[10]),
                     maturityDate:(r[11]===''||r[11]==='Open Term')?'':normaliseDate(r[11]),
-                    endDate: r[17] ? normaliseDate(r[17]) : '',
+                    endDate: r[18] ? normaliseDate(r[18]) : '',
                     marginCallThreshold:+r[12], originalCollateralRatio:+r[13],
                     status:r[14], createdAt:r[15],
-                    secured: r[16]===false||r[16]==='false'||r[16]==='Unsecured' ? false : true
+                    // r[16]=Q=LastAlertTime (extra col from margin monitor), r[17]=R=Secured, r[18]=S=EndDate
+                    secured: r[17]===false||r[17]==='false'||r[17]==='Unsecured' ? false : true
                 }));
                 // Auto-mature loans whose maturity date has passed but are still marked Active
                 // Skip open-term loans (no maturityDate) — they never auto-mature
@@ -1173,7 +1174,7 @@ const LoanModule = ({prices}) => {
                     loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
                     loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
                     loan.marginCallThreshold, loan.originalCollateralRatio,
-                    loan.status, loan.createdAt, loan.secured===false?'Unsecured':'Secured',
+                    loan.status, loan.createdAt, '', loan.secured===false?'Unsecured':'Secured',
                     loan.endDate||''
                 ]))}`);
             } catch(e) { console.error('Sheets addLoan failed:', e.message); }
@@ -1197,7 +1198,7 @@ const LoanModule = ({prices}) => {
                             loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
                             loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
                             loan.marginCallThreshold, loan.originalCollateralRatio,
-                            loan.status, loan.createdAt||'', loan.secured===false?'Unsecured':'Secured',
+                            loan.status, loan.createdAt||'', '', loan.secured===false?'Unsecured':'Secured',
                             loan.endDate||''
                         ]))}`);
                     }
@@ -1247,7 +1248,7 @@ const LoanModule = ({prices}) => {
                                 updatedLoan.interestRate, m.interest.toFixed(2), updatedLoan.interestPaid,
                                 updatedLoan.tenor, normaliseDate(updatedLoan.startDate), normaliseDate(updatedLoan.maturityDate)||'',
                                 updatedLoan.marginCallThreshold, updatedLoan.originalCollateralRatio,
-                                updatedLoan.status, updatedLoan.createdAt||'', updatedLoan.secured===false?'Unsecured':'Secured'
+                                updatedLoan.status, updatedLoan.createdAt||'', '', updatedLoan.secured===false?'Unsecured':'Secured'
                             ]))}`);
                         }
                     }
