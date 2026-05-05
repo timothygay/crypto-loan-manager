@@ -5490,7 +5490,7 @@ const AccumulatorModule = ({prices}) => {
 // Reads NAV + asset breakdown via /api/bybit-trs Vercel serverless proxy.
 // The proxy handles HMAC-SHA256 signing — no secrets in the browser.
 // ═══════════════════════════════════════════════════════════════════════════════
-const TRSModule = () => {
+const TRSModule = ({bybitPrices}) => {
     const [data, setData]             = useState(null);
     const [loading, setLoading]       = useState(false);
     const [error, setError]           = useState(null);
@@ -5766,7 +5766,7 @@ const App = () => {
                         <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
                     ))}
                 </div>
-                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:<TRSModule/>}
+                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:<TRSModule bybitPrices={bybitPrices}/>}
             </div>
             {/* Floating theme toggle — fixed bottom-right */}
             <button
