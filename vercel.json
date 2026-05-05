@@ -4,6 +4,12 @@
   "functions": {
     "api/prices.js": {
       "maxDuration": 10
+    },
+    "api/bybit-trs.js": {
+      "maxDuration": 15
+    },
+    "api/trs-sheets.js": {
+      "maxDuration": 15
     }
   }
 }
