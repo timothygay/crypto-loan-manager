@@ -5516,9 +5516,10 @@ const TRSModule = ({bybitPrices}) => {
     };
 
     const fetchSheetsData = async () => {
-        // Route through /api/trs-sheets Vercel proxy — script.google.com is blocked by Vercel network
+        // Called directly from browser — Apps Script GET requests support CORS from browsers
+        if (!trsConfig.scriptUrl) return;
         try {
-            const res  = await fetch('/api/trs-sheets?action=readAll');
+            const res  = await fetch(`${trsConfig.scriptUrl}?action=readAll`);
             const json = await res.json();
             if (json.error) { console.error('TRS Sheets error:', json.error); return; }
             const d    = json.data || json;
@@ -5533,9 +5534,10 @@ const TRSModule = ({bybitPrices}) => {
     };
 
     useEffect(()=>{ fetchTRS(); const t=setInterval(fetchTRS,60000); return()=>clearInterval(t); },[]);
-    useEffect(()=>{ fetchSheetsData(); const t=setInterval(fetchSheetsData,60000); return()=>clearInterval(t); },[]);
+    useEffect(()=>{ if(trsConfig.scriptUrl){fetchSheetsData();const t=setInterval(fetchSheetsData,60000);return()=>clearInterval(t);} },[trsConfig.scriptUrl]);
 
     const saveAlertConfig = async () => {
+        if (!trsConfig.scriptUrl) return alert('Set TRS Apps Script URL in Config first.');
         setSavingConfig(true);
         try {
             const params = new URLSearchParams({
@@ -5546,7 +5548,7 @@ const TRSModule = ({bybitPrices}) => {
                 telegramToken: trsConfig.telegramToken  || '',
                 telegramChatId:trsConfig.telegramChatId || '',
             });
-            const res  = await fetch(`/api/trs-sheets?${params}`);
+            const res  = await fetch(`${trsConfig.scriptUrl}?${params}`);
             const json = await res.json();
             if (json.error) throw new Error(json.error);
             alert('Alert config saved to Sheets.');
@@ -5555,6 +5557,7 @@ const TRSModule = ({bybitPrices}) => {
     };
 
     const saveMonthStart = async (navVal) => {
+        if (!trsConfig.scriptUrl) return alert('Set TRS Apps Script URL in Config first.');
         const ym = new Date().toISOString().slice(0,7);
         try {
             const params = new URLSearchParams({
@@ -5563,7 +5566,7 @@ const TRSModule = ({bybitPrices}) => {
                 nav:        String(parseFloat(navVal)),
                 manual:     'true',
             });
-            const res  = await fetch(`/api/trs-sheets?${params}`);
+            const res  = await fetch(`${trsConfig.scriptUrl}?${params}`);
             const json = await res.json();
             if (json.error) throw new Error(json.error);
             setMonthStart({yearMonth:ym, nav:parseFloat(navVal), manual:true});
@@ -5642,9 +5645,9 @@ const TRSModule = ({bybitPrices}) => {
                 <div className="card p-5 mb-5 space-y-4">
                     <h3 className="text-sm font-semibold text-slate-300">TRS Configuration</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="md:col-span-2 bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400">
-                            <span className="text-slate-300 font-medium">TRS Apps Script:</span> URL is set as <span className="mono text-cyan-400">TRS_SCRIPT_URL</span> in your Vercel environment variables — not entered here.
-                        </div>
+                        <Field label="TRS Apps Script URL" hint="Deploy URL from your TRS Google Spreadsheet">
+                            <Input value={trsConfig.scriptUrl||''} onChange={e=>setTrsConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/>
+                        </Field>
                         <Field label="Telegram Bot Token">
                             <Input value={trsConfig.telegramToken||''} onChange={e=>setTrsConfig(p=>({...p,telegramToken:e.target.value}))} placeholder="123456789:ABCdef..."/>
                         </Field>
