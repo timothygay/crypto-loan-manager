@@ -5487,54 +5487,128 @@ const AccumulatorModule = ({prices}) => {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TRS MODULE — Total Return Swap · Bybit Subaccount SMA01
-// Reads NAV + asset breakdown via /api/bybit-trs Vercel serverless proxy.
-// The proxy handles HMAC-SHA256 signing — no secrets in the browser.
 // ═══════════════════════════════════════════════════════════════════════════════
 const TRSModule = ({bybitPrices}) => {
-    const [data, setData]             = useState(null);
-    const [loading, setLoading]       = useState(false);
-    const [error, setError]           = useState(null);
+    const [data, setData]               = useState(null);
+    const [loading, setLoading]         = useState(false);
+    const [error, setError]             = useState(null);
     const [lastRefresh, setLastRefresh] = useState(null);
+    const [trsConfig, setTrsConfig]     = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_trs_config')||'{}');}catch{return{};} });
+    const [monthStart, setMonthStart]   = useState(null);
+    const [navHistory, setNavHistory]   = useState([]);
+    const [dailyHistory, setDailyHistory] = useState([]);
+    const [showConfig, setShowConfig]   = useState(false);
+    const [editingMS, setEditingMS]     = useState(false);
+    const [msEditVal, setMsEditVal]     = useState('');
+    const [savingConfig, setSavingConfig] = useState(false);
+
+    useEffect(()=>{ try{ localStorage.setItem('cpb_trs_config',JSON.stringify(trsConfig)); }catch{} },[trsConfig]);
 
     const fetchTRS = async () => {
-        setLoading(true);
-        setError(null);
+        setLoading(true); setError(null);
         try {
             const res  = await fetch('/api/bybit-trs');
             const json = await res.json();
-            if (!res.ok || json.error) throw new Error(json.error || 'Proxy returned an error');
-            setData(json);
-            setLastRefresh(new Date());
-        } catch(e) {
-            setError(e.message);
-        }
+            if (!res.ok || json.error) throw new Error(json.error || 'Proxy error');
+            setData(json); setLastRefresh(new Date());
+        } catch(e) { setError(e.message); }
         setLoading(false);
     };
 
-    useEffect(() => {
-        fetchTRS();
-        const t = setInterval(fetchTRS, 60000);
-        return () => clearInterval(t);
-    }, []);
-
-    const assetColor = (coin) => {
-        if (coin === 'BTC')                               return 'text-orange-400';
-        if (coin === 'ETH')                               return 'text-purple-400';
-        if (['USDT','USDC','BUSD','DAI'].includes(coin))  return 'text-green-400';
-        return 'text-cyan-400';
+    const fetchSheetsData = async () => {
+        if (!trsConfig.scriptUrl) return;
+        try {
+            const res  = await fetch(`${trsConfig.scriptUrl}?action=readAll`);
+            const json = await res.json();
+            const d    = json.data || json;
+            if (d.minutes)    setNavHistory(d.minutes.map(r=>({ts:r[0], nav:parseFloat(r[1])})));
+            if (d.daily)      setDailyHistory(d.daily.map(r=>({date:r[0], nav:parseFloat(r[1])})));
+            if (d.monthStart && d.monthStart.length > 0) {
+                const ym  = new Date().toISOString().slice(0,7);
+                const row = d.monthStart.find(r=>String(r[0]).trim()===ym) || d.monthStart[d.monthStart.length-1];
+                if (row) setMonthStart({yearMonth:row[0], nav:parseFloat(row[1]), manual:row[2]==='YES'});
+            }
+        } catch(e) { console.error('TRS Sheets fetch failed:',e.message); }
     };
+
+    useEffect(()=>{ fetchTRS(); const t=setInterval(fetchTRS,60000); return()=>clearInterval(t); },[]);
+    useEffect(()=>{ if(trsConfig.scriptUrl){fetchSheetsData();const t=setInterval(fetchSheetsData,60000);return()=>clearInterval(t);} },[trsConfig.scriptUrl]);
+
+    const saveAlertConfig = async () => {
+        if (!trsConfig.scriptUrl) return alert('Set TRS Apps Script URL first in Config.');
+        setSavingConfig(true);
+        try {
+            await fetch(`${trsConfig.scriptUrl}?action=saveConfig`, {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({
+                    interval:       trsConfig.alertInterval  || 'minutes',
+                    periods:        trsConfig.alertPeriods   || 5,
+                    threshold:      trsConfig.alertThreshold || 2.0,
+                    telegramToken:  trsConfig.telegramToken  || '',
+                    telegramChatId: trsConfig.telegramChatId || '',
+                }),
+            });
+            alert('Alert config saved to Sheets.');
+        } catch(e) { alert('Failed: '+e.message); }
+        setSavingConfig(false);
+    };
+
+    const saveMonthStart = async (navVal) => {
+        if (!trsConfig.scriptUrl) return alert('Set TRS Apps Script URL first in Config.');
+        const ym = new Date().toISOString().slice(0,7);
+        try {
+            await fetch(`${trsConfig.scriptUrl}?action=saveMonthStart`, {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({yearMonth:ym, nav:parseFloat(navVal), manual:true}),
+            });
+            setMonthStart({yearMonth:ym, nav:parseFloat(navVal), manual:true});
+            setEditingMS(false);
+        } catch(e) { alert('Failed: '+e.message); }
+    };
+
+    const computeUsdValue = (coin, walletBalance) => {
+        const bal = parseFloat(walletBalance)||0;
+        if (coin==='BTC') return bal*(bybitPrices.BTC||0);
+        if (coin==='ETH') return bal*(bybitPrices.ETH||0);
+        if (['USDT','USDC','BUSD','DAI'].includes(coin)) return bal;
+        return 0;
+    };
+
+    const computeNavMove = () => {
+        if (!data || navHistory.length < 2) return null;
+        const interval = trsConfig.alertInterval || 'minutes';
+        const periods  = parseInt(trsConfig.alertPeriods)||5;
+        if (interval==='days') {
+            if (dailyHistory.length < 2) return null;
+            const pastNav = dailyHistory[dailyHistory.length-2]?.nav;
+            if (!pastNav) return null;
+            return {pct:(data.totalNav-pastNav)/pastNav*100, pastNav, label:'1d'};
+        }
+        const rowsBack = interval==='hours' ? periods*60 : periods;
+        if (navHistory.length < rowsBack+1) return null;
+        const pastNav = navHistory[navHistory.length-1-rowsBack]?.nav;
+        if (!pastNav) return null;
+        return {pct:(data.totalNav-pastNav)/pastNav*100, pastNav, label:periods+' '+(interval==='hours'?'hr':'min')};
+    };
+
     const assetPillStyle = (coin) => {
-        if (coin === 'BTC')                               return 'bg-orange-500/15 border-orange-500/30 text-orange-400';
-        if (coin === 'ETH')                               return 'bg-purple-500/15 border-purple-500/30 text-purple-400';
-        if (['USDT','USDC','BUSD','DAI'].includes(coin))  return 'bg-green-500/15 border-green-500/30 text-green-400';
+        if (coin==='BTC') return 'bg-orange-500/15 border-orange-500/30 text-orange-400';
+        if (coin==='ETH') return 'bg-purple-500/15 border-purple-500/30 text-purple-400';
+        if (['USDT','USDC','BUSD','DAI'].includes(coin)) return 'bg-green-500/15 border-green-500/30 text-green-400';
         return 'bg-cyan-500/15 border-cyan-500/30 text-cyan-400';
     };
     const barColor = (coin) => {
-        if (coin === 'BTC')                               return 'bg-orange-500';
-        if (coin === 'ETH')                               return 'bg-purple-500';
-        if (['USDT','USDC','BUSD','DAI'].includes(coin))  return 'bg-green-500';
+        if (coin==='BTC') return 'bg-orange-500';
+        if (coin==='ETH') return 'bg-purple-500';
+        if (['USDT','USDC','BUSD','DAI'].includes(coin)) return 'bg-green-500';
         return 'bg-cyan-500';
     };
+
+    const navMove       = computeNavMove();
+    const mtdChange     = data && monthStart ? data.totalNav - monthStart.nav : null;
+    const mtdPct        = monthStart && monthStart.nav>0 && mtdChange!==null ? (mtdChange/monthStart.nav*100) : null;
+    const threshold     = parseFloat(trsConfig.alertThreshold)||2.0;
+    const alertBreached = navMove!==null && (threshold>=0 ? navMove.pct>=threshold : navMove.pct<=threshold);
 
     return (
         <div>
@@ -5550,21 +5624,77 @@ const TRSModule = ({bybitPrices}) => {
                         {lastRefresh && <span className="ml-2">· Refreshed {lastRefresh.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>}
                     </p>
                 </div>
-                <button onClick={fetchTRS} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
-                    <Icon.Refresh spin={loading}/> {loading ? 'Refreshing…' : 'Refresh'}
-                </button>
+                <div className="flex gap-2">
+                    <button onClick={()=>setShowConfig(!showConfig)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Config</button>
+                    <button onClick={fetchTRS} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
+                        <Icon.Refresh spin={loading}/> {loading?'Refreshing…':'Refresh'}
+                    </button>
+                </div>
             </div>
+
+            {/* Config panel */}
+            {showConfig && (
+                <div className="card p-5 mb-5 space-y-4">
+                    <h3 className="text-sm font-semibold text-slate-300">TRS Configuration</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Field label="TRS Apps Script URL" hint="Deploy URL from your TRS Google Spreadsheet">
+                            <Input value={trsConfig.scriptUrl||''} onChange={e=>setTrsConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/>
+                        </Field>
+                        <Field label="Telegram Bot Token">
+                            <Input value={trsConfig.telegramToken||''} onChange={e=>setTrsConfig(p=>({...p,telegramToken:e.target.value}))} placeholder="123456789:ABCdef..."/>
+                        </Field>
+                        <Field label="Telegram Chat ID">
+                            <Input value={trsConfig.telegramChatId||''} onChange={e=>setTrsConfig(p=>({...p,telegramChatId:e.target.value}))} placeholder="-100123456789"/>
+                        </Field>
+                    </div>
+                    <div className="border-t border-slate-700 pt-4">
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">NAV Alert Settings</p>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <Field label="Lookback Interval">
+                                <Select value={trsConfig.alertInterval||'minutes'} onChange={e=>setTrsConfig(p=>({...p,alertInterval:e.target.value}))}>
+                                    <option value="minutes">Minutes</option>
+                                    <option value="hours">Hours</option>
+                                    <option value="days">Days (max 1)</option>
+                                </Select>
+                            </Field>
+                            <Field label="Number of Periods" hint={trsConfig.alertInterval==='days'?'Fixed at 1 for days':'e.g. 5 min, 3 hours'}>
+                                <Input type="number"
+                                    value={trsConfig.alertInterval==='days'?1:(trsConfig.alertPeriods||5)}
+                                    onChange={e=>setTrsConfig(p=>({...p,alertPeriods:Math.max(1,parseInt(e.target.value)||1)}))}
+                                    min="1" max={trsConfig.alertInterval==='days'?1:1440}
+                                    disabled={trsConfig.alertInterval==='days'}/>
+                            </Field>
+                            <Field label="Threshold %" hint="+ = alert on rise · − = alert on drop">
+                                <Input type="number" step="0.1"
+                                    value={trsConfig.alertThreshold||2.0}
+                                    onChange={e=>setTrsConfig(p=>({...p,alertThreshold:parseFloat(e.target.value)||2.0}))}
+                                    placeholder="e.g. 2.0 or -1.5"/>
+                            </Field>
+                        </div>
+                        <div className="mt-3 bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400">
+                            Alert if NAV moves <span className="text-white font-medium">{threshold>=0?'above +':'below '}{threshold}%</span> over{' '}
+                            <span className="text-white font-medium">{trsConfig.alertInterval==='days'?'1 day':(trsConfig.alertPeriods||5)+' '+(trsConfig.alertInterval||'minutes')}</span>
+                            {trsConfig.alertInterval==='hours' && <span className="text-slate-500"> ({((trsConfig.alertPeriods||5)*60)} minute rows)</span>}
+                        </div>
+                    </div>
+                    <div className="flex gap-2 pt-2 border-t border-slate-700">
+                        <button onClick={saveAlertConfig} disabled={savingConfig} className="btn-primary px-4 py-2 rounded-lg text-sm flex items-center gap-2">
+                            <Icon.Refresh spin={savingConfig}/> Save to Sheets
+                        </button>
+                        <button onClick={()=>setShowConfig(false)} className="btn-secondary px-4 py-2 rounded-lg text-sm">Close</button>
+                    </div>
+                </div>
+            )}
 
             {/* Error */}
             {error && (
                 <div className="card p-5 mb-4 border border-red-500/30 bg-red-900/10">
                     <p className="text-red-400 text-sm font-semibold flex items-center gap-2 mb-1"><Icon.Alert/> Failed to load SMA01 data</p>
                     <p className="text-xs mono text-slate-400">{error}</p>
-                    <p className="text-xs text-slate-500 mt-2">Check that the Vercel proxy is deployed and BYBIT_TRS_API_KEY / BYBIT_TRS_API_SECRET env vars are set in your Vercel dashboard.</p>
+                    <p className="text-xs text-slate-500 mt-2">Check Vercel proxy is deployed and BYBIT_TRS_API_KEY / BYBIT_TRS_API_SECRET env vars are set.</p>
                 </div>
             )}
 
-            {/* Loading */}
             {loading && !data && (
                 <div className="card p-10 text-center">
                     <div className="flex items-center justify-center gap-2 text-slate-400">
@@ -5574,105 +5704,162 @@ const TRSModule = ({bybitPrices}) => {
                 </div>
             )}
 
-            {/* Data */}
             {data && (
                 <>
-                    {/* NAV Hero */}
-                    <div className="card p-6 mb-4 bg-gradient-to-br from-emerald-500/5 to-cyan-500/5 border-emerald-500/20">
-                        <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">Total Net Asset Value · SMA01</p>
-                        <p className="text-4xl font-bold mono text-white">
-                            ${fmt(data.totalNav, 2)}
-                            <span className="text-lg text-slate-500 font-normal ml-2">USD</span>
-                        </p>
-                        <p className="text-xs text-slate-500 mt-1">{data.assets?.length || 0} asset{data.assets?.length !== 1 ? 's' : ''} · Unified Trading Account</p>
+                    {/* 4-card dashboard row */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
+
+                        {/* Current NAV */}
+                        <div className="card p-5 bg-gradient-to-br from-emerald-500/5 to-cyan-500/5 border-emerald-500/20">
+                            <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">Current NAV · SMA01</p>
+                            <p className="text-3xl font-bold mono text-white">${fmt(data.totalNav,2)}</p>
+                            <p className="text-xs text-slate-500 mt-1">
+                                {data.assets?.length||0} asset{data.assets?.length!==1?'s':''} · live
+                                {lastRefresh && <span className="ml-1">· {lastRefresh.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'})}</span>}
+                            </p>
+                        </div>
+
+                        {/* Month-start NAV */}
+                        <div className="card p-5">
+                            <div className="flex items-center justify-between mb-1">
+                                <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">Month-Start NAV</p>
+                                <button onClick={()=>{setEditingMS(!editingMS);setMsEditVal(monthStart?.nav||data.totalNav||'');}}
+                                    className="text-slate-500 hover:text-slate-300 text-xs flex items-center gap-1">
+                                    <Icon.Edit/> {editingMS?'Cancel':'Edit'}
+                                </button>
+                            </div>
+                            {editingMS ? (
+                                <div className="flex gap-2 mt-2">
+                                    <Input type="number" value={msEditVal}
+                                        onChange={e=>setMsEditVal(e.target.value)}
+                                        step="0.01" placeholder="Enter NAV"/>
+                                    <button onClick={()=>saveMonthStart(msEditVal)}
+                                        className="btn-primary px-3 py-1 rounded text-xs whitespace-nowrap">Save</button>
+                                </div>
+                            ) : (
+                                <>
+                                    <p className="text-3xl font-bold mono text-slate-200">
+                                        {monthStart ? '$'+fmt(monthStart.nav,2) : <span className="text-slate-500 text-base">Not set</span>}
+                                    </p>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        {monthStart?.yearMonth||new Date().toISOString().slice(0,7)}
+                                        {monthStart?.manual && <span className="ml-1 text-yellow-500"> · manual</span>}
+                                        {monthStart && !monthStart.manual && <span className="ml-1"> · auto 1st @ 16:00</span>}
+                                        {!monthStart && trsConfig.scriptUrl && <span> · auto-captures 1st @ 16:00 SGT</span>}
+                                        {!monthStart && !trsConfig.scriptUrl && <span> · connect TRS Sheets in Config</span>}
+                                    </p>
+                                </>
+                            )}
+                        </div>
+
+                        {/* MTD Change */}
+                        <div className="card p-5">
+                            <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">MTD Change</p>
+                            {mtdChange!==null ? (
+                                <>
+                                    <p className={`text-3xl font-bold mono ${mtdChange>=0?'text-green-400':'text-red-400'}`}>
+                                        {mtdChange>=0?'+':''}{fmt(mtdChange,2)}
+                                    </p>
+                                    <p className={`text-xs mt-1 mono ${mtdChange>=0?'text-green-400':'text-red-400'}`}>
+                                        {mtdPct>=0?'+':''}{fmt(mtdPct,2)}% vs month-start
+                                    </p>
+                                </>
+                            ) : (
+                                <p className="text-slate-500 text-sm mt-2">Set month-start NAV to calculate</p>
+                            )}
+                        </div>
+
+                        {/* NAV Alert */}
+                        <div className={`card p-5 ${alertBreached?'border-amber-500/40 bg-amber-900/10':''}`}>
+                            <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider flex items-center gap-1.5">
+                                {alertBreached && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse"/>}
+                                % Move · {trsConfig.alertInterval==='days'?'1d':(trsConfig.alertPeriods||5)+' '+(trsConfig.alertInterval==='hours'?'hr':'min')}
+                            </p>
+                            {navMove!==null ? (
+                                <>
+                                    <p className={`text-3xl font-bold mono ${navMove.pct>=0?'text-green-400':'text-red-400'}`}>
+                                        {navMove.pct>=0?'+':''}{fmt(navMove.pct,3)}%
+                                    </p>
+                                    <p className="text-xs text-slate-500 mt-1 mono">from ${fmt(navMove.pastNav,2)} · {navMove.label} ago</p>
+                                    {alertBreached && (
+                                        <p className="text-xs text-amber-400 font-medium mt-1 flex items-center gap-1">
+                                            <Icon.Alert/> Threshold breached ({threshold>=0?'+':''}{threshold}%)
+                                        </p>
+                                    )}
+                                </>
+                            ) : (
+                                <p className="text-slate-500 text-sm mt-2">
+                                    {!trsConfig.scriptUrl?'Connect TRS Sheets in Config':navHistory.length<2?'Collecting NAV history…':'Not enough history yet'}
+                                </p>
+                            )}
+                        </div>
                     </div>
 
-                    {/* Asset breakdown table */}
-                    {data.assets && data.assets.length > 0 ? (
-                        <div className="card overflow-hidden">
-                            <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-                                <p className="text-sm font-semibold text-slate-300">Asset Breakdown</p>
-                                <p className="text-xs text-slate-500">Sorted by USD value · all balances from Unified Trading Account</p>
-                            </div>
-                            <div className="overflow-x-auto scrollbar-hide">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="border-b border-slate-800 bg-slate-900/40 text-xs text-slate-400 font-medium">
-                                            <th className="text-left px-5 py-3">Asset</th>
-                                            <th className="text-right px-5 py-3">Wallet Balance</th>
-                                            <th className="text-right px-5 py-3">Available</th>
-                                            <th className="text-right px-5 py-3">Unrealised PnL</th>
-                                            <th className="text-right px-5 py-3">USD Value</th>
-                                            <th className="text-right px-5 py-3 min-w-[140px]">% of NAV</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {data.assets
-                                            .slice()
-                                            .sort((a,b)=>(b.usdValue||0)-(a.usdValue||0))
-                                            .map((asset,i)=>{
-                                                const pct = data.totalNav > 0 ? (asset.usdValue / data.totalNav) * 100 : 0;
-                                                const upnl = parseFloat(asset.unrealisedPnl||0);
+                    {/* Asset breakdown — simplified, USD value from live prices */}
+                    {data.assets && data.assets.length > 0 && (()=>{
+                        const assetsWithUsd = data.assets
+                            .map(a=>({...a, computedUsd: computeUsdValue(a.coin, a.walletBalance)}))
+                            .sort((a,b)=>b.computedUsd-a.computedUsd);
+                        return (
+                            <div className="card overflow-hidden">
+                                <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+                                    <p className="text-sm font-semibold text-slate-300">Asset Breakdown</p>
+                                    <p className="text-xs text-slate-500">USD value = wallet balance × live Bybit price</p>
+                                </div>
+                                <div className="overflow-x-auto scrollbar-hide">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="border-b border-slate-800 bg-slate-900/40 text-xs text-slate-400 font-medium">
+                                                <th className="text-left px-5 py-3">Asset</th>
+                                                <th className="text-right px-5 py-3">Wallet Balance</th>
+                                                <th className="text-right px-5 py-3">USD Value</th>
+                                                <th className="text-right px-5 py-3 min-w-[160px]">% of NAV</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {assetsWithUsd.map((asset,i)=>{
                                                 const isStable = ['USDT','USDC','BUSD','DAI'].includes(asset.coin);
+                                                const pct = data.totalNav>0?(asset.computedUsd/data.totalNav)*100:0;
                                                 return (
                                                     <tr key={asset.coin} className={`border-b border-slate-800/50 ${i%2===1?'bg-slate-900/20':''}`}>
                                                         <td className="px-5 py-3">
-                                                            <span className={`px-2 py-0.5 rounded text-xs font-bold border ${assetPillStyle(asset.coin)}`}>
-                                                                {asset.coin}
-                                                            </span>
+                                                            <span className={`px-2 py-0.5 rounded text-xs font-bold border ${assetPillStyle(asset.coin)}`}>{asset.coin}</span>
                                                         </td>
                                                         <td className="px-5 py-3 text-right mono text-slate-300">
-                                                            {isStable
-                                                                ? fmt(parseFloat(asset.walletBalance||0), 2)
-                                                                : fmtCrypto(parseFloat(asset.walletBalance||0), 8)
-                                                            }
-                                                        </td>
-                                                        <td className="px-5 py-3 text-right mono text-slate-400">
-                                                            {isStable
-                                                                ? fmt(parseFloat(asset.availableToWithdraw||0), 2)
-                                                                : fmtCrypto(parseFloat(asset.availableToWithdraw||0), 8)
-                                                            }
-                                                        </td>
-                                                        <td className={`px-5 py-3 text-right mono ${upnl>0?'text-green-400':upnl<0?'text-red-400':'text-slate-600'}`}>
-                                                            {upnl !== 0 ? `${upnl>=0?'+':''}${fmt(upnl,4)}` : '—'}
+                                                            {isStable?fmt(parseFloat(asset.walletBalance),2):fmtCrypto(parseFloat(asset.walletBalance),8)}
                                                         </td>
                                                         <td className="px-5 py-3 text-right mono text-white font-semibold">
-                                                            ${fmt(asset.usdValue||0, 2)}
+                                                            ${fmt(asset.computedUsd,2)}
                                                         </td>
                                                         <td className="px-5 py-3 text-right">
                                                             <div className="flex items-center justify-end gap-2">
-                                                                <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                                                <div className="w-28 h-1.5 bg-slate-800 rounded-full overflow-hidden">
                                                                     <div className={`h-full rounded-full ${barColor(asset.coin)}`} style={{width:`${Math.min(100,pct)}%`}}/>
                                                                 </div>
-                                                                <span className="text-xs mono text-slate-400 w-12 text-right">{fmt(pct,1)}%</span>
+                                                                <span className="text-xs mono text-slate-400 w-14 text-right">{fmt(pct,1)}%</span>
                                                             </div>
                                                         </td>
                                                     </tr>
                                                 );
-                                            })
-                                        }
-                                    </tbody>
-                                    <tfoot>
-                                        <tr className="border-t border-slate-600 bg-slate-900/30">
-                                            <td colSpan="4" className="px-5 py-3 text-sm font-bold text-slate-200">Total NAV</td>
-                                            <td className="px-5 py-3 text-right mono text-white font-bold">${fmt(data.totalNav,2)}</td>
-                                            <td className="px-5 py-3 text-right mono text-slate-400 text-xs">100.0%</td>
-                                        </tr>
-                                    </tfoot>
-                                </table>
+                                            })}
+                                        </tbody>
+                                        <tfoot>
+                                            <tr className="border-t border-slate-600 bg-slate-900/30">
+                                                <td colSpan="2" className="px-5 py-3 text-sm font-bold text-slate-200">Total NAV</td>
+                                                <td className="px-5 py-3 text-right mono text-white font-bold">${fmt(data.totalNav,2)}</td>
+                                                <td className="px-5 py-3 text-right mono text-slate-400 text-xs">100.0%</td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
                             </div>
-                        </div>
-                    ) : (
-                        <div className="card p-8 text-center">
-                            <p className="text-slate-400 text-sm">No assets found in SMA01 account.</p>
-                        </div>
-                    )}
+                        );
+                    })()}
                 </>
             )}
         </div>
     );
 };
-
 const App = () => {
     const [tab,setTab]=useState('ssps');
     // Persist theme preference across sessions
