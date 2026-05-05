@@ -5538,16 +5538,17 @@ const TRSModule = ({bybitPrices}) => {
         if (!trsConfig.scriptUrl) return alert('Set TRS Apps Script URL first in Config.');
         setSavingConfig(true);
         try {
-            await fetch(`${trsConfig.scriptUrl}?action=saveConfig`, {
-                method:'POST', headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({
-                    interval:       trsConfig.alertInterval  || 'minutes',
-                    periods:        trsConfig.alertPeriods   || 5,
-                    threshold:      trsConfig.alertThreshold || 2.0,
-                    telegramToken:  trsConfig.telegramToken  || '',
-                    telegramChatId: trsConfig.telegramChatId || '',
-                }),
+            const params = new URLSearchParams({
+                action:        'saveConfig',
+                interval:      trsConfig.alertInterval  || 'minutes',
+                periods:       String(trsConfig.alertPeriods   || 5),
+                threshold:     String(trsConfig.alertThreshold || 2.0),
+                telegramToken: trsConfig.telegramToken  || '',
+                telegramChatId:trsConfig.telegramChatId || '',
             });
+            const res  = await fetch(`${trsConfig.scriptUrl}?${params}`);
+            const json = await res.json();
+            if (json.error) throw new Error(json.error);
             alert('Alert config saved to Sheets.');
         } catch(e) { alert('Failed: '+e.message); }
         setSavingConfig(false);
@@ -5557,10 +5558,15 @@ const TRSModule = ({bybitPrices}) => {
         if (!trsConfig.scriptUrl) return alert('Set TRS Apps Script URL first in Config.');
         const ym = new Date().toISOString().slice(0,7);
         try {
-            await fetch(`${trsConfig.scriptUrl}?action=saveMonthStart`, {
-                method:'POST', headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({yearMonth:ym, nav:parseFloat(navVal), manual:true}),
+            const params = new URLSearchParams({
+                action:     'saveMonthStart',
+                yearMonth:  ym,
+                nav:        String(parseFloat(navVal)),
+                manual:     'true',
             });
+            const res  = await fetch(`${trsConfig.scriptUrl}?${params}`);
+            const json = await res.json();
+            if (json.error) throw new Error(json.error);
             setMonthStart({yearMonth:ym, nav:parseFloat(navVal), manual:true});
             setEditingMS(false);
         } catch(e) { alert('Failed: '+e.message); }
