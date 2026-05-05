@@ -1,40 +1,49 @@
 // api/trs-sheets.js — Vercel proxy for TRS Google Apps Script
-// Needed because script.google.com is not in the Vercel network allowlist.
-// All TRS Sheets read/write calls from the browser go through here.
 
-const TRS_SCRIPT_URL = process.env.TRS_SCRIPT_URL; // set in Vercel env vars
+const TRS_SCRIPT_URL = process.env.TRS_SCRIPT_URL;
 
 module.exports = async function handler(req, res) {
-    // CORS — allow requests from the app itself
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    if (req.method === 'OPTIONS') return res.status(200).end();
-    if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+    res.setHeader('Content-Type', 'application/json');
 
+    if (req.method === 'OPTIONS') return res.status(200).end();
+
+    // Step 1: confirm function is running
     if (!TRS_SCRIPT_URL) {
-        return res.status(500).json({ error: 'TRS_SCRIPT_URL not set in Vercel environment variables.' });
+        return res.status(500).json({
+            error: 'TRS_SCRIPT_URL env var not set in Vercel. Go to Vercel → Project Settings → Environment Variables and add TRS_SCRIPT_URL.',
+            action: req.query.action || 'none',
+        });
     }
 
-    // Forward all query params directly to the Apps Script
     const params = new URLSearchParams(req.query).toString();
     const url    = `${TRS_SCRIPT_URL}${params ? '?' + params : ''}`;
 
     try {
         const upstream = await fetch(url, {
             redirect: 'follow',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Accept': 'application/json, */*' },
         });
+
         const text = await upstream.text();
 
-        // Try to parse as JSON, fall back to text
-        try {
-            const json = JSON.parse(text);
-            return res.status(200).json(json);
-        } catch {
-            return res.status(200).send(text);
+        if (text.trimStart().startsWith('<')) {
+            return res.status(502).json({
+                error: 'Apps Script returned HTML — redeploy the Apps Script as a Web App (Execute as Me, Anyone).',
+                scriptUrl: TRS_SCRIPT_URL,
+                httpStatus: upstream.status,
+                preview: text.slice(0, 100),
+            });
         }
+
+        try {
+            return res.status(200).json(JSON.parse(text));
+        } catch {
+            return res.status(502).json({ error: 'Non-JSON response', raw: text.slice(0, 200) });
+        }
+
     } catch (err) {
-        console.error('trs-sheets proxy error:', err.message);
-        return res.status(500).json({ error: err.message });
+        return res.status(500).json({ error: 'Fetch failed: ' + err.message });
     }
 };
