@@ -5852,11 +5852,30 @@ const TRSModule = ({bybitPrices}) => {
                                             })}
                                         </tbody>
                                         <tfoot>
-                                            <tr className="border-t border-slate-600 bg-slate-900/30">
-                                                <td colSpan="2" className="px-5 py-3 text-sm font-bold text-slate-200">Total NAV</td>
-                                                <td className="px-5 py-3 text-right mono text-white font-bold">${fmt(data.totalNav,2)}</td>
-                                                <td className="px-5 py-3 text-right mono text-slate-400 text-xs">100.0%</td>
-                                            </tr>
+                                            {(()=>{
+                                                const sumUsd = assetsWithUsd.reduce((s,a)=>s+a.computedUsd,0);
+                                                const mtm    = data.totalNav - sumUsd;
+                                                const mtmPct = data.totalNav > 0 ? (mtm / data.totalNav) * 100 : 0;
+                                                return (<>
+                                                    {Math.abs(mtm) > 0.01 && (
+                                                        <tr className="border-t border-slate-700/50 bg-slate-900/20">
+                                                            <td className="px-5 py-3 text-sm text-slate-400 italic">Open Positions (MTM)</td>
+                                                            <td className="px-5 py-3 text-right mono text-slate-500 text-xs italic">unrealised PnL</td>
+                                                            <td className={`px-5 py-3 text-right mono font-semibold italic ${mtm>=0?'text-green-400':'text-red-400'}`}>
+                                                                {mtm>=0?'+':''}{fmt(mtm,2)}
+                                                            </td>
+                                                            <td className={`px-5 py-3 text-right mono text-xs italic ${mtm>=0?'text-green-400':'text-red-400'}`}>
+                                                                {mtmPct>=0?'+':''}{fmt(mtmPct,3)}%
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                    <tr className="border-t border-slate-600 bg-slate-900/30">
+                                                        <td colSpan="2" className="px-5 py-3 text-sm font-bold text-slate-200">Total NAV</td>
+                                                        <td className="px-5 py-3 text-right mono text-white font-bold">${fmt(data.totalNav,2)}</td>
+                                                        <td className="px-5 py-3 text-right mono text-slate-400 text-xs">100.0%</td>
+                                                    </tr>
+                                                </>);
+                                            })()}
                                         </tfoot>
                                     </table>
                                 </div>
