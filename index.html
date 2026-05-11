@@ -4196,10 +4196,14 @@ const accAmounts = (trade, scenario, confirmedCount=0, isKO=false) => {
     // outstandingGuaranteed = guaranteed periods not yet confirmed at time of KO.
     // These still need to settle on their original dates, so their amount2 stays in the pot.
     const guaranteedPeriods = parseInt(trade.guaranteedPeriods) || 0;
-    const outstandingGuaranteed = isKO ? Math.max(0, guaranteedPeriods - confirmedCount) : 0;
-    const remaining = isKO
-        ? Math.max(0, notional - (confirmedCount + 1) * amount2 - (outstandingGuaranteed > 0 ? (outstandingGuaranteed - 1) * amount2 : 0))
-        : 0;
+    // outstandingGuaranteed: guaranteed periods not yet confirmed at time of KO
+    // (excluding the current period being settled, hence confirmedCount + 1)
+    const outstandingGuaranteed = isKO ? Math.max(0, guaranteedPeriods - (confirmedCount + 1)) : 0;
+    // remaining = notional consumed so far (incl this period) + held back for future guaranteed settlements
+    // immediate return = everything that doesn't need to be held back
+    const consumed  = (confirmedCount + 1) * amount2;
+    const heldBack  = outstandingGuaranteed * amount2;
+    const remaining = isKO ? Math.max(0, notional - consumed - heldBack) : 0;
 
     switch (scenario) {
         case 'above':
@@ -5437,12 +5441,12 @@ const AccumulatorModule = ({prices}) => {
         const isKO = accIsKO(trade, fp, date);
         const schedForConfirm = buildAccSchedule(trade); const confirmedBefore = schedForConfirm.filter(d => d < date && fixings[d]?.confirmed).length;
         // Use pre-calculated amounts from auto-fill if available
-        const cryptoQty = existingFix?.cryptoDelivery ?? accAmounts(trade, scenario, confirmedBefore, isKO).cryptoQty;
-        const baseAmount = existingFix?.baseReturned ?? accAmounts(trade, scenario, confirmedBefore, isKO).baseAmount;
-        // Use !== undefined/null check (not ??) so remainingAfter:0 is preserved correctly
-        const remainingAfter = (existingFix?.remainingAfter !== undefined && existingFix?.remainingAfter !== null)
-            ? existingFix.remainingAfter
-            : Math.max(0, parseFloat(trade.notionalAmount) - (confirmedBefore + 1) * trunc2((parseFloat(trade.notionalAmount)||0)/(parseInt(trade.tenorValue)||1)));
+        // Always recalculate amounts from accAmounts which correctly applies
+        // barrierStartDate and guaranteedPeriods — don't trust old auto-fill values
+        const amounts = accAmounts(trade, scenario, confirmedBefore, isKO);
+        const cryptoQty  = amounts.cryptoQty;
+        const baseAmount = amounts.baseAmount;
+        const remainingAfter = amounts.remaining;
         const schedule = buildAccSchedule(trade);
         const isLast = date === schedule[schedule.length-1];
         const guaranteedPeriods = parseInt(trade.guaranteedPeriods) || 0;
