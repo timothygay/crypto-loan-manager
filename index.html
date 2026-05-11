@@ -4105,8 +4105,13 @@ const buildAccSchedule = (trade) => {
 };
 
 // Check if fixing triggers KO (price >= KO price)
-const accIsKO = (trade, fixingPrice) =>
-    trade.knockOutEnabled && fixingPrice >= parseFloat(trade.knockOutPrice);
+// KO only triggers on or after barrierStartDate (defaults to tradeDate if not set)
+const accIsKO = (trade, fixingPrice, fixingDate) => {
+    if (!trade.knockOutEnabled) return false;
+    const barrierDate = trade.barrierStartDate || trade.tradeDate || '';
+    if (fixingDate && barrierDate && fixingDate < barrierDate) return false;
+    return fixingPrice >= parseFloat(trade.knockOutPrice);
+};
 
 // Determine base settlement scenario for a fixing.
 // Returns: 'above' | 'inzone' | 'below'
@@ -4141,8 +4146,15 @@ const accAmounts = (trade, scenario, confirmedCount=0, isKO=false) => {
     const strike      = parseFloat(trade.strikePrice);
     const base        = accBaseAsset(trade.underlyingPair);
     const notionalCcy = trade.notionalCurrency;
-    // Remaining balance returned on KO = notional minus all periods including this one
-    const remaining   = isKO ? Math.max(0, notional - (confirmedCount + 1) * amount2) : 0;
+    // On KO: return notional minus funding for any outstanding guaranteed periods.
+    // confirmedCount = periods already confirmed BEFORE this fixing.
+    // outstandingGuaranteed = guaranteed periods not yet confirmed at time of KO.
+    // These still need to settle on their original dates, so their amount2 stays in the pot.
+    const guaranteedPeriods = parseInt(trade.guaranteedPeriods) || 0;
+    const outstandingGuaranteed = isKO ? Math.max(0, guaranteedPeriods - confirmedCount) : 0;
+    const remaining = isKO
+        ? Math.max(0, notional - (confirmedCount + 1) * amount2 - (outstandingGuaranteed > 0 ? (outstandingGuaranteed - 1) * amount2 : 0))
+        : 0;
 
     switch (scenario) {
         case 'above':
@@ -4193,9 +4205,10 @@ const ACC_SCENARIO_STYLE = {
 const ACC_KO_STYLE = { bg:'bg-orange-900/20', border:'border-orange-500/30', text:'text-orange-400' };
 
 const ACC_STATUS_BADGE = {
-    'Active':      'bg-green-500/15 text-green-400 border-green-500/30',
-    'Knocked Out': 'bg-orange-500/15 text-orange-400 border-orange-500/30',
-    'Matured':     'bg-blue-500/15 text-blue-400 border-blue-500/30',
+    'Active':              'bg-green-500/15 text-green-400 border-green-500/30',
+    'Knocked Out':         'bg-orange-500/15 text-orange-400 border-orange-500/30',
+    'Knocked Out — Pending': 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+    'Matured':             'bg-blue-500/15 text-blue-400 border-blue-500/30',
 };
 
 const accTradeToRow = (t) => [
@@ -4208,7 +4221,9 @@ const accTradeToRow = (t) => [
     t.upfrontFee||0, t.upfrontAmount||0, t.upfrontFeeUnderlying||t.notionalCurrency||'USDT',
     t.status,
     JSON.stringify(t.fixings||{}),
-    t.createdAt||new Date().toISOString()
+    t.createdAt||new Date().toISOString(),
+    t.barrierStartDate||t.tradeDate||'',  // col 23
+    parseInt(t.guaranteedPeriods)||0,      // col 24
 ];
 
 const accRowToTrade = (r) => ({
@@ -4234,6 +4249,8 @@ const accRowToTrade = (r) => ({
         return raw || {};
     } catch { return {}; } })(),
     createdAt:r[22],
+    barrierStartDate: r[23] || '',
+    guaranteedPeriods: parseInt(r[24]) || 0,
 });
 
 // ─── ACCUMULATOR DASHBOARD ────────────────────────────────────────────────────
@@ -4263,32 +4280,44 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
     const past30 = new Date(new Date().getTime() - 30*86400000).toISOString().split('T')[0];
     const overdue = [], upcoming = [];
     trades.forEach(trade => {
-        if (!['Active','Knocked Out'].includes(trade.status)) return;
+        if (!['Active','Knocked Out','Knocked Out — Pending'].includes(trade.status)) return;
         const sched = buildAccSchedule(trade);
         const amount2up = trunc2((parseFloat(trade.notionalAmount)||0) / (parseInt(trade.tenorValue)||1));
 
-        if (trade.status === 'Knocked Out') {
-            // KO'd trade: show the KO fixing date entry so remaining can be confirmed.
-            // Search ALL fixings keys (not just schedule dates) since mid-period KOs
-            // are keyed on non-settlement dates.
+        if (trade.status === 'Knocked Out' || trade.status === 'Knocked Out — Pending') {
             const koFixingEntry = Object.entries(trade.fixings||{}).find(([d,f])=>f.isKO);
             const koFixing = koFixingEntry ? {...koFixingEntry[1], date:koFixingEntry[0]} : null;
             const sched_lc = buildAccSchedule(trade);
             const lastConfirmed = sched_lc.filter(d=>(trade.fixings||{})[d]?.confirmed).sort((a,b)=>b.localeCompare(a)).map(d=>({...(trade.fixings||{})[d],date:d}))[0];
-            // koDate: prefer the actual KO fixing date from fixings object
             const koDate = koFixing?.date || lastConfirmed?.date || null;
+
+            // Show KO return entry if not yet confirmed
             if (koDate) {
                 const isKOConfirmed = koFixing?.confirmed || false;
                 if (!isKOConfirmed) {
-                    const sched_ko = buildAccSchedule(trade); const confirmedBefore = sched_ko.filter(d=>d<koDate&&(trade.fixings||{})[d]?.confirmed).length;
-                    // Use remainingAfter from the KO fixing entry if available (most accurate)
-                    // Falls back to calculation if not present
+                    const confirmedBefore = sched_lc.filter(d=>d<koDate&&(trade.fixings||{})[d]?.confirmed).length;
                     const remaining = koFixing?.remainingAfter ?? Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore * amount2up);
                     const isEffectivelyPast = koDate < today || (koDate === today && past4pmSGT);
                     const entry = {trade, date:koDate, existing:koFixing||null, remaining, weekend:isWeekend(koDate), isKOReturn:true};
                     if (isEffectivelyPast && koDate >= past30) overdue.push(entry);
                     else if (!isEffectivelyPast && koDate <= in7) upcoming.push(entry);
                 }
+            }
+
+            // For KO-Pending: also show any unconfirmed guaranteed period settlements
+            if (trade.status === 'Knocked Out — Pending') {
+                const guaranteedPeriods = parseInt(trade.guaranteedPeriods) || 0;
+                sched_lc.forEach((date, idx) => {
+                    if (idx >= guaranteedPeriods) return; // only within guaranteed window
+                    const existing = (trade.fixings||{})[date] || null;
+                    if (existing?.confirmed) return; // already done
+                    const confirmedBefore2 = sched_lc.filter(d=>d<date&&(trade.fixings||{})[d]?.confirmed).length;
+                    const remaining2 = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore2 * amount2up);
+                    const isEffectivelyPast2 = date < today || (date === today && past4pmSGT);
+                    const entry = {trade, date, existing, remaining:remaining2, weekend:isWeekend(date), isGuaranteedPending:true};
+                    if (isEffectivelyPast2 && date >= past30) overdue.push(entry);
+                    else if (!isEffectivelyPast2 && date <= in7) upcoming.push(entry);
+                });
             }
             return;
         }
@@ -4422,7 +4451,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                     const priceForScenario = autoFilledPrice ?? livePrice;
                     const isIndicative = !autoFilledPrice && livePrice !== null;
                     const scenario = f?.scenario || (priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null);
-                    const isKO = priceForScenario !== null ? accIsKO(s.trade, priceForScenario) : false;
+                    const isKO = priceForScenario !== null ? accIsKO(s.trade, priceForScenario, s.date) : false;
                     const sched_r = buildAccSchedule(s.trade); const confirmedBefore = sched_r.filter(d=>d<s.date&&(s.trade.fixings||{})[d]?.confirmed).length;
                     // Use pre-calculated amounts from code.gs if available, else compute
                     const amounts = f?.autoFilled
@@ -4591,6 +4620,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusCls}`}>{trade.status}</span>
                         {trade.bufferEnabled && <span className="px-2 py-0.5 rounded-full text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30">Buffered</span>}
                         {trade.knockOutEnabled && <span className="px-2 py-0.5 rounded-full text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30">KO</span>}
+                        {trade.status==='Knocked Out — Pending' && <span className="px-2 py-0.5 rounded-full text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1"><Icon.Alert/> Pending Guaranteed Settlements</span>}
                     </div>
                     <p className="text-xs text-slate-500 mono">{trade.id} · {fmtDate(trade.tradeDate)} → {fmtDate(trade.maturityDate)} · {trade.tenorValue} {trade.tenorUnit}</p>
                 </div>
@@ -4609,7 +4639,8 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                     ['Amount 1', `${trade.notionalCurrency} ${fmt(amount1,2)}`, parseFloat(trade.strikePrice)>0?`≈ ${trunc8(amount1/parseFloat(trade.strikePrice)).toFixed(8)} ${accBaseAsset(trade.underlyingPair)}`:'per above-strike', 'text-green-400'],
                     ['Amount 2', `${trade.notionalCurrency} ${fmt(amount2,2)}`, parseFloat(trade.strikePrice)>0?`≈ ${trunc8(amount2/parseFloat(trade.strikePrice)).toFixed(8)} ${accBaseAsset(trade.underlyingPair)}`:'per period', 'text-cyan-400'],
                     ['Strike', `$${fmt(parseFloat(trade.strikePrice),2)}`, trade.underlyingPair, 'text-purple-400'],
-                    ['KO Price', trade.knockOutEnabled?`$${fmt(parseFloat(trade.knockOutPrice),2)}`:'—', trade.knockOutEnabled?'knockout level':'no KO', 'text-orange-400'],
+                    ['KO Price', trade.knockOutEnabled?`$${fmt(parseFloat(trade.knockOutPrice),2)}`:'—', trade.knockOutEnabled?(trade.barrierStartDate&&trade.barrierStartDate>trade.tradeDate?`active from ${fmtDate(trade.barrierStartDate)}`:'from trade date'):'no KO', 'text-orange-400'],
+                    ...(parseInt(trade.guaranteedPeriods)>0?[['Guaranteed',`${trade.guaranteedPeriods} period${trade.guaranteedPeriods>1?'s':''}`,`settlement always executes`,'text-cyan-400']]:[] ),
                     ['Buffer', trade.bufferEnabled?`$${fmt(parseFloat(trade.bufferPrice),2)}`:'—', trade.bufferEnabled?'buffer level':'no buffer', 'text-blue-400'],
                     ['Progress', `${confirmed.length}/${schedule.length}`, `fixings confirmed`, 'text-slate-300'],
                 ].map(([lbl,val,sub,cls])=>(
@@ -4660,7 +4691,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                 const fixing = fixings[date] || null; // fixings is now object keyed by date
                                 const fp = fixing?.price ? parseFloat(fixing.price) : null;
                                 const scenario = fixing?.scenario || (fp !== null ? accScenario(trade, fp) : null);
-                                const isKO = fp !== null ? accIsKO(trade, fp) : false;
+                                const isKO = fp !== null ? accIsKO(trade, fp, date) : false;
                                 const confirmedBefore = schedule.filter(d=>d<date&&fixings[d]?.confirmed).length;
                                 // Use pre-calculated amounts from auto-fill if available
                                 const amounts = fixing?.autoFilled
@@ -4740,7 +4771,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                                             )}
                                             {isFuture && !tradeEnded && livePrice > 0 && (
                                                 <span className={`text-[10px] mono ${accIsKO(trade,livePrice)?'text-orange-400':accScenario(trade,livePrice)==='above'?'text-green-400':accScenario(trade,livePrice)==='inzone'?'text-blue-400':'text-red-400'}`}>
-                                                    live: ${fmt(livePrice,0)} → {accIsKO(trade,livePrice)?'KNOCK OUT':ACC_SCENARIO_STYLE[accScenario(trade,livePrice)]?.label}
+                                                    live: ${fmt(livePrice,0)} → {accIsKO(trade,livePrice,date)?'KNOCK OUT':ACC_SCENARIO_STYLE[accScenario(trade,livePrice)]?.label}
                                                 </span>
                                             )}
                                         </td>
@@ -4764,9 +4795,13 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
         strikePrice:'', knockOutEnabled:false, knockOutPrice:'',
         bufferEnabled:false, bufferPrice:'',
         upfrontFee:'0.00', upfrontFeeUnderlying:'USDT', status:'Active',
+        barrierStartDate:'', barrierStartSameAsTradeDate:true,
+        guaranteedPeriods:0,
     });
     const f  = k => e => setForm(p=>({...p,[k]:e.target.value}));
     const fb = k => e => setForm(p=>({...p,[k]:e.target.checked}));
+    // Keep barrierStartDate in sync with tradeDate when checkbox is set
+    const effectiveBarrierStart = form.barrierStartSameAsTradeDate ? (form.tradeDate||'') : (form.barrierStartDate||'');
 
     // Auto maturity
     const computeMaturity = () => {
@@ -4818,6 +4853,8 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
             amount2: trunc2(amount2).toFixed(2),
             upfrontAmount: upfrontAmount.toFixed(2),
             upfrontFeeUnderlying: feeUnderlying,
+            barrierStartDate: form.barrierStartSameAsTradeDate ? (form.tradeDate||'') : (form.barrierStartDate||form.tradeDate||''),
+            guaranteedPeriods: parseInt(form.guaranteedPeriods)||0,
             fixings: trade?.fixings || {},
             createdAt: trade?.createdAt || new Date().toISOString(),
         }, originalId);
@@ -4895,6 +4932,34 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
                         <Input type="number" value={form.bufferPrice} onChange={f('bufferPrice')} step="0.01" disabled={!form.bufferEnabled} placeholder={!form.bufferEnabled?'Disabled':'e.g. 50000.00'}/>
                     </div>
                 </div>
+
+                {/* Barrier Start Date */}
+                <div>
+                    <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs text-slate-400">Barrier Start Date</label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs text-cyan-400">
+                            <input type="checkbox" checked={form.barrierStartSameAsTradeDate}
+                                onChange={e=>setForm(p=>({...p,barrierStartSameAsTradeDate:e.target.checked,barrierStartDate:e.target.checked?'':p.barrierStartDate}))}
+                                className="accent-cyan-500"/>
+                            Same as Trade Date
+                        </label>
+                    </div>
+                    <Input type="date"
+                        value={form.barrierStartSameAsTradeDate ? form.tradeDate||'' : form.barrierStartDate||''}
+                        onChange={e=>setForm(p=>({...p,barrierStartDate:e.target.value}))}
+                        disabled={form.barrierStartSameAsTradeDate}
+                        className={form.barrierStartSameAsTradeDate?'opacity-40 pointer-events-none':''}/>
+                    {!form.barrierStartSameAsTradeDate && form.barrierStartDate && form.tradeDate && form.barrierStartDate > form.tradeDate && (
+                        <p className="text-xs text-cyan-400 mt-1">KO inactive for first {Math.ceil((new Date(form.barrierStartDate)-new Date(form.tradeDate))/86400000)} days</p>
+                    )}
+                </div>
+
+                {/* Guaranteed Periods */}
+                <Field label="Guaranteed Periods" hint="Periods always settled even if KO fires. 0 = none.">
+                    <Input type="number" value={form.guaranteedPeriods||0}
+                        onChange={e=>setForm(p=>({...p,guaranteedPeriods:Math.max(0,parseInt(e.target.value)||0)}))}
+                        min="0" max={parseInt(form.tenorValue)||52}/>
+                </Field>
 
                 {/* Upfront Fee */}
                 <Field label="Upfront Fee (% — bookkeeping only)">
@@ -5233,7 +5298,7 @@ const AccumulatorModule = ({prices}) => {
         // Read current trades from state via ref to avoid stale closure
         setTrades(currentTrades=>{
             currentTrades.forEach(trade=>{
-                if(!['Active','Knocked Out'].includes(trade.status)) return;
+                if(!['Active','Knocked Out','Knocked Out — Pending'].includes(trade.status)) return;
                 const symbol=ACC_UNDERLYING_SYMBOLS[trade.underlyingPair];
                 if(!symbol) return;
                 buildAccSchedule(trade).forEach(date=>{
@@ -5324,7 +5389,7 @@ const AccumulatorModule = ({prices}) => {
         if (!fp) { alert('No fixing price yet for this date. Prices are auto-filled at 4pm SGT by the Apps Script trigger.'); return; }
 
         const scenario = existingFix?.scenario || accScenario(trade, fp);
-        const isKO = accIsKO(trade, fp);
+        const isKO = accIsKO(trade, fp, date);
         const schedForConfirm = buildAccSchedule(trade); const confirmedBefore = schedForConfirm.filter(d => d < date && fixings[d]?.confirmed).length;
         // Use pre-calculated amounts from auto-fill if available
         const cryptoQty = existingFix?.cryptoDelivery ?? accAmounts(trade, scenario, confirmedBefore, isKO).cryptoQty;
@@ -5335,9 +5400,16 @@ const AccumulatorModule = ({prices}) => {
             : Math.max(0, parseFloat(trade.notionalAmount) - (confirmedBefore + 1) * trunc2((parseFloat(trade.notionalAmount)||0)/(parseInt(trade.tenorValue)||1)));
         const schedule = buildAccSchedule(trade);
         const isLast = date === schedule[schedule.length-1];
+        const guaranteedPeriods = parseInt(trade.guaranteedPeriods) || 0;
+        const outstandingGuaranteed = Math.max(0, guaranteedPeriods - (confirmedBefore + 1));
         let newStatus = trade.status;
-        if (isKO) newStatus = 'Knocked Out';
-        else if (isLast) newStatus = 'Matured';
+        if (isKO) {
+            // If guaranteed periods still outstanding → pending status
+            newStatus = outstandingGuaranteed > 0 ? 'Knocked Out — Pending' : 'Knocked Out';
+        } else if (isLast) {
+            // Last guaranteed settlement completes a KO-Pending trade
+            newStatus = trade.status === 'Knocked Out — Pending' ? 'Knocked Out' : 'Matured';
+        }
 
         // Build settlement log before any async operations
         const settlementLog = {
@@ -5402,7 +5474,7 @@ const AccumulatorModule = ({prices}) => {
     const filtered = trades.filter(t => {
         if (filterStatus==='all') return true;
         if (filterStatus==='active') return t.status==='Active';
-        if (filterStatus==='knocked-out') return t.status==='Knocked Out';
+        if (filterStatus==='knocked-out') return t.status==='Knocked Out'||t.status==='Knocked Out — Pending';
         if (filterStatus==='matured') return t.status==='Matured';
         return true;
     });
