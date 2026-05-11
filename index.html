@@ -224,6 +224,7 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
 const fmt = (n, d=2) => (n||0).toLocaleString('en-US', {minimumFractionDigits:d, maximumFractionDigits:d});
+const loanIsCrypto = (loan) => ['BTC','ETH'].includes(((loan||{}).underlying||'').toUpperCase());
 const fmtCrypto = (n, d=8) => (n||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:d});
 const fmtDate = (s) => {
     if (!s) return '';
@@ -1029,8 +1030,7 @@ const LoanModule = ({prices}) => {
         const days = Math.floor((end - start) / 86400000);
         return Math.max(0, loan.loanAmount * loan.interestRate / 100 * days / 360);
     };
-    // True when the loan principal is denominated in crypto (BTC or ETH)
-    const loanIsCrypto = (loan) => ['BTC','ETH'].includes((loan.underlying||'').toUpperCase());
+    // fmtLoan — loanIsCrypto is defined at module level above
     const fmtLoan = (amount, loan) => loanIsCrypto(loan)
         ? (Math.floor(amount * 1e8) / 1e8).toFixed(8)
         : fmt(amount, 2);
