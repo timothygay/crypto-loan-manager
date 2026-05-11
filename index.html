@@ -634,7 +634,7 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
         counterpartyMap[l.counterparty].loans.push(l);
     });
     const counterparties = Object.values(counterpartyMap).sort((a,b) => b.total - a.total);
-    const totalActive = activeLoans.reduce((s,l) => s + l.loanAmount, 0);
+    const totalActive = activeLoans.filter(l=>!loanIsCrypto(l)).reduce((s,l) => s + l.loanAmount, 0);
 
     // ── Nearest margin call ───────────────────────────────────────────────────
     const mcLoans = activeLoans.filter(l=>l.secured!==false&&l.secured!=='false').map(l => {
@@ -680,7 +680,7 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                     <span className="text-amber-300 font-semibold text-xs flex items-center gap-1.5"><Icon.Alert/> Expiring within 7 days:</span>
                     {expiring.map(l => (
                         <span key={l.id} className="text-xs text-amber-200 mono bg-amber-900/40 px-2 py-0.5 rounded">
-                            {l.counterparty} — ${fmt(l.loanAmount)} — matures {fmtDate(l.maturityDate)}
+                            {l.counterparty} — {loanIsCrypto(l)?(Math.floor(l.loanAmount*1e8)/1e8).toFixed(8)+' '+l.underlying:'$'+fmt(l.loanAmount)} — matures {fmtDate(l.maturityDate)}
                         </span>
                     ))}
                 </div>
@@ -763,7 +763,7 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                                         </div>
                                         {secured.map(l=>(
                                             <div key={l.id} className="flex justify-between text-[10px] mono text-slate-400 pl-1">
-                                                <span>{l.id}</span><span>${fmt(l.loanAmount,0)} {l.underlying}</span>
+                                                <span>{l.id}</span><span>{loanIsCrypto(l)?(Math.floor(l.loanAmount*1e8)/1e8).toFixed(8):'$'+fmt(l.loanAmount,0)} {l.underlying}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -779,7 +779,7 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                                         </div>
                                         {unsecured.map(l=>(
                                             <div key={l.id} className="flex justify-between text-[10px] mono text-slate-400 pl-1">
-                                                <span>{l.id}</span><span>${fmt(l.loanAmount,0)} {l.underlying}</span>
+                                                <span>{l.id}</span><span>{loanIsCrypto(l)?(Math.floor(l.loanAmount*1e8)/1e8).toFixed(8):'$'+fmt(l.loanAmount,0)} {l.underlying}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -915,7 +915,7 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                                     <tr key={loan.id} className="border-b border-slate-800/50">
                                         <td className="py-2 text-slate-300">{loan.counterparty}</td>
                                         <td className="py-2 mono text-slate-400">{loan.id}</td>
-                                        <td className="py-2 text-right mono text-slate-300">${fmt(loan.loanAmount,0)}</td>
+                                        <td className="py-2 text-right mono text-slate-300">{loanIsCrypto(loan) ? (Math.floor(loan.loanAmount*1e8)/1e8).toFixed(8) : '$'+fmt(loan.loanAmount,0)} {loanIsCrypto(loan)?loan.underlying:''}</td>
                                         <td className="py-2 text-right mono text-slate-300">{loan.interestRate}%</td>
                                         <td className="py-2 text-right mono text-slate-400">{days}d</td>
                                         <td className="py-2 text-right mono text-yellow-400 font-medium">${fmt(interest,2)}</td>
@@ -1029,6 +1029,11 @@ const LoanModule = ({prices}) => {
         const days = Math.floor((end - start) / 86400000);
         return Math.max(0, loan.loanAmount * loan.interestRate / 100 * days / 360);
     };
+    // True when the loan principal is denominated in crypto (BTC or ETH)
+    const loanIsCrypto = (loan) => ['BTC','ETH'].includes((loan.underlying||'').toUpperCase());
+    const fmtLoan = (amount, loan) => loanIsCrypto(loan)
+        ? (Math.floor(amount * 1e8) / 1e8).toFixed(8)
+        : fmt(amount, 2);
     const calcMetrics = (loan) => {
         const isUnsecured = loan.secured === false || loan.secured === 'false';
         const price = prices[loan.collateralType] || 0;
@@ -1144,7 +1149,7 @@ const LoanModule = ({prices}) => {
                             await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
                                 loan.id, loan.counterparty, loan.loanAmount,
                                 loan.underlying, loan.collateralAmount, loan.collateralType,
-                                loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
+                                loan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), loan.interestPaid,
                                 loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
                                 loan.marginCallThreshold, loan.originalCollateralRatio,
                                 loan.status, loan.createdAt||''
@@ -1171,7 +1176,7 @@ const LoanModule = ({prices}) => {
                 await fetch(`${config.scriptUrl}?action=append&sheetName=Loans&values=${encodeURIComponent(JSON.stringify([
                     loan.id, loan.counterparty, loan.loanAmount,
                     loan.underlying, loan.collateralAmount, loan.collateralType,
-                    loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
+                    loan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), loan.interestPaid,
                     loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
                     loan.marginCallThreshold, loan.originalCollateralRatio,
                     loan.status, loan.createdAt, '', loan.secured===false?'Unsecured':'Secured',
@@ -1195,7 +1200,7 @@ const LoanModule = ({prices}) => {
                         await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
                             loan.id, loan.counterparty, loan.loanAmount,
                             loan.underlying, loan.collateralAmount, loan.collateralType,
-                            loan.interestRate, m.interest.toFixed(2), loan.interestPaid,
+                            loan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), loan.interestPaid,
                             loan.tenor, normaliseDate(loan.startDate), normaliseDate(loan.maturityDate)||'',
                             loan.marginCallThreshold, loan.originalCollateralRatio,
                             loan.status, loan.createdAt||'', '', loan.secured===false?'Unsecured':'Secured',
@@ -1245,7 +1250,7 @@ const LoanModule = ({prices}) => {
                             await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
                                 updatedLoan.id, updatedLoan.counterparty, updatedLoan.loanAmount,
                                 updatedLoan.underlying, updatedLoan.collateralAmount, updatedLoan.collateralType,
-                                updatedLoan.interestRate, m.interest.toFixed(2), updatedLoan.interestPaid,
+                                updatedLoan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), updatedLoan.interestPaid,
                                 updatedLoan.tenor, normaliseDate(updatedLoan.startDate), normaliseDate(updatedLoan.maturityDate)||'',
                                 updatedLoan.marginCallThreshold, updatedLoan.originalCollateralRatio,
                                 updatedLoan.status, updatedLoan.createdAt||'', '', updatedLoan.secured===false?'Unsecured':'Secured'
@@ -1256,7 +1261,7 @@ const LoanModule = ({prices}) => {
             } catch(e) { console.error('Sheets push failed:', e.message); }
         }
     };
-    const exportCSV = ()=>{ const rows=loans.map(l=>{const m=calcMetrics(l);return[l.id,l.counterparty,l.loanAmount,l.underlying,l.collateralAmount,l.collateralType,l.interestRate,m.interest.toFixed(2),l.interestPaid,l.tenor,l.startDate,l.maturityDate,l.status,m.ratio.toFixed(2)].join(',');}); const csv=['ID,Counterparty,Loan,Currency,Collateral,CollType,Rate%,IntAccrued,IntPaid,Tenor,Start,Maturity,Status,Ratio%',...rows].join('\n'); const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`loans-${todayUTC()}.csv`;a.click(); };
+    const exportCSV = ()=>{ const rows=loans.map(l=>{const m=calcMetrics(l);return[l.id,l.counterparty,l.loanAmount,l.underlying,l.collateralAmount,l.collateralType,l.interestRate,(loanIsCrypto(l) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)),l.interestPaid,l.tenor,l.startDate,l.maturityDate,l.status,m.ratio.toFixed(2)].join(',');}); const csv=['ID,Counterparty,Loan,Currency,Collateral,CollType,Rate%,IntAccrued,IntPaid,Tenor,Start,Maturity,Status,Ratio%',...rows].join('\n'); const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`loans-${todayUTC()}.csv`;a.click(); };
     const filtered=loans.filter(l=>{
         if (filterStatus==='all') return true;
         if (filterStatus==='active') return l.status==='Active';
@@ -1345,8 +1350,8 @@ const LoanModule = ({prices}) => {
                                 {/* Metric tiles — hide collateral/ratio/MC for unsecured loans */}
                                 <div className={`grid grid-cols-2 gap-2 mb-4 ${m.isUnsecured?'md:grid-cols-3':'md:grid-cols-3 lg:grid-cols-6'}`}>
                                     {[
-                                        ['Loan',`$${fmt(loan.loanAmount)}`,loan.underlying,'text-white',true],
-                                        ['Interest',`$${fmt(m.interest)}`,`${loan.interestRate}% APR`,'text-yellow-400',true],
+                                        ['Loan', loanIsCrypto(loan) ? `${(Math.floor(loan.loanAmount*1e8)/1e8).toFixed(8)}` : `$${fmt(loan.loanAmount)}`, loan.underlying,'text-white',true],
+                                        ['Interest', loanIsCrypto(loan) ? `${(Math.floor(m.interest*1e8)/1e8).toFixed(8)} ${loan.underlying}` : `$${fmt(m.interest)}`, `${loan.interestRate}% APR`,'text-yellow-400',true],
                                         ['Total Owed',`$${fmt(m.owed)}`,`Paid: $${fmt(loan.interestPaid)}`,'text-cyan-400',true],
                                         ['Collateral',`${fmtCrypto(loan.collateralAmount,6)} ${loan.collateralType}`,`≈$${fmt(m.collVal,0)}`,'text-white',!m.isUnsecured],
                                         ['Ratio',`${fmt(m.ratio)}%`,`Target: ${loan.originalCollateralRatio}%`,m.atRisk?'text-red-400':'text-green-400',!m.isUnsecured],
@@ -1414,7 +1419,7 @@ const LoanFormModal = ({title,loan,onSave,onClose,calcTenor})=>{
                 {!loan&&<div className="md:col-span-2"><Field label="Loan ID"><Input value={form.loanId} onChange={f('loanId')} placeholder="LOAN-001"/></Field></div>}
                 <div className="md:col-span-2"><Field label="Counterparty"><Input value={form.counterparty} onChange={f('counterparty')}/></Field></div>
                 <Field label="Loan Amount"><Input type="number" value={form.loanAmount} onChange={f('loanAmount')} step="0.01"/></Field>
-                <Field label="Currency"><Select value={form.underlying} onChange={f('underlying')}><option>USDT</option><option>USDC</option></Select></Field>
+                <Field label="Currency"><Select value={form.underlying} onChange={f('underlying')}><option>USDT</option><option>USDC</option><option>BTC</option><option>ETH</option></Select></Field>
                 {/* Collateral fields — greyed out when unsecured */}
                 <div className={isSecured?'':''+disabledCls}>
                     <Field label="Collateral Amount"><Input type="number" value={isSecured?form.collateralAmount:''} onChange={f('collateralAmount')} step="0.00000001" disabled={!isSecured} placeholder={!isSecured?'N/A — unsecured':''}/></Field>
