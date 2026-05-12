@@ -6149,7 +6149,17 @@ const DCIModule = () => {
 
     // Customer Rate APY is stored as a decimal (e.g. 1.0025 = 100.25%, 0.4915 = 49.15%)
     const fmtRate = v => { const n = parseFloat(v); return isNaN(n) ? (v||'—') : (n * 100).toFixed(2)+'%'; };
-    const fmtAmt  = (ccy, amt) => { const n = parseFloat(String(amt).replace(/,/g,'')); return (ccy?ccy+' ':'') + (isNaN(n)||n===0?'—':fmt(n,2)); };
+    // 8dp for BTC/ETH, 2dp for USDC/USDT/USD/USDx
+    const fmtAmt = (ccy, amt) => {
+        const n    = parseFloat(String(amt).replace(/,/g,''));
+        if (isNaN(n) || n === 0) return '—';
+        const isCryptoCcy = ['BTC','ETH'].includes((ccy||'').trim().toUpperCase());
+        const dp   = isCryptoCcy ? 8 : 2;
+        const disp = isCryptoCcy
+            ? (Math.floor(n * 1e8) / 1e8).toFixed(8)
+            : fmt(n, dp);
+        return (ccy ? ccy + ' ' : '') + disp;
+    };
     const inputCls = "px-2.5 py-1 bg-slate-900/60 border border-slate-700/40 rounded text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50";
 
     return (
