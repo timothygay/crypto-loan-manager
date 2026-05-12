@@ -4353,7 +4353,9 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                 }
             }
 
-            // For KO-Pending: also show any unconfirmed guaranteed period settlements
+            // For KO-Pending: also show any unconfirmed guaranteed period settlements.
+            // If KO fired ON a settlement date, that date already has a KO-return entry —
+            // merge them into one combined row instead of showing two separate rows.
             if (trade.status === 'Knocked Out — Pending') {
                 const guaranteedPeriods = parseInt(trade.guaranteedPeriods) || 0;
                 sched_lc.forEach((date, idx) => {
@@ -4363,9 +4365,21 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                     const confirmedBefore2 = sched_lc.filter(d=>d<date&&(trade.fixings||{})[d]?.confirmed).length;
                     const remaining2 = Math.max(0, parseFloat(trade.notionalAmount) - confirmedBefore2 * amount2up);
                     const isEffectivelyPast2 = date < today || (date === today && past4pmSGT);
-                    const entry = {trade, date, existing, remaining:remaining2, weekend:isWeekend(date), isGuaranteedPending:true};
-                    if (isEffectivelyPast2 && date >= past30) overdue.push(entry);
-                    else if (!isEffectivelyPast2 && date <= in7) upcoming.push(entry);
+
+                    // Check if a KO-return entry for this same date already exists
+                    // (happens when KO fires on a settlement day)
+                    const existingKOEntry = overdue.find(e => e.trade.id === trade.id && e.date === date && e.isKOReturn)
+                        || upcoming.find(e => e.trade.id === trade.id && e.date === date && e.isKOReturn);
+
+                    if (existingKOEntry) {
+                        // Merge: mark the existing KO-return entry as also a guaranteed settlement
+                        existingKOEntry.isGuaranteedPending = true;
+                        existingKOEntry.guaranteedPeriodIdx = idx;
+                    } else {
+                        const entry = {trade, date, existing, remaining:remaining2, weekend:isWeekend(date), isGuaranteedPending:true, guaranteedPeriodIdx:idx};
+                        if (isEffectivelyPast2 && date >= past30) overdue.push(entry);
+                        else if (!isEffectivelyPast2 && date <= in7) upcoming.push(entry);
+                    }
                 });
             }
             return;
@@ -4541,7 +4555,8 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                             <td className="px-3 py-2.5 font-medium text-slate-200">
                                 {s.trade.clientName}
                                 {s.isKOReturn&&<span className="ml-1.5 px-1 py-0.5 bg-orange-900/50 text-orange-300 rounded text-[9px]">KO — RETURN</span>}
-                                {!s.isKOReturn&&isPast&&<span className="ml-1.5 px-1 py-0.5 bg-amber-900/40 text-amber-400 rounded text-[9px]">OVERDUE</span>}
+                                {s.isGuaranteedPending&&<span className="ml-1 px-1 py-0.5 bg-amber-900/50 text-amber-300 rounded text-[9px]">GUARANTEED</span>}
+                                {!s.isKOReturn&&!s.isGuaranteedPending&&isPast&&<span className="ml-1.5 px-1 py-0.5 bg-amber-900/40 text-amber-400 rounded text-[9px]">OVERDUE</span>}
                             </td>
                             <td className="px-3 py-2.5 mono text-slate-400">{s.trade.underlyingPair}</td>
                             <td className={`px-3 py-2.5 mono ${isPast?'text-amber-400':s.weekend?'text-amber-400':'text-slate-300'}`}>
