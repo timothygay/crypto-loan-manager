@@ -6060,14 +6060,23 @@ const TRSModule = ({bybitPrices}) => {
 };
 // ─── DCI MODULE ───────────────────────────────────────────────────────────────
 const DCIModule = () => {
-    const DCI_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzRQVQqZ_YY12u8NjJT04gkdBZMKs9vBzVsbTbK0HxhHC67U5JuAWzPapjM9HY0yZxr/exec';
+    const STORAGE_KEY    = 'cpb_dci_config';
     const DCI_SHEET_NAME = 'DCI Active';
 
-    const [trades,    setTrades]    = React.useState([]);
-    const [loading,   setLoading]   = React.useState(false);
-    const [error,     setError]     = React.useState('');
-    const [lastSync,  setLastSync]  = React.useState('');
+    // ── Persistent config (same pattern as FCN/Loans/SSPS) ───────────────────
+    const [config,      setConfig]      = React.useState(()=>{ try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}');}catch{return{};} });
+    const [showSettings,setShowSettings]= React.useState(false);
+    const [configDraft, setConfigDraft] = React.useState({});
 
+    React.useEffect(()=>{ localStorage.setItem(STORAGE_KEY, JSON.stringify(config)); }, [config]);
+
+    // ── Data state ────────────────────────────────────────────────────────────
+    const [trades,   setTrades]   = React.useState([]);
+    const [loading,  setLoading]  = React.useState(false);
+    const [error,    setError]    = React.useState('');
+    const [lastSync, setLastSync] = React.useState('');
+
+    // ── Filters ───────────────────────────────────────────────────────────────
     const [fClient,     setFClient]     = React.useState('');
     const [fOptionType, setFOptionType] = React.useState('all');
     const [fMatFrom,    setFMatFrom]    = React.useState('');
@@ -6076,11 +6085,11 @@ const DCIModule = () => {
     const [fValTo,      setFValTo]      = React.useState('');
 
     const fetchTrades = async () => {
-        if (!DCI_SCRIPT_URL || DCI_SCRIPT_URL.includes('PASTE')) { setError('DCI Apps Script URL not configured.'); return; }
+        if (!config.scriptUrl) { setError('Apps Script URL not configured. Click the ⚙ Config button to add it.'); return; }
         setLoading(true); setError('');
         try {
-            const url = DCI_SCRIPT_URL + '?action=read&sheetName=' + encodeURIComponent(DCI_SHEET_NAME);
-            const res = await fetch(url);
+            const url = config.scriptUrl + '?action=read&sheetName=' + encodeURIComponent(DCI_SHEET_NAME);
+            const res  = await fetch(url);
             const data = await res.json();
             if (!data.success) throw new Error(data.error || 'Failed to read DCI data');
             const [hdrs, ...rows] = data.values;
@@ -6106,30 +6115,70 @@ const DCIModule = () => {
         finally { setLoading(false); }
     };
 
-    React.useEffect(() => { fetchTrades(); }, []);
+    // Auto-fetch on load and when scriptUrl changes
+    React.useEffect(() => { if (config.scriptUrl) fetchTrades(); }, [config.scriptUrl]);
 
+    const openSettings = () => { setConfigDraft({...config}); setShowSettings(true); };
+    const saveSettings = () => {
+        setConfig({...configDraft});
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(configDraft));
+        setShowSettings(false);
+    };
+
+    // ── Filter logic ──────────────────────────────────────────────────────────
     const optionTypes = ['all', ...new Set(trades.map(t => t.optionType).filter(Boolean))];
 
     const filtered = trades.filter(t => {
-        if (fClient && !t.clientName.toLowerCase().includes(fClient.toLowerCase())) return false;
-        if (fOptionType !== 'all' && t.optionType !== fOptionType) return false;
-        if (fMatFrom && t.maturityDate.slice(0,10) < fMatFrom) return false;
-        if (fMatTo   && t.maturityDate.slice(0,10) > fMatTo)   return false;
-        if (fValFrom && t.valueDate.slice(0,10)    < fValFrom)  return false;
-        if (fValTo   && t.valueDate.slice(0,10)    > fValTo)    return false;
+        if (fClient     && !t.clientName.toLowerCase().includes(fClient.toLowerCase())) return false;
+        if (fOptionType !== 'all' && t.optionType !== fOptionType)                       return false;
+        if (fMatFrom    && t.maturityDate.slice(0,10) < fMatFrom)                        return false;
+        if (fMatTo      && t.maturityDate.slice(0,10) > fMatTo)                          return false;
+        if (fValFrom    && t.valueDate.slice(0,10)    < fValFrom)                        return false;
+        if (fValTo      && t.valueDate.slice(0,10)    > fValTo)                          return false;
         return true;
     });
 
-    const hasFilters = fClient || fOptionType !== 'all' || fMatFrom || fMatTo || fValFrom || fValTo;
+    const hasFilters   = fClient || fOptionType !== 'all' || fMatFrom || fMatTo || fValFrom || fValTo;
     const clearFilters = () => { setFClient(''); setFOptionType('all'); setFMatFrom(''); setFMatTo(''); setFValFrom(''); setFValTo(''); };
 
     const fmtRate = v => { const n = parseFloat(v); return isNaN(n) ? (v||'—') : n.toFixed(2)+'%'; };
-    const fmtAmt  = (ccy, amt) => { const n = parseFloat(amt); return (ccy?ccy+' ':'') + (isNaN(n)||(n===0) ? '—' : fmt(n,2)); };
-
+    const fmtAmt  = (ccy, amt) => { const n = parseFloat(String(amt).replace(/,/g,'')); return (ccy?ccy+' ':'') + (isNaN(n)||n===0?'—':fmt(n,2)); };
     const inputCls = "px-2.5 py-1 bg-slate-900/60 border border-slate-700/40 rounded text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50";
 
     return (
         <div className="space-y-4">
+
+            {/* Settings modal */}
+            {showSettings && (
+                <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+                    <div className="bg-slate-900 border border-slate-700/60 rounded-xl p-6 w-full max-w-md shadow-2xl">
+                        <h3 className="font-semibold text-white mb-4">Google Sheets Config — DCI</h3>
+                        <div className="space-y-3">
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Apps Script URL</label>
+                                <input
+                                    value={configDraft.scriptUrl||''}
+                                    onChange={e=>setConfigDraft({...configDraft,scriptUrl:e.target.value})}
+                                    placeholder="https://script.google.com/macros/s/.../exec"
+                                    className="w-full px-3 py-2 bg-slate-800 border border-slate-600/40 rounded text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono"/>
+                                <p className="text-[10px] text-slate-500 mt-1">Paste the Web App URL from your deployed DCI Apps Script.</p>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 justify-end mt-5">
+                            <button onClick={()=>setShowSettings(false)}
+                                className="px-4 py-2 bg-slate-700/60 hover:bg-slate-700 border border-slate-600/40 rounded text-xs text-slate-300 transition-colors">
+                                Cancel
+                            </button>
+                            <button onClick={saveSettings}
+                                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded text-xs text-white font-medium transition-colors">
+                                Save &amp; Connect
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
                     <h2 className="text-lg font-semibold text-white">DCI — Active Trades</h2>
@@ -6139,92 +6188,114 @@ const DCIModule = () => {
                         {filtered.length !== trades.length && <span className="text-cyan-400"> · {filtered.length} shown</span>}
                     </p>
                 </div>
-                <button onClick={fetchTrades} disabled={loading}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700/60 hover:bg-slate-700 border border-slate-600/40 rounded text-xs text-slate-300 transition-colors disabled:opacity-50">
-                    {loading ? '⟳ Loading...' : '⟳ Refresh'}
-                </button>
+                <div className="flex gap-2">
+                    <button onClick={openSettings}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700/60 hover:bg-slate-700 border border-slate-600/40 rounded text-xs text-slate-300 transition-colors">
+                        ⚙ Config
+                    </button>
+                    <button onClick={fetchTrades} disabled={loading||!config.scriptUrl}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700/60 hover:bg-slate-700 border border-slate-600/40 rounded text-xs text-slate-300 transition-colors disabled:opacity-40">
+                        {loading ? '⟳ Loading...' : '⟳ Refresh'}
+                    </button>
+                </div>
             </div>
+
+            {/* Not configured prompt */}
+            {!config.scriptUrl && (
+                <div className="bg-slate-800/40 border border-slate-600/30 rounded-lg p-6 text-center">
+                    <p className="text-slate-400 text-sm mb-3">DCI Apps Script URL not configured.</p>
+                    <button onClick={openSettings}
+                        className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded text-sm text-white font-medium transition-colors">
+                        ⚙ Configure Now
+                    </button>
+                </div>
+            )}
 
             {error && <div className="bg-red-900/20 border border-red-500/30 rounded p-3 text-red-400 text-sm">{error}</div>}
 
-            <div className="bg-slate-800/40 border border-slate-700/40 rounded-lg p-3">
-                <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-slate-500 font-medium uppercase tracking-wide">Filter</span>
-                    <input value={fClient} onChange={e=>setFClient(e.target.value)}
-                        placeholder="Client name..." className={inputCls + " w-36"}/>
-                    <select value={fOptionType} onChange={e=>setFOptionType(e.target.value)} className={inputCls}>
-                        {optionTypes.map(o=><option key={o} value={o}>{o==='all'?'All Types':o}</option>)}
-                    </select>
-                    <span className="text-xs text-slate-500">Value date:</span>
-                    <input type="date" value={fValFrom} onChange={e=>setFValFrom(e.target.value)} className={inputCls}/>
-                    <span className="text-xs text-slate-600">→</span>
-                    <input type="date" value={fValTo}   onChange={e=>setFValTo(e.target.value)}   className={inputCls}/>
-                    <span className="text-xs text-slate-500">Maturity:</span>
-                    <input type="date" value={fMatFrom} onChange={e=>setFMatFrom(e.target.value)} className={inputCls}/>
-                    <span className="text-xs text-slate-600">→</span>
-                    <input type="date" value={fMatTo}   onChange={e=>setFMatTo(e.target.value)}   className={inputCls}/>
-                    {hasFilters && (
-                        <button onClick={clearFilters}
-                            className="px-2 py-1 bg-slate-700/40 hover:bg-slate-700 border border-slate-600/40 rounded text-xs text-slate-400 transition-colors">
-                            ✕ Clear
-                        </button>
+            {config.scriptUrl && (<>
+                {/* Filters */}
+                <div className="bg-slate-800/40 border border-slate-700/40 rounded-lg p-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-slate-500 font-medium uppercase tracking-wide">Filter</span>
+                        <input value={fClient} onChange={e=>setFClient(e.target.value)}
+                            placeholder="Client name..." className={inputCls + " w-36"}/>
+                        <select value={fOptionType} onChange={e=>setFOptionType(e.target.value)} className={inputCls}>
+                            {optionTypes.map(o=><option key={o} value={o}>{o==='all'?'All Types':o}</option>)}
+                        </select>
+                        <span className="text-xs text-slate-500">Value date:</span>
+                        <input type="date" value={fValFrom} onChange={e=>setFValFrom(e.target.value)} className={inputCls}/>
+                        <span className="text-xs text-slate-600">→</span>
+                        <input type="date" value={fValTo}   onChange={e=>setFValTo(e.target.value)}   className={inputCls}/>
+                        <span className="text-xs text-slate-500">Maturity:</span>
+                        <input type="date" value={fMatFrom} onChange={e=>setFMatFrom(e.target.value)} className={inputCls}/>
+                        <span className="text-xs text-slate-600">→</span>
+                        <input type="date" value={fMatTo}   onChange={e=>setFMatTo(e.target.value)}   className={inputCls}/>
+                        {hasFilters && (
+                            <button onClick={clearFilters}
+                                className="px-2 py-1 bg-slate-700/40 hover:bg-slate-700 border border-slate-600/40 rounded text-xs text-slate-400 transition-colors">
+                                ✕ Clear
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* Table */}
+                <div className="bg-slate-800/30 border border-slate-700/40 rounded-lg overflow-hidden">
+                    {loading && trades.length === 0 ? (
+                        <div className="p-8 text-center text-slate-500 text-sm">Loading DCI trades...</div>
+                    ) : filtered.length === 0 ? (
+                        <div className="p-8 text-center text-slate-500 text-sm">{hasFilters?'No trades match current filters.':'No active DCI trades found.'}</div>
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                                <thead>
+                                    <tr className="border-b border-slate-700/60 bg-slate-900/40">
+                                        {['Txn ID','Client','Value Date','Maturity Date','Strike','Type','Notional','Lapsed','Exercised','Customer Rate'].map(h=>(
+                                            <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filtered.map((t,i)=>{
+                                        const isCall = t.optionType==='Call';
+                                        const isPut  = t.optionType==='Put';
+                                        return (
+                                            <tr key={t.txnId+i} className={`border-b border-slate-800/60 hover:bg-slate-700/20 transition-colors ${i%2===0?'bg-slate-900/10':''}`}>
+                                                <td className="px-3 py-2.5 mono text-slate-300 whitespace-nowrap">{t.txnId}</td>
+                                                <td className="px-3 py-2.5 text-slate-200 font-medium whitespace-nowrap">{t.clientName||'—'}</td>
+                                                <td className="px-3 py-2.5 mono text-slate-300 whitespace-nowrap">{fmtDate(t.valueDate)||'—'}</td>
+                                                <td className="px-3 py-2.5 mono text-slate-300 whitespace-nowrap">{fmtDate(t.maturityDate)||'—'}</td>
+                                                <td className="px-3 py-2.5 mono text-slate-200 whitespace-nowrap">{t.strikePrice?'$'+fmt(parseFloat(String(t.strikePrice).replace(/,/g,'')),2):'—'}</td>
+                                                <td className="px-3 py-2.5 whitespace-nowrap">
+                                                    {t.optionType
+                                                        ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${isCall?'bg-green-900/40 text-green-400':isPut?'bg-red-900/40 text-red-400':'bg-slate-700/40 text-slate-400'}`}>{t.optionType}</span>
+                                                        : '—'}
+                                                </td>
+                                                <td className="px-3 py-2.5 mono text-slate-300 whitespace-nowrap">{fmtAmt(t.notionalCcy, t.notionalAmount)}</td>
+                                                <td className="px-3 py-2.5 mono text-slate-400 whitespace-nowrap">{fmtAmt(t.lapsedCcy,    t.lapsedAmount)}</td>
+                                                <td className="px-3 py-2.5 mono text-slate-400 whitespace-nowrap">{fmtAmt(t.exercisedCcy, t.exercisedAmount)}</td>
+                                                <td className="px-3 py-2.5 mono text-cyan-400 font-medium whitespace-nowrap">{fmtRate(t.customerRate)}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
                     )}
                 </div>
-            </div>
 
-            <div className="bg-slate-800/30 border border-slate-700/40 rounded-lg overflow-hidden">
-                {loading && trades.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500 text-sm">Loading DCI trades...</div>
-                ) : filtered.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500 text-sm">{hasFilters ? 'No trades match current filters.' : 'No active DCI trades found.'}</div>
-                ) : (
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                            <thead>
-                                <tr className="border-b border-slate-700/60 bg-slate-900/40">
-                                    {['Txn ID','Client','Value Date','Maturity Date','Strike','Type','Notional','Lapsed','Exercised','Customer Rate'].map(h=>(
-                                        <th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>
-                                    ))}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filtered.map((t,i)=>{
-                                    const isCall = t.optionType==='Call';
-                                    const isPut  = t.optionType==='Put';
-                                    return (
-                                        <tr key={t.txnId+i} className={`border-b border-slate-800/60 hover:bg-slate-700/20 transition-colors ${i%2===0?'bg-slate-900/10':''}`}>
-                                            <td className="px-3 py-2.5 mono text-slate-300 whitespace-nowrap">{t.txnId}</td>
-                                            <td className="px-3 py-2.5 text-slate-200 font-medium whitespace-nowrap">{t.clientName||'—'}</td>
-                                            <td className="px-3 py-2.5 mono text-slate-300 whitespace-nowrap">{fmtDate(t.valueDate)||'—'}</td>
-                                            <td className="px-3 py-2.5 mono text-slate-300 whitespace-nowrap">{fmtDate(t.maturityDate)||'—'}</td>
-                                            <td className="px-3 py-2.5 mono text-slate-200 whitespace-nowrap">{t.strikePrice?'$'+fmt(parseFloat(t.strikePrice),2):'—'}</td>
-                                            <td className="px-3 py-2.5 whitespace-nowrap">
-                                                {t.optionType
-                                                    ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${isCall?'bg-green-900/40 text-green-400':isPut?'bg-red-900/40 text-red-400':'bg-slate-700/40 text-slate-400'}`}>{t.optionType}</span>
-                                                    : '—'}
-                                            </td>
-                                            <td className="px-3 py-2.5 mono text-slate-300 whitespace-nowrap">{fmtAmt(t.notionalCcy, t.notionalAmount)}</td>
-                                            <td className="px-3 py-2.5 mono text-slate-400 whitespace-nowrap">{fmtAmt(t.lapsedCcy,    t.lapsedAmount)}</td>
-                                            <td className="px-3 py-2.5 mono text-slate-400 whitespace-nowrap">{fmtAmt(t.exercisedCcy, t.exercisedAmount)}</td>
-                                            <td className="px-3 py-2.5 mono text-cyan-400 font-medium whitespace-nowrap">{fmtRate(t.customerRate)}</td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
+                {/* Footer summary */}
+                {filtered.length > 0 && (
+                    <div className="flex gap-4 text-xs text-slate-500">
+                        <span>{filtered.length} trade{filtered.length!==1?'s':''} shown</span>
+                        {['Call','Put'].map(type => {
+                            const n = filtered.filter(t=>t.optionType===type).length;
+                            return n>0 ? <span key={type} className={type==='Call'?'text-green-400':'text-red-400'}>{n} {type}{n!==1?'s':''}</span> : null;
+                        })}
                     </div>
                 )}
-            </div>
-
-            {filtered.length > 0 && (
-                <div className="flex gap-4 text-xs text-slate-500">
-                    <span>{filtered.length} trade{filtered.length!==1?'s':''} shown</span>
-                    {['Call','Put'].map(type => {
-                        const n = filtered.filter(t=>t.optionType===type).length;
-                        return n>0 ? <span key={type} className={type==='Call'?'text-green-400':'text-red-400'}>{n} {type}{n!==1?'s':''}</span> : null;
-                    })}
-                </div>
-            )}
+            </>)}
         </div>
     );
 };
@@ -6318,11 +6389,11 @@ const App = () => {
                 </div>
                 <PriceTicker bybitPrices={bybitPrices} binancePrices={binancePrices} bybitUpdate={bybitUpdate} binanceUpdate={binanceUpdate}/>
                 <div className="flex gap-1 mb-6 border-b border-slate-800">
-                    {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['fcn','Fixed Coupon Note'],['acc','Accumulator'],['trs','TRS']].map(([id,label])=>(
+                    {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['fcn','Fixed Coupon Note'],['acc','Accumulator'],['trs','TRS'],['dci','DCI']].map(([id,label])=>(
                         <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
                     ))}
                 </div>
-                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:<TRSModule bybitPrices={bybitPrices}/>}
+                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:tab==='trs'?<TRSModule bybitPrices={bybitPrices}/>:<DCIModule/>}
             </div>
             {/* Floating theme toggle — fixed bottom-right */}
             <button
