@@ -6281,49 +6281,36 @@ const DCIModule = ({deribitPrices={}}) => {
         const callStrikes = Object.keys(callMap).map(Number).sort((a,b)=>a-b);
         const putStrikes  = Object.keys(putMap).map(Number).sort((a,b)=>a-b);
 
-        // Build call ladder rows (descending display):
-        // Row at strike S = cumulative qty for all strikes <= S
-        // Top row: ">max" (all strikes in the money, full cumulative)
-        // Bottom row: "< min" (price below all strikes, qty = 0)
+        // Call rows (descending): ">max" at top, "< min" (qty=0) at bottom.
+        // Each row has lo/hi boundaries for live price highlighting.
         const callRows = (() => {
             const rows = callStrikes.map((strike, i) => {
                 const cumQty     = callStrikes.filter(s => s <= strike).reduce((sum,s) => sum + callMap[s], 0);
-                const nextStrike = callStrikes[i+1];
-                const label      = nextStrike
-                    ? `${fmtStrike(strike)} – ${fmtStrike(nextStrike)}`
-                    : `> ${fmtStrike(strike)}`;
-                return { strike, label, qty: cumQty };
+                const nextStrike = callStrikes[i + 1];
+                const label      = nextStrike ? `${fmtStrike(strike)} – ${fmtStrike(nextStrike)}` : `> ${fmtStrike(strike)}`;
+                return { label, qty: cumQty, lo: strike, hi: nextStrike || Infinity };
             });
-            // Add "< min" row at bottom — price below all strikes, nothing exercised
             if (callStrikes.length > 0) {
-                const minStrike = callStrikes[0];
-                rows.unshift({ strike: minStrike - 1, label: `< ${fmtStrike(minStrike)}`, qty: 0, isZero: true });
+                rows.unshift({ label: `< ${fmtStrike(callStrikes[0])}`, qty: 0, isZero: true, lo: 0, hi: callStrikes[0] });
             }
-            // Reverse so ">max" is at top, "< min" is at bottom
-            rows.reverse();
+            rows.reverse(); // ">max" at top, "< min" at bottom
             return rows;
         })();
 
-        // Build put ladder rows:
-        // Each row at strike S = cumulative qty for all strikes >= S
-        // Includes "<min" row at bottom (lowest strike, full cumulative)
-        // Display order: DESCENDING (highest strike at top, "<min" at bottom)
+        // Put rows (descending): ">max" (qty=0) at top, "< min" at bottom.
+        // Each row has lo/hi boundaries for live price highlighting.
         const putRows = (() => {
             const rows = putStrikes.map((strike, i) => {
-                const cumQty   = putStrikes.filter(s => s >= strike).reduce((sum,s) => sum + putMap[s], 0);
-                const prevStrike = putStrikes[i-1];
-                const label    = prevStrike
-                    ? `${fmtStrike(prevStrike)} – ${fmtStrike(strike)}`
-                    : `< ${fmtStrike(strike)}`;
-                return { strike, label, qty: cumQty };
+                const cumQty     = putStrikes.filter(s => s >= strike).reduce((sum,s) => sum + putMap[s], 0);
+                const prevStrike = putStrikes[i - 1];
+                const label      = prevStrike ? `${fmtStrike(prevStrike)} – ${fmtStrike(strike)}` : `< ${fmtStrike(strike)}`;
+                return { label, qty: cumQty, lo: prevStrike || 0, hi: strike };
             });
-            // Add the ">max" row for puts (price above all strikes → nothing exercised, qty=0)
             if (putStrikes.length > 0) {
                 const maxStrike = putStrikes[putStrikes.length - 1];
-                rows.push({ strike: maxStrike + 1, label: `> ${fmtStrike(maxStrike)}`, qty: 0, isZero: true });
+                rows.push({ label: `> ${fmtStrike(maxStrike)}`, qty: 0, isZero: true, lo: maxStrike, hi: Infinity });
             }
-            // Reverse so highest strike (>max, qty=0) is at top
-            rows.reverse();
+            rows.reverse(); // ">max" at top, "< min" at bottom
             return rows;
         })();
 
@@ -6455,8 +6442,6 @@ const DCIModule = ({deribitPrices={}}) => {
                                                     <tbody>
                                                         {(()=>{
                                                             const livePrice = deribitPrices && deribitPrices[asset];
-                                                            // For calls (descending): current row is where livePrice >= this row's strike
-                                                            // and livePrice < next row's strike (i.e. price is in this band)
                                                             return ladder.callRows.map((row, i) => {
                                                                 const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
                                                                 return (
