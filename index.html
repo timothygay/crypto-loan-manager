@@ -2982,21 +2982,16 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}, onScro
                                     :<span className="px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded text-[10px]">COUPON</span>
                                 }
                             </td>
-                            <td className="px-3 py-2.5">
-                                {(()=>{
-                                    const st = s.trade.status;
-                                    const stColor = st==='Active'?'text-green-400':st==='Knocked Out — Pending'?'text-amber-400':st==='Knocked Out'?'text-orange-400':st==='Matured'?'text-blue-400':'text-slate-400';
-                                    return <span className={`text-[10px] font-medium ${stColor}`}>{st}</span>;
-                                })()}
-                            </td>
+                            {isPast && (
                             <td className="px-3 py-2.5">
                                 {isPast ? (
                                     <button onClick={()=>onConfirmPayment(s.trade.id,s.date)}
                                         className="px-2 py-1 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-500/30 rounded text-amber-400 text-[10px] transition-colors whitespace-nowrap">
                                         ✓ Confirm
                                     </button>
-                                ) : <span className="text-slate-600 text-[10px]">Pending</span>}
+                                ) : null}
                             </td>
+                            )}
                         </tr>
                     );
                 };
@@ -4580,8 +4575,8 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                             </td>
                             <td className="px-3 py-2.5 mono text-purple-400">${fmt(parseFloat(s.trade.strikePrice),2)}</td>
                             <td className="px-3 py-2.5 mono text-slate-300">{s.trade.notionalCurrency} {fmt(s.isKOReturn ? (displayAmounts?.remainingAfter ?? 0) : (amounts?.remainingAfter ?? s.remaining), 2)}</td>
-                            <td className="px-3 py-2.5">
-                                {isPast ? (
+                            {isPast && (
+                                <td className="px-3 py-2.5">
                                     <div className="flex gap-1 flex-wrap">
                                         {autoFilledPrice
                                             ? <button onClick={()=>onConfirmFixing(s.trade.id, s.date)}
@@ -4591,13 +4586,14 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                                             : <span className="text-slate-500 text-[10px]">Awaiting 4pm SGT fixing</span>
                                         }
                                     </div>
-                                ) : <span className="text-slate-600 text-[10px]">Pending</span>}
-                            </td>
+                                </td>
+                            )}
                         </tr>
                     );
                 };
-                const headers = ['Client','Underlying','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Buffer','Strike','Remaining','Status','Action'];
-                const thead = (<thead><tr className="border-b border-slate-800 bg-slate-900/40">{headers.map(h=>(<th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>))}</tr></thead>);
+                const headersOverdue  = ['Client','Underlying','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Buffer','Strike','Remaining','Action'];
+                const headersUpcoming = ['Client','Underlying','Date','Day','Fixing Price','Scenario','Crypto Delivery','Base Returned','KO Price','Buffer','Strike','Remaining'];
+                const makeThead = (hs) => (<thead><tr className="border-b border-slate-800 bg-slate-900/40">{hs.map(h=>(<th key={h} className="text-left px-3 py-2.5 text-slate-400 font-medium whitespace-nowrap">{h}</th>))}</tr></thead>);
                 return (<>
                     {/* Overdue settlements */}
                     {overdue.length>0&&(
@@ -4610,7 +4606,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                                 <span className="text-xs text-amber-500/70">{overdue.length} unconfirmed</span>
                             </div>
                             <div className="overflow-x-auto">
-                                <table className="w-full text-xs">{thead}<tbody>{overdue.map((s,i)=>renderRow(s,i,true))}</tbody></table>
+                                <table className="w-full text-xs">{makeThead(headersOverdue)}<tbody>{overdue.map((s,i)=>renderRow(s,i,true))}</tbody></table>
                             </div>
                         </div>
                     )}
@@ -4622,7 +4618,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                                 <span className="text-xs text-slate-500">{upcoming.length} pending</span>
                             </div>
                             <div className="overflow-x-auto">
-                                <table className="w-full text-xs">{thead}<tbody>{upcoming.map((s,i)=>renderRow(s,i,false))}</tbody></table>
+                                <table className="w-full text-xs">{makeThead(headersUpcoming)}<tbody>{upcoming.map((s,i)=>renderRow(s,i,false))}</tbody></table>
                             </div>
                         </div>
                     ):(
