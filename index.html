@@ -6305,10 +6305,7 @@ const DCIModule = () => {
         return { callRows, putRows };
     };
 
-    const fmtStrike = (n) => {
-        if (n >= 1000) return '$' + (n/1000).toFixed(0) + 'k';
-        return '$' + fmt(n, 0);
-    };
+    const fmtStrike = (n) => '$' + fmt(n, 2);
 
     // Trades filtered to dashDate
     const tradesOnDate = trades.filter(t => {
