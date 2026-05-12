@@ -6457,12 +6457,8 @@ const DCIModule = ({deribitPrices={}}) => {
                                                             const livePrice = deribitPrices && deribitPrices[asset];
                                                             // For calls (descending): current row is where livePrice >= this row's strike
                                                             // and livePrice < next row's strike (i.e. price is in this band)
-                                                            // callRows is descending: [>max, ..., lowest]
-                                                            // Row i spans from callRows[i].strike to callRows[i-1].strike
                                                             return ladder.callRows.map((row, i) => {
-                                                                const lo = row.strike;
-                                                                const hi = i === 0 ? Infinity : ladder.callRows[i-1].strike;
-                                                                const isActive = livePrice && livePrice >= lo && livePrice < hi;
+                                                                const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
                                                                 return (
                                                                     <tr key={i} className={`border-b border-slate-800/40 transition-colors ${isActive ? 'bg-green-900/25 border-l-2 border-l-green-400' : 'hover:bg-slate-700/20'}`}>
                                                                         <td className={`py-1.5 mono ${isActive ? 'text-green-300 font-semibold' : 'text-slate-300'}`}>
@@ -6497,12 +6493,8 @@ const DCIModule = ({deribitPrices={}}) => {
                                                     <tbody>
                                                         {(()=>{
                                                             const livePrice = deribitPrices && deribitPrices[asset];
-                                                            // putRows is descending: [>max(qty=0), ..., <min(full cumul)]
-                                                            // Row i spans from putRows[i+1].strike (or 0) to putRows[i].strike
                                                             return ladder.putRows.map((row, i) => {
-                                                                const hi = row.strike;
-                                                                const lo = i === ladder.putRows.length - 1 ? 0 : ladder.putRows[i+1].strike;
-                                                                const isActive = livePrice && livePrice >= lo && livePrice < hi;
+                                                                const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
                                                                 return (
                                                                     <tr key={i} className={`border-b border-slate-800/40 transition-colors ${isActive ? 'bg-red-900/25 border-l-2 border-l-red-400' : 'hover:bg-slate-700/20'}`}>
                                                                         <td className={`py-1.5 mono ${isActive ? 'text-red-300 font-semibold' : 'text-slate-300'}`}>
