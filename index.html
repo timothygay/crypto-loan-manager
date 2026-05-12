@@ -4510,6 +4510,9 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                     const isIndicative = !autoFilledPrice && livePrice !== null;
                     const scenario = f?.scenario || (priceForScenario !== null ? accScenario(s.trade, priceForScenario) : null);
                     const isKO = priceForScenario !== null ? accIsKO(s.trade, priceForScenario, s.date) : false;
+                    // True when this settlement date falls before the barrier start date
+                    const barrierStart = s.trade.barrierStartDate || s.trade.tradeDate || '';
+                    const barrierInactive = s.trade.knockOutEnabled && barrierStart && s.date < barrierStart;
                     const sched_r = buildAccSchedule(s.trade); const confirmedBefore = sched_r.filter(d=>d<s.date&&(s.trade.fixings||{})[d]?.confirmed).length;
                     // Use pre-calculated amounts from code.gs if available, else compute
                     const amounts = f?.autoFilled
@@ -4553,9 +4556,27 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
                                         : <span className="text-red-400/70 text-[10px]">price needed</span>}
                             </td>
                             <td className="px-3 py-2.5">
-                                {ss&&<span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${ss.bg} ${ss.text}`}>{ss.label}{isIndicative&&<span className="ml-0.5 opacity-60">~</span>}</span>}
-                                {isKO&&<span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-900/40 text-orange-400">KO</span>}
-                                {!ss&&<span className="text-slate-600">—</span>}
+                                {(()=>{
+                                    // Check 1: above/below strike — always shown
+                                    const strikeTag = ss
+                                        ? <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${ss.bg} ${ss.text}`}>{ss.label}{isIndicative&&<span className="ml-0.5 opacity-60">~</span>}</span>
+                                        : <span className="text-slate-600">—</span>;
+                                    // Check 2: KO status tag
+                                    // - price above KO but barrier not yet active → 'KO inactive'
+                                    // - price above KO and barrier active → 'KO'
+                                    // - below KO → nothing
+                                    const aboveKO = priceForScenario !== null && s.trade.knockOutEnabled && priceForScenario >= parseFloat(s.trade.knockOutPrice);
+                                    const koTag = aboveKO
+                                        ? barrierInactive
+                                            ? <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-700/50 text-slate-400 border border-slate-600/30">KO inactive</span>
+                                            : <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-900/40 text-orange-400">KO</span>
+                                        : null;
+                                    // Check 3: trade already KO'd but pending guaranteed settlements
+                                    const pendingTag = s.trade.status === 'Knocked Out — Pending'
+                                        ? <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-900/40 text-amber-400">Pending</span>
+                                        : null;
+                                    return <>{strikeTag}{koTag}{pendingTag}</>;
+                                })()}
                             </td>
                             <td className="px-3 py-2.5 mono text-cyan-400">
                                 {displayAmounts?.cryptoQty>0
