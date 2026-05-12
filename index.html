@@ -340,6 +340,15 @@ const Modal = ({title, children, onClose, wide}) => (
 
 // ─── BYBIT API ────────────────────────────────────────────────────────────────
 // Live spot price via tickers endpoint (used for top-of-page ticker, every 60s)
+// Deribit index price — live spot index used as settlement reference
+const fetchDeribitIndex = async (indexName) => {
+    const url = `https://www.deribit.com/api/v2/public/get_index_price?index_name=${indexName}`;
+    const res  = await fetch(url);
+    const data = await res.json();
+    if (data.result && data.result.index_price) return parseFloat(data.result.index_price);
+    return null;
+};
+
 const fetchBybitLive = async (symbol) => {
     const r = await fetch(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${symbol}`);
     const d = await r.json();
@@ -481,7 +490,7 @@ const runBackfill = async (fromDate, toDate, existingHistory, onProgress) => {
 // ─── PRICE TICKER ─────────────────────────────────────────────────────────────
 // bybitPrices  → BTC/ETH (Loans + SSPS)
 // binancePrices → BTC/ETH/ADA/XRP (FCN + Accumulator)
-const PriceTicker = ({bybitPrices, binancePrices, bybitUpdate, binanceUpdate}) => (
+const PriceTicker = ({bybitPrices, binancePrices, bybitUpdate, binanceUpdate, deribitPrices, deribitUpdate}) => (
     <div className="space-y-2 mb-6">
         <div className="grid grid-cols-2 gap-3">
             {[['BTC','₿','orange'],['ETH','Ξ','purple']].map(([sym,icon,c])=>(
@@ -504,8 +513,17 @@ const PriceTicker = ({bybitPrices, binancePrices, bybitUpdate, binanceUpdate}) =
                                         <span className="text-lg font-bold mono text-teal-400">${fmt(binancePrices[sym+'/USDC'],2)}</span>
                                     </div>
                                 )}
+                                {deribitPrices&&deribitPrices[sym]>0&&(
+                                    <div>
+                                        <span className="text-[10px] text-slate-500">Deribit·Index </span>
+                                        <span className="text-lg font-bold mono text-violet-400">${fmt(deribitPrices[sym],2)}</span>
+                                    </div>
+                                )}
                             </div>
-                            <p className="text-xs text-slate-600 mt-0.5">{bybitUpdate?bybitUpdate.toLocaleTimeString():'—'} SGT</p>
+                            <p className="text-xs text-slate-600 mt-0.5">
+                                {bybitUpdate?bybitUpdate.toLocaleTimeString():'—'} SGT
+                                {deribitUpdate&&<span className="ml-2 text-violet-900/80">Deribit {deribitUpdate.toLocaleTimeString()}</span>}
+                            </p>
                         </div>
                         <div className={`text-3xl text-${c}-400 opacity-60`}>{icon}</div>
                     </div>
@@ -6362,6 +6380,9 @@ const App = () => {
     // Binance prices — FCN + Accumulator only (BTC, ETH, ADA, XRP)
     const [binancePrices,setBinancePrices]=useState({BTC:0,ETH:0,ADA:0,XRP:0});
     const [binanceUpdate,setBinanceUpdate]=useState(null);
+    // Deribit index prices — live settlement reference for DCI
+    const [deribitPrices,setDeribitPrices]=useState({BTC:null,ETH:null});
+    const [deribitUpdate,setDeribitUpdate]=useState(null);
 
     const fetchBybitPrices=useCallback(async()=>{
         try {
@@ -6404,10 +6425,25 @@ const App = () => {
         } catch(e){console.error('Binance price error',e);}
     },[]);
 
+    const fetchDeribitPrices=useCallback(async()=>{
+        try {
+            const [btc,eth]=await Promise.allSettled([
+                fetchDeribitIndex('btc_usd'),
+                fetchDeribitIndex('eth_usd'),
+            ]);
+            setDeribitPrices(p=>({
+                BTC: btc.status==='fulfilled'&&btc.value!==null ? btc.value : p.BTC,
+                ETH: eth.status==='fulfilled'&&eth.value!==null ? eth.value : p.ETH,
+            }));
+            setDeribitUpdate(new Date());
+        } catch(e){console.error('Deribit price error',e);}
+    },[]);
+
     useEffect(()=>{
         fetchBybitPrices(); const t1=setInterval(fetchBybitPrices,60000);
         fetchBinancePrices(); const t2=setInterval(fetchBinancePrices,60000);
-        return()=>{clearInterval(t1);clearInterval(t2);};
+        fetchDeribitPrices(); const t3=setInterval(fetchDeribitPrices,60000);
+        return()=>{clearInterval(t1);clearInterval(t2);clearInterval(t3);};
     },[]);
 
     return(
@@ -6419,7 +6455,7 @@ const App = () => {
                         <p className="text-slate-500 text-sm">Internal Portfolio Management System</p>
                     </div>
                 </div>
-                <PriceTicker bybitPrices={bybitPrices} binancePrices={binancePrices} bybitUpdate={bybitUpdate} binanceUpdate={binanceUpdate}/>
+                <PriceTicker bybitPrices={bybitPrices} binancePrices={binancePrices} bybitUpdate={bybitUpdate} binanceUpdate={binanceUpdate} deribitPrices={deribitPrices} deribitUpdate={deribitUpdate}/>
                 <div className="flex gap-1 mb-6 border-b border-slate-800">
                     {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['fcn','Fixed Coupon Note'],['acc','Accumulator'],['trs','TRS'],['dci','DCI']].map(([id,label])=>(
                         <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
