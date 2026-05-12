@@ -6117,6 +6117,25 @@ const DCIModule = () => {
     const [fValFrom,    setFValFrom]    = React.useState('');
     const [fValTo,      setFValTo]      = React.useState('');
 
+    // ── Nearest Friday helper ────────────────────────────────────────────────
+    const nearestFriday = () => {
+        const now  = new Date();
+        // Convert to SGT (UTC+8)
+        const sgt  = new Date(now.getTime() + 8*60*60*1000);
+        const day  = sgt.getUTCDay(); // 0=Sun,1=Mon,...,5=Fri,6=Sat
+        const hour = sgt.getUTCHours();
+        let daysToFri;
+        if (day === 5 && hour < 17) daysToFri = 0;      // Friday before 5pm SGT → today
+        else if (day === 5)         daysToFri = 7;      // Friday after 5pm SGT → next Friday
+        else                        daysToFri = (5 - day + 7) % 7 || 7;
+        const fri = new Date(sgt);
+        fri.setUTCDate(sgt.getUTCDate() + daysToFri);
+        return fri.toISOString().slice(0,10);
+    };
+
+    // ── Dashboard state ───────────────────────────────────────────────────────
+    const [dashDate, setDashDate] = React.useState(() => nearestFriday());
+
     const fetchTrades = async () => {
         if (!config.scriptUrl) { setError('Apps Script URL not configured. Click the ⚙ Config button to add it.'); return; }
         setLoading(true); setError('');
@@ -6140,9 +6159,11 @@ const DCIModule = () => {
                 lapsedAmount:    r[idx('Lapsed Amount')]        || '',
                 exercisedCcy:    r[idx('Exercised Amount CCY')] || '',
                 exercisedAmount: r[idx('Exercised Amount')]     || '',
-                customerRate:    r[idx('Customer Rate APY')]    || '',
-                product:         r[idx('Product')]              || '',
-                inceptionBidIV:  r[idx('Inception Bid IV')]     || '',
+                customerRate:       r[idx('Customer Rate APY')]    || '',
+                product:            r[idx('Product')]              || '',
+                inceptionBidIV:     r[idx('Inception Bid IV')]     || '',
+                inceptionBidAmtCcy: r[idx('Inception Bid Amt Ccy')]|| '',
+                orderStatus:        r[idx('Order Status')]          || '',
             })).filter(t =>
                 t.txnId &&
                 t.product.trim() !== '' &&
@@ -6227,6 +6248,77 @@ const DCIModule = () => {
     };
     const inputCls = "px-2.5 py-1 bg-slate-900/60 border border-slate-700/40 rounded text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500/50";
 
+    // ── Price ladder builder ──────────────────────────────────────────────────
+    // Returns call and put ladders for a given underlying (BTC or ETH)
+    const buildLadder = (underlying, tradesOnDate) => {
+        const relevant = tradesOnDate.filter(t => {
+            const bidCcy = (t.inceptionBidAmtCcy||'').toUpperCase();
+            return bidCcy === underlying.toUpperCase();
+        });
+
+        // Calls: notional in crypto (BTC/ETH), lapsed amount is crypto to sell
+        const calls = relevant.filter(t => t.optionType === 'Call');
+        // Puts: notional in stablecoin, lapsed ÷ strike = crypto to buy
+        const puts  = relevant.filter(t => t.optionType === 'Put');
+
+        // Build strike-grouped map
+        const groupByStrike = (trades, isCalls) => {
+            const map = {}; // strike → crypto qty
+            trades.forEach(t => {
+                const strike = parseFloat(String(t.strikePrice).replace(/,/g,''));
+                if (!strike) return;
+                const lapsed = parseFloat(String(t.lapsedAmount).replace(/,/g,'')) || 0;
+                const qty    = isCalls ? lapsed : lapsed / strike;
+                map[strike]  = (map[strike] || 0) + qty;
+            });
+            return map;
+        };
+
+        const callMap = groupByStrike(calls, true);
+        const putMap  = groupByStrike(puts,  false);
+
+        // Sorted unique strikes
+        const callStrikes = Object.keys(callMap).map(Number).sort((a,b)=>a-b);
+        const putStrikes  = Object.keys(putMap).map(Number).sort((a,b)=>a-b);
+
+        // Build call ladder rows (ascending, cumulative)
+        // Row at strike S = sum of all callMap[k] where k <= S
+        const callRows = callStrikes.map((strike, i) => {
+            const cumQty = callStrikes.filter(s => s <= strike).reduce((sum,s) => sum + callMap[s], 0);
+            const nextStrike = callStrikes[i+1];
+            const label = nextStrike ? `${fmtStrike(strike)} – ${fmtStrike(nextStrike)}` : `> ${fmtStrike(strike)}`;
+            return { strike, label, qty: cumQty };
+        });
+
+        // Build put ladder rows (ascending strikes, but cumulative inverts)
+        // Row at strike S = sum of all putMap[k] where k >= S
+        // Display: ascending strikes, omit ">max" row (would be 0)
+        const putRows = putStrikes.map((strike, i) => {
+            const cumQty = putStrikes.filter(s => s >= strike).reduce((sum,s) => sum + putMap[s], 0);
+            const prevStrike = putStrikes[i-1];
+            const label = prevStrike ? `${fmtStrike(prevStrike)} – ${fmtStrike(strike)}` : `< ${fmtStrike(strike)}`;
+            return { strike, label, qty: cumQty };
+        });
+        // Reverse so highest strike is at top (intuitive: price drops down into money)
+        putRows.reverse();
+
+        return { callRows, putRows };
+    };
+
+    const fmtStrike = (n) => {
+        if (n >= 1000) return '$' + (n/1000).toFixed(0) + 'k';
+        return '$' + fmt(n, 0);
+    };
+
+    // Trades filtered to dashDate
+    const tradesOnDate = trades.filter(t => {
+        const mat = (t.maturityDate||'').slice(0,10);
+        return mat === dashDate;
+    });
+
+    const btcLadder = buildLadder('BTC', tradesOnDate);
+    const ethLadder = buildLadder('ETH', tradesOnDate);
+
     return (
         <div className="space-y-4">
 
@@ -6296,6 +6388,97 @@ const DCIModule = () => {
             {error && <div className="bg-red-900/20 border border-red-500/30 rounded p-3 text-red-400 text-sm">{error}</div>}
 
             {config.scriptUrl && (<>
+
+                {/* ── DCI Dashboard ─────────────────────────────────────────── */}
+                <div className="bg-slate-800/30 border border-slate-700/40 rounded-xl p-4 space-y-3">
+                    {/* Date picker */}
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <span className="text-xs font-semibold text-slate-300 uppercase tracking-wide">Expiry Date</span>
+                        <input type="date" value={dashDate} onChange={e=>setDashDate(e.target.value)}
+                            className="px-2.5 py-1 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-cyan-300 mono focus:outline-none focus:border-cyan-500/50"/>
+                        <button onClick={()=>setDashDate(nearestFriday())}
+                            className="px-2 py-1 bg-slate-700/50 hover:bg-slate-700 border border-slate-600/30 rounded text-[10px] text-slate-400 transition-colors">
+                            Reset to nearest Friday
+                        </button>
+                        <span className="text-xs text-slate-500">{tradesOnDate.length} trade{tradesOnDate.length!==1?'s':''} expiring on this date</span>
+                    </div>
+
+                    {/* BTC and ETH ladders side by side */}
+                    {tradesOnDate.length > 0 ? (
+                        <div className="grid grid-cols-2 gap-4">
+                            {[['BTC', btcLadder], ['ETH', ethLadder]].map(([asset, ladder]) => {
+                                const hasCalls = ladder.callRows.length > 0;
+                                const hasPuts  = ladder.putRows.length > 0;
+                                if (!hasCalls && !hasPuts) return null;
+                                return (
+                                    <div key={asset} className="space-y-3">
+                                        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                                            <span className="w-2 h-2 rounded-full bg-orange-400 inline-block"></span>
+                                            {asset} Price Ladder
+                                        </h3>
+
+                                        {/* Calls table */}
+                                        {hasCalls && (
+                                            <div>
+                                                <p className="text-[10px] font-medium text-green-400 uppercase tracking-wide mb-1">
+                                                    Calls — {asset} to Sell
+                                                </p>
+                                                <table className="w-full text-xs">
+                                                    <thead>
+                                                        <tr className="border-b border-slate-700/60">
+                                                            <th className="text-left py-1.5 text-slate-500 font-medium">Price Range</th>
+                                                            <th className="text-right py-1.5 text-slate-500 font-medium">{asset} to Sell (cumul.)</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {ladder.callRows.map((row,i)=>(
+                                                            <tr key={i} className="border-b border-slate-800/40 hover:bg-slate-700/20">
+                                                                <td className="py-1.5 mono text-slate-300">{row.label}</td>
+                                                                <td className="py-1.5 mono text-right text-green-400 font-medium">
+                                                                    {(Math.floor(row.qty*1e8)/1e8).toFixed(8)} {asset}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+
+                                        {/* Puts table */}
+                                        {hasPuts && (
+                                            <div>
+                                                <p className="text-[10px] font-medium text-red-400 uppercase tracking-wide mb-1">
+                                                    Puts — {asset} to Buy
+                                                </p>
+                                                <table className="w-full text-xs">
+                                                    <thead>
+                                                        <tr className="border-b border-slate-700/60">
+                                                            <th className="text-left py-1.5 text-slate-500 font-medium">Price Range</th>
+                                                            <th className="text-right py-1.5 text-slate-500 font-medium">{asset} to Buy (cumul.)</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {ladder.putRows.map((row,i)=>(
+                                                            <tr key={i} className="border-b border-slate-800/40 hover:bg-slate-700/20">
+                                                                <td className="py-1.5 mono text-slate-300">{row.label}</td>
+                                                                <td className="py-1.5 mono text-right text-red-400 font-medium">
+                                                                    {(Math.floor(row.qty*1e8)/1e8).toFixed(8)} {asset}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <p className="text-xs text-slate-500 text-center py-4">No trades expiring on {dashDate}. Select a different date.</p>
+                    )}
+                </div>
+
                 {/* Filters */}
                 <div className="bg-slate-800/40 border border-slate-700/40 rounded-lg p-3">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -6371,7 +6554,7 @@ const DCIModule = () => {
                                                 </td>
                                                 <td className="px-3 py-2.5 mono text-slate-300 whitespace-nowrap">{fmtAmt(t.notionalCcy, t.notionalAmount)}</td>
                                                 <td className="px-3 py-2.5 mono text-slate-400 whitespace-nowrap">{fmtAmt(t.lapsedCcy,    t.lapsedAmount)}</td>
-                                                <td className="px-3 py-2.5 mono text-slate-400 whitespace-nowrap">{fmtAmt(t.exercisedCcy, t.exercisedAmount)}</td>
+                                                <td className="px-3 py-2.5 mono text-slate-400 whitespace-nowrap">{fmtAmt(t.exercisedCcy==='USD'?'USDC':t.exercisedCcy, t.exercisedAmount)}</td>
                                                 <td className="px-3 py-2.5 mono text-cyan-400 font-medium whitespace-nowrap">{fmtRate(t.customerRate)}</td>
                                             </tr>
                                         );
