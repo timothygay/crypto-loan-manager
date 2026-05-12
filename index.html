@@ -6092,7 +6092,7 @@ const TRSModule = ({bybitPrices}) => {
     );
 };
 // ─── DCI MODULE ───────────────────────────────────────────────────────────────
-const DCIModule = () => {
+const DCIModule = ({deribitPrices={}}) => {
     const STORAGE_KEY    = 'cpb_dci_config';
     const DCI_SHEET_NAME = 'DCI Active';
 
@@ -6281,26 +6281,51 @@ const DCIModule = () => {
         const callStrikes = Object.keys(callMap).map(Number).sort((a,b)=>a-b);
         const putStrikes  = Object.keys(putMap).map(Number).sort((a,b)=>a-b);
 
-        // Build call ladder rows (ascending, cumulative)
-        // Row at strike S = sum of all callMap[k] where k <= S
-        const callRows = callStrikes.map((strike, i) => {
-            const cumQty = callStrikes.filter(s => s <= strike).reduce((sum,s) => sum + callMap[s], 0);
-            const nextStrike = callStrikes[i+1];
-            const label = nextStrike ? `${fmtStrike(strike)} – ${fmtStrike(nextStrike)}` : `> ${fmtStrike(strike)}`;
-            return { strike, label, qty: cumQty };
-        });
+        // Build call ladder rows (descending display):
+        // Row at strike S = cumulative qty for all strikes <= S
+        // Top row: ">max" (all strikes in the money, full cumulative)
+        // Bottom row: "< min" (price below all strikes, qty = 0)
+        const callRows = (() => {
+            const rows = callStrikes.map((strike, i) => {
+                const cumQty     = callStrikes.filter(s => s <= strike).reduce((sum,s) => sum + callMap[s], 0);
+                const nextStrike = callStrikes[i+1];
+                const label      = nextStrike
+                    ? `${fmtStrike(strike)} – ${fmtStrike(nextStrike)}`
+                    : `> ${fmtStrike(strike)}`;
+                return { strike, label, qty: cumQty };
+            });
+            // Add "< min" row at bottom — price below all strikes, nothing exercised
+            if (callStrikes.length > 0) {
+                const minStrike = callStrikes[0];
+                rows.unshift({ strike: minStrike - 1, label: `< ${fmtStrike(minStrike)}`, qty: 0, isZero: true });
+            }
+            // Reverse so ">max" is at top, "< min" is at bottom
+            rows.reverse();
+            return rows;
+        })();
 
-        // Build put ladder rows (ascending strikes, but cumulative inverts)
-        // Row at strike S = sum of all putMap[k] where k >= S
-        // Display: ascending strikes, omit ">max" row (would be 0)
-        const putRows = putStrikes.map((strike, i) => {
-            const cumQty = putStrikes.filter(s => s >= strike).reduce((sum,s) => sum + putMap[s], 0);
-            const prevStrike = putStrikes[i-1];
-            const label = prevStrike ? `${fmtStrike(prevStrike)} – ${fmtStrike(strike)}` : `< ${fmtStrike(strike)}`;
-            return { strike, label, qty: cumQty };
-        });
-        // Reverse so highest strike is at top (intuitive: price drops down into money)
-        putRows.reverse();
+        // Build put ladder rows:
+        // Each row at strike S = cumulative qty for all strikes >= S
+        // Includes "<min" row at bottom (lowest strike, full cumulative)
+        // Display order: DESCENDING (highest strike at top, "<min" at bottom)
+        const putRows = (() => {
+            const rows = putStrikes.map((strike, i) => {
+                const cumQty   = putStrikes.filter(s => s >= strike).reduce((sum,s) => sum + putMap[s], 0);
+                const prevStrike = putStrikes[i-1];
+                const label    = prevStrike
+                    ? `${fmtStrike(prevStrike)} – ${fmtStrike(strike)}`
+                    : `< ${fmtStrike(strike)}`;
+                return { strike, label, qty: cumQty };
+            });
+            // Add the ">max" row for puts (price above all strikes → nothing exercised, qty=0)
+            if (putStrikes.length > 0) {
+                const maxStrike = putStrikes[putStrikes.length - 1];
+                rows.push({ strike: maxStrike + 1, label: `> ${fmtStrike(maxStrike)}`, qty: 0, isZero: true });
+            }
+            // Reverse so highest strike (>max, qty=0) is at top
+            rows.reverse();
+            return rows;
+        })();
 
         return { callRows, putRows };
     };
@@ -6428,14 +6453,29 @@ const DCIModule = () => {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {ladder.callRows.map((row,i)=>(
-                                                            <tr key={i} className="border-b border-slate-800/40 hover:bg-slate-700/20">
-                                                                <td className="py-1.5 mono text-slate-300">{row.label}</td>
-                                                                <td className="py-1.5 mono text-right text-green-400 font-medium">
-                                                                    {(Math.floor(row.qty*1e8)/1e8).toFixed(8)} {asset}
-                                                                </td>
-                                                            </tr>
-                                                        ))}
+                                                        {(()=>{
+                                                            const livePrice = deribitPrices && deribitPrices[asset];
+                                                            // For calls (descending): current row is where livePrice >= this row's strike
+                                                            // and livePrice < next row's strike (i.e. price is in this band)
+                                                            // callRows is descending: [>max, ..., lowest]
+                                                            // Row i spans from callRows[i].strike to callRows[i-1].strike
+                                                            return ladder.callRows.map((row, i) => {
+                                                                const lo = row.strike;
+                                                                const hi = i === 0 ? Infinity : ladder.callRows[i-1].strike;
+                                                                const isActive = livePrice && livePrice >= lo && livePrice < hi;
+                                                                return (
+                                                                    <tr key={i} className={`border-b border-slate-800/40 transition-colors ${isActive ? 'bg-green-900/25 border-l-2 border-l-green-400' : 'hover:bg-slate-700/20'}`}>
+                                                                        <td className={`py-1.5 mono ${isActive ? 'text-green-300 font-semibold' : 'text-slate-300'}`}>
+                                                                            {row.label}
+                                                                            {isActive && <span className="ml-2 text-[10px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded">← live</span>}
+                                                                        </td>
+                                                                        <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-green-300' : 'text-green-400'}`}>
+                                                                            {row.isZero ? '—' : (Math.floor(row.qty*1e8)/1e8).toFixed(8) + ' ' + asset}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            });
+                                                        })()}
                                                     </tbody>
                                                 </table>
                                             </div>
@@ -6455,14 +6495,27 @@ const DCIModule = () => {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {ladder.putRows.map((row,i)=>(
-                                                            <tr key={i} className="border-b border-slate-800/40 hover:bg-slate-700/20">
-                                                                <td className="py-1.5 mono text-slate-300">{row.label}</td>
-                                                                <td className="py-1.5 mono text-right text-red-400 font-medium">
-                                                                    {(Math.floor(row.qty*1e8)/1e8).toFixed(8)} {asset}
-                                                                </td>
-                                                            </tr>
-                                                        ))}
+                                                        {(()=>{
+                                                            const livePrice = deribitPrices && deribitPrices[asset];
+                                                            // putRows is descending: [>max(qty=0), ..., <min(full cumul)]
+                                                            // Row i spans from putRows[i+1].strike (or 0) to putRows[i].strike
+                                                            return ladder.putRows.map((row, i) => {
+                                                                const hi = row.strike;
+                                                                const lo = i === ladder.putRows.length - 1 ? 0 : ladder.putRows[i+1].strike;
+                                                                const isActive = livePrice && livePrice >= lo && livePrice < hi;
+                                                                return (
+                                                                    <tr key={i} className={`border-b border-slate-800/40 transition-colors ${isActive ? 'bg-red-900/25 border-l-2 border-l-red-400' : 'hover:bg-slate-700/20'}`}>
+                                                                        <td className={`py-1.5 mono ${isActive ? 'text-red-300 font-semibold' : 'text-slate-300'}`}>
+                                                                            {row.label}
+                                                                            {isActive && <span className="ml-2 text-[10px] bg-red-500/20 text-red-400 px-1 py-0.5 rounded">← live</span>}
+                                                                        </td>
+                                                                        <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-red-300' : 'text-red-400'}`}>
+                                                                            {row.isZero ? '—' : (Math.floor(row.qty*1e8)/1e8).toFixed(8) + ' ' + asset}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            });
+                                                        })()}
                                                     </tbody>
                                                 </table>
                                             </div>
@@ -6689,7 +6742,7 @@ const App = () => {
                         <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
                     ))}
                 </div>
-                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:tab==='trs'?<TRSModule bybitPrices={bybitPrices}/>:<DCIModule/>}
+                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:tab==='trs'?<TRSModule bybitPrices={bybitPrices}/>:<DCIModule deribitPrices={deribitPrices}/>}
             </div>
             {/* Floating theme toggle — fixed bottom-right */}
             <button
