@@ -6180,6 +6180,38 @@ const DCIModule = () => {
     const hasFilters   = fClient || fOptionType !== 'all' || fMatFrom || fMatTo || fValFrom || fValTo;
     const clearFilters = () => { setFClient(''); setFOptionType('all'); setFMatFrom(''); setFMatTo(''); setFValFrom(''); setFValTo(''); };
 
+    // ── Sort logic ────────────────────────────────────────────────────────────
+    const [sortKey, setSortKey] = React.useState('');
+    const [sortDir, setSortDir] = React.useState('asc');
+
+    const handleSort = (key) => {
+        if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+        else { setSortKey(key); setSortDir('asc'); }
+    };
+
+    const sortFields = {
+        txnId:           t => t.txnId,
+        clientName:      t => t.clientName.toLowerCase(),
+        valueDate:       t => t.valueDate,
+        maturityDate:    t => t.maturityDate,
+        strikePrice:     t => parseFloat(String(t.strikePrice).replace(/,/g,''))   || 0,
+        optionType:      t => t.optionType.toLowerCase(),
+        notionalAmount:  t => parseFloat(String(t.notionalAmount).replace(/,/g,''))|| 0,
+        lapsedAmount:    t => parseFloat(String(t.lapsedAmount).replace(/,/g,''))  || 0,
+        exercisedAmount: t => parseFloat(String(t.exercisedAmount).replace(/,/g,''))|| 0,
+        customerRate:    t => parseFloat(t.customerRate) || 0,
+    };
+
+    const sorted = sortKey && sortFields[sortKey]
+        ? [...filtered].sort((a, b) => {
+            const va = sortFields[sortKey](a);
+            const vb = sortFields[sortKey](b);
+            if (va < vb) return sortDir === 'asc' ? -1 :  1;
+            if (va > vb) return sortDir === 'asc' ?  1 : -1;
+            return 0;
+          })
+        : filtered;
+
     // Customer Rate APY is stored as a decimal (e.g. 1.0025 = 100.25%, 0.4915 = 49.15%)
     const fmtRate = v => { const n = parseFloat(v); return isNaN(n) ? (v||'—') : (n * 100).toFixed(2)+'%'; };
     // 8dp for BTC/ETH, 2dp for USDC/USDT/USD/USDx
