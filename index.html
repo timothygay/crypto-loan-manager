@@ -6487,7 +6487,15 @@ const DCIModule = ({deribitPrices={}}) => {
                                                                             {isActive && <span className="ml-2 text-[10px] bg-red-500/20 text-red-400 px-1 py-0.5 rounded">← live</span>}
                                                                         </td>
                                                                         <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-red-300' : 'text-red-400'}`}>
-                                                                            {row.isZero ? '—' : (Math.floor(row.qty*1e8)/1e8).toFixed(8) + ' ' + asset}
+                                                                            {(()=>{
+                                                                            if (row.isZero) return '—';
+                                                                            const cryptoQty  = Math.floor(row.qty*1e8)/1e8;
+                                                                            const stableAmt  = livePrice ? cryptoQty * livePrice : null;
+                                                                            return (<>
+                                                                                <span>{cryptoQty.toFixed(8)} {asset}</span>
+                                                                                {stableAmt && <span className="ml-1 text-slate-500 text-[10px]">({fmt(stableAmt,0)} USDT)</span>}
+                                                                            </>);
+                                                                        })()}
                                                                         </td>
                                                                     </tr>
                                                                 );
