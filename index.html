@@ -1647,14 +1647,16 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
         const out={};
         underlyings.forEach(sym=>{
             const cs=activeContracts.filter(c=>c.underlying===sym);
-            // Base: sum of all base notionals
-            const baseTotal=cs.reduce((s,c)=>s+c.baseNotional,0);
-            // Trigger groups: keyed by trigger value (e.g. -0.03)
+            // Base: sum of desk costs per contract = baseNotional / (1 - discountFactor)
+            const baseTotal=cs.reduce((s,c)=>s + c.baseNotional/(1-(c.discountFactor||0)), 0);
+            // Trigger groups: additional desk cost when trigger hit
+            // = baseNotional * (scalingFactor - 1) / (1 - discountFactor)
             const groups={};
             cs.forEach(c=>{
+                const df=1-(c.discountFactor||0);
                 const k=c.trigger.toFixed(6);
                 if (!groups[k]) groups[k]={trigger:c.trigger,additional:0};
-                groups[k].additional+=c.baseNotional*(c.scalingFactor-1);
+                groups[k].additional+=c.baseNotional*(c.scalingFactor-1)/df;
             });
             const triggerRows=Object.values(groups).sort((a,b)=>b.trigger-a.trigger); // least negative first
             out[sym]={baseTotal,triggerRows};
