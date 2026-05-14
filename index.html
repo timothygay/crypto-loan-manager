@@ -2667,7 +2667,8 @@ const tradToRow = (trade) => [
     trade.worstOffPair||'', trade.worstOffStrike||'',
     trade.upfrontFee||0, trade.upfrontAmount||0, trade.upfrontFeeUnderlying||'USDT',
     JSON.stringify(trade.settlementFixings||{}),
-    trade.createdAt||new Date().toISOString()
+    trade.createdAt||new Date().toISOString(),
+    trade.cpTradeId||'',      // col 24
 ];
 
 // Deserialize trade from Sheets row
@@ -2684,6 +2685,7 @@ const rowToTrade = (r) => ({
     upfrontFee:r[19]||0, upfrontAmount:r[20]||0, upfrontFeeUnderlying:r[21]||'USDT',
     settlementFixings:(()=>{try{return JSON.parse(r[22]||'{}');}catch{return{};}})(),
     createdAt:r[23],
+    cpTradeId:r[24]||'',
 });
 
 // Helper: convert pair string to Binance symbol e.g. "BTC/USDC" → "BTCUSDC"
@@ -3321,7 +3323,7 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
 
     const initUnderlyings = trade?.underlyings?.length ? trade.underlyings : [defaultUnderlying(trade?.notionalCurrency||'BTC')];
 
-    const [form,setForm]=useState(trade?{...trade,tradeId:trade.id}:{
+    const [form,setForm]=useState(trade?{...trade,tradeId:trade.id,cpTradeId:trade.cpTradeId||''}:{
         tradeId:'',clientName:'',tradeDate:todayLocal(),tenorValue:3,tenorUnit:'months',
         notionalCurrency:'BTC',notionalAmount:'',
         couponCurrency:'USDT',couponSameAsNotional:false,
@@ -3384,6 +3386,7 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
             upfrontFee:form.upfrontFee||'0.00',
             upfrontFeeUnderlying:fcnFeeUnderlying,
             upfrontAmount:fcnUpfrontAmount.toFixed(isCrypto(fcnFeeUnderlying)?8:2),
+            cpTradeId:form.cpTradeId||'',
             paidSettlements:trade?.paidSettlements||[],createdAt:trade?.createdAt||new Date().toISOString()},fcnOriginalId);
     };
 
@@ -4308,6 +4311,7 @@ const accTradeToRow = (t) => [
     t.createdAt||new Date().toISOString(),
     t.barrierStartDate||t.tradeDate||'',  // col 23
     parseInt(t.guaranteedPeriods)||0,      // col 24
+    t.cpTradeId||'',                       // col 25
 ];
 
 const accRowToTrade = (r) => ({
@@ -4335,6 +4339,7 @@ const accRowToTrade = (r) => ({
     createdAt:r[22],
     barrierStartDate: r[23] || '',
     guaranteedPeriods: parseInt(r[24]) || 0,
+    cpTradeId: r[25] || '',
 });
 
 // ─── ACCUMULATOR DASHBOARD ────────────────────────────────────────────────────
@@ -4929,7 +4934,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
 
 // ─── ACCUMULATOR FORM MODAL ───────────────────────────────────────────────────
 const AccumulatorFormModal = ({trade, onSave, onClose}) => {
-    const [form, setForm] = useState(trade ? {...trade, tradeId:trade.id} : {
+    const [form, setForm] = useState(trade ? {...trade, tradeId:trade.id, cpTradeId:trade.cpTradeId||''} : {
         tradeId:'', clientName:'', tradeDate:todayLocal(), tenorValue:52, tenorUnit:'weeks',
         notionalCurrency:'USDT', notionalAmount:'',
         underlyingPair:'BTC/USDT', spotReferencePrice:'',
@@ -4996,6 +5001,7 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
             upfrontFeeUnderlying: feeUnderlying,
             barrierStartDate: form.barrierStartSameAsTradeDate ? (form.tradeDate||'') : (form.barrierStartDate||form.tradeDate||''),
             guaranteedPeriods: parseInt(form.guaranteedPeriods)||0,
+            cpTradeId: form.cpTradeId||'',
             fixings: trade?.fixings || {},
             createdAt: trade?.createdAt || new Date().toISOString(),
         }, originalId);
