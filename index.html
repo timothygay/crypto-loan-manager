@@ -2365,7 +2365,18 @@ const SSPSLedger = ({contract, priceHistory, prices, onBack, onFetchPrice, onMan
                                         <td className="px-3 py-2 mono text-slate-400">{discP?`$${fmt(discP,2)}`:'—'}</td>
                                         <td className={`px-3 py-2 mono ${row.dodChange===null?'text-slate-600':row.dodChange<=contract.trigger?'text-red-400':'text-slate-300'}`}>{row.dodChange!==null?`${(row.dodChange*100).toFixed(2)}%`:isInitial?'Initial':'—'}</td>
                                         <td className="px-3 py-2">{row.triggerHit?<span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded">{contract.scalingFactor}x</span>:row.dodChange!==null?<span className="text-slate-500">1x</span>:'—'}</td>
-                                        <td className="px-3 py-2 mono text-slate-300">{row.partNotional>0?`$${fmt(row.partNotional,2)}`:isInitial?<span className="text-slate-500">Initial fixing</span>:'—'}</td>
+                                        <td className="px-3 py-2 mono text-slate-300">
+                                            {row.partNotional>0 ? (
+                                                <span className="flex flex-col gap-0.5">
+                                                    <span>${fmt(row.partNotional,2)}</span>
+                                                    {contract.discountFactor>0 && (()=>{
+                                                        const scale    = row.triggerHit ? contract.scalingFactor : 1;
+                                                        const deskCost = (contract.baseNotional * scale) / (1 - contract.discountFactor);
+                                                        return <span style={{background:'rgba(139,92,246,0.15)',color:'#a78bfa',border:'1px solid rgba(139,92,246,0.3)'}} className="text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap">Desk: ${fmt(deskCost,2)}</span>;
+                                                    })()}
+                                                </span>
+                                            ) : isInitial ? <span className="text-slate-500">Initial fixing</span> : '—'}
+                                        </td>
                                         <td className="px-3 py-2 mono text-slate-300">{row.underlyingBought>0?fmtCrypto(row.underlyingBought,8):'—'}</td>
                                         <td className="px-3 py-2 mono">{rawP?<span className={row.notionalLeft<=0.01?'text-amber-400':'text-slate-300'}>${fmt(row.notionalLeft,2)}</span>:'—'}</td>
                                         <td className="px-3 py-2 mono text-slate-300">{row.totalUnderlying>0?fmtCrypto(row.totalUnderlying,8):'—'}</td>
