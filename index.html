@@ -3100,7 +3100,6 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus,onConfirmPayme
                     </div>
                     <p className="text-xs text-slate-500 mono">{trade.id} · {fmtDate(trade.tradeDate)} → {fmtDate(trade.maturityDate)} · {trade.tenorValue} {trade.tenorUnit}</p>
                     {trade.cpTradeId&&<p className="text-[10px] text-slate-600 mono mt-0.5">CP: {trade.cpTradeId}</p>}
-                    {trade.cpTradeId&&<p className="text-[10px] text-slate-600 mono mt-0.5">CP: {trade.cpTradeId}</p>}
                 </div>
                 <div className="flex gap-2">
                     <button onClick={()=>setExpanded(!expanded)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1">Schedule {expanded?'▲':'▼'}</button>
@@ -4772,6 +4771,7 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                         {trade.status==='Knocked Out — Pending' && <span className="px-2 py-0.5 rounded-full text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1"><Icon.Alert/> Pending Guaranteed Settlements</span>}
                     </div>
                     <p className="text-xs text-slate-500 mono">{trade.id} · {fmtDate(trade.tradeDate)} → {fmtDate(trade.maturityDate)} · {trade.tenorValue} {trade.tenorUnit}</p>
+                    {trade.cpTradeId&&<p className="text-[10px] text-slate-600 mono mt-0.5">CP: {trade.cpTradeId}</p>}
                 </div>
                 <div className="flex gap-2">
                     <button onClick={()=>setExpanded(!expanded)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1">Schedule {expanded?'▲':'▼'}</button>
