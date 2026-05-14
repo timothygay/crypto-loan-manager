@@ -1857,13 +1857,17 @@ const SSPSModule = ({prices: livePrices}) => {
                 const dp=row.fixingPrice?row.fixingPrice*(1-contract.discountFactor):'';
                 const dodStr = row.dodChange!==null ? (row.dodChange*100).toFixed(4) : '';
                 const triggerStr = row.dodChange!==null ? (row.triggerHit?'YES':'NO') : '';
-                const scaleStr = row.dodChange!==null ? (row.triggerHit?contract.scalingFactor:1) : '';
+                const scaleStr    = row.dodChange!==null ? (row.triggerHit?contract.scalingFactor:1) : '';
+                const deskCostVal = row.partNotional>0 && contract.discountFactor>0
+                    ? r2((contract.baseNotional * (row.triggerHit?contract.scalingFactor:1)) / (1-(contract.discountFactor||0)))
+                    : '';
                 await sheetsCall(config.scriptUrl,{action:'upsertLedgerRow',contractId:contract.id,values:[
                     row.date, r2(row.fixingPrice)||'', r2(dp)||'',
                     dodStr, triggerStr, scaleStr,
                     r2(row.partNotional)||'', r8(row.underlyingBought)||'',
                     r2(row.notionalLeft), r8(row.totalUnderlying), r2(row.totalSpent),
-                    row.becameFullyInvested?'YES':''
+                    row.becameFullyInvested?'YES':'',
+                    deskCostVal
                 ]});
             }
             setSyncStatus('ok'); setLastSync(new Date());
