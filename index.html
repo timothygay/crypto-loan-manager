@@ -3413,6 +3413,7 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
         <Modal title={trade?`Edit: ${trade.id}`:'New FCN Trade'} onClose={onClose} wide>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="md:col-span-2"><Field label="Trade ID"><Input value={form.tradeId||''} onChange={f('tradeId')} placeholder="e.g. FCN-2026-001"/></Field></div>
+                <div><Field label="CP Trade ID" hint="Counterparty reference (optional)"><Input value={form.cpTradeId||''} onChange={f('cpTradeId')} placeholder="e.g. CP-REF-001"/></Field></div>
                 <div className="md:col-span-2"><Field label="Client Name"><Input value={form.clientName} onChange={f('clientName')} placeholder="Client name"/></Field></div>
                 <Field label="Trade Date"><Input type="date" value={form.tradeDate} onChange={f('tradeDate')}/></Field>
                 <Field label="Tenor">
@@ -5014,6 +5015,7 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="md:col-span-2">
                     <Field label="Trade ID"><Input value={form.tradeId||''} onChange={f('tradeId')} placeholder="e.g. ACC-2026-001"/></Field>
+                    <Field label="CP Trade ID" hint="Counterparty reference (optional)"><Input value={form.cpTradeId||''} onChange={f('cpTradeId')} placeholder="e.g. CP-REF-001"/></Field>
                 </div>
                 <div className="md:col-span-2">
                     <Field label="Client Name"><Input value={form.clientName} onChange={f('clientName')} placeholder="Client name"/></Field>
