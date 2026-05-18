@@ -671,11 +671,26 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
 
     // ── Expiring within 7 days ────────────────────────────────────────────────
     const in7days = new Date(today.getTime() + 7 * 86400000);
-    const expiring = activeLoans.filter(l => {
-        if (!l.maturityDate || l.maturityDate === '') return false; // open-term never expires
+    const in14days = new Date(today.getTime() + 14*24*60*60*1000);
+    // All loans expiring within 14 days, sorted earliest first
+    const expiring14 = activeLoans.filter(l => {
+        if (!l.maturityDate || l.maturityDate === '') return false;
         const mat = new Date(l.maturityDate+'T00:00:00Z');
-        return mat >= today && mat <= in7days;
+        return mat >= today && mat <= in14days;
     }).sort((a,b) => new Date(a.maturityDate+'T00:00:00Z') - new Date(b.maturityDate+'T00:00:00Z'));
+    // Nearest 3 expiring loans (regardless of 14-day window)
+    const nearest3Expiring = activeLoans.filter(l => l.maturityDate && l.maturityDate !== '')
+        .sort((a,b) => new Date(a.maturityDate+'T00:00:00Z') - new Date(b.maturityDate+'T00:00:00Z'))
+        .slice(0, 3);
+    // Combined: union of nearest-3 and within-14-days, deduped, sorted
+    const expiringDisplay = [...new Map(
+        [...nearest3Expiring, ...expiring14].map(l => [l.id, l])
+    ).values()].sort((a,b) => new Date(a.maturityDate+'T00:00:00Z') - new Date(b.maturityDate+'T00:00:00Z'));
+    // Legacy 7-day expiring for existing badge
+    const expiring = expiring14.filter(l => {
+        const mat = new Date(l.maturityDate+'T00:00:00Z');
+        return mat <= in7days;
+    });
 
     const refreshLabel = lastRefresh.toLocaleTimeString('en-SG', {hour:'2-digit', minute:'2-digit'});
 
@@ -930,6 +945,59 @@ const LoanDashboard = ({loans, prices, calcMetrics}) => {
                     )}
                 </div>
             </div>
+
+            {/* Upcoming Expiries card */}
+            {expiringDisplay.length > 0 && (
+                <div className="card p-4 mb-3">
+                    <div className="flex items-center justify-between mb-3">
+                        <p className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                            <span className="text-amber-400">⏳</span> Upcoming Loan Expiries
+                        </p>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                            {expiringDisplay.length} loan{expiringDisplay.length!==1?'s':''}
+                        </span>
+                    </div>
+                    <table className="w-full text-xs">
+                        <thead>
+                            <tr className="border-b border-slate-700/60 text-slate-400">
+                                <th className="text-left pb-2 font-medium">Maturity Date</th>
+                                <th className="text-left pb-2 font-medium">Counterparty</th>
+                                <th className="text-left pb-2 font-medium">Loan ID</th>
+                                <th className="text-right pb-2 font-medium">Loan Amount</th>
+                                <th className="text-right pb-2 font-medium">Days Left</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {expiringDisplay.map(l => {
+                                const mat      = new Date(l.maturityDate+'T00:00:00Z');
+                                const daysLeft = Math.ceil((mat - today) / 86400000);
+                                const isUrgent = daysLeft <= 3;
+                                const isWarning= daysLeft <= 7;
+                                const rowColor = isUrgent ? 'bg-red-900/10' : isWarning ? 'bg-amber-900/10' : '';
+                                return (
+                                    <tr key={l.id} className={`border-b border-slate-800/40 ${rowColor}`}>
+                                        <td className="py-2 mono">
+                                            <span className={isUrgent?'text-red-400':isWarning?'text-amber-400':'text-slate-300'}>
+                                                {fmtDate(l.maturityDate)}
+                                            </span>
+                                        </td>
+                                        <td className="py-2 text-slate-200 font-medium">{l.counterparty}</td>
+                                        <td className="py-2 mono text-slate-500 text-[10px]">{l.id}</td>
+                                        <td className="py-2 mono text-right text-slate-300">
+                                            {loanIsCrypto(l)
+                                                ? `${(Math.floor(l.loanAmount*1e8)/1e8).toFixed(8)} ${l.underlying}`
+                                                : `$${fmt(l.loanAmount,0)} ${l.underlying}`}
+                                        </td>
+                                        <td className={`py-2 mono text-right font-semibold ${isUrgent?'text-red-400':isWarning?'text-amber-400':'text-slate-400'}`}>
+                                            {daysLeft === 0 ? 'Today' : daysLeft === 1 ? '1 day' : `${daysLeft} days`}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
 
             {/* Interest breakdown modal */}
             {showInterestModal && (
