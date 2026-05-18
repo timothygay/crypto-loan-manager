@@ -1732,26 +1732,63 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
         return out;
     },[activeContracts]);
 
-    // Contracts expiring within 7 days — each listed individually
-    const expiring = useMemo(()=>contracts
-        .filter(c=>{ const d=daysUntil(c.maturityDate); return d>=0&&d<=7&&today<=c.maturityDate; })
-        .map(c=>{
-            const rows=computeLedger(c,priceHistory);
-            const last=rows.filter(r=>r.fixingPrice).slice(-1)[0];
-            return {...c, accumulated:last?last.totalUnderlying:0, daysLeft:daysUntil(c.maturityDate)};
-        })
+    // Total accumulated underlying per asset across ALL active contracts
+    const totalByUnderlying = useMemo(() => {
+        const totals = {};
+        activeContracts.forEach(c => {
+            const rows = computeLedger(c, priceHistory);
+            const last = rows.filter(r => r.fixingPrice).slice(-1)[0];
+            const sym  = c.underlying || 'BTC';
+            totals[sym] = (totals[sym] || 0) + (last ? last.totalUnderlying : 0);
+        });
+        return totals;
+    }, [activeContracts, priceHistory]);
+
+    // Contracts expiring within 14 days + nearest 3 — for upcoming expiry card
+    const enrichContract = c => {
+        const rows = computeLedger(c, priceHistory);
+        const last = rows.filter(r=>r.fixingPrice).slice(-1)[0];
+        return {
+            ...c,
+            accumulated:   last ? last.totalUnderlying  : 0,
+            notionalLeft:  last ? last.notionalLeft      : c.notional,
+            daysLeft:      daysUntil(c.maturityDate),
+        };
+    };
+    const expiring14 = useMemo(()=>contracts
+        .filter(c=>{ const d=daysUntil(c.maturityDate); return d>=0&&d<=14; })
+        .map(enrichContract)
         .sort((a,b)=>a.daysLeft-b.daysLeft)
     ,[contracts,priceHistory,today]);
+    const nearest3 = useMemo(()=>contracts
+        .filter(c=>c.maturityDate&&c.maturityDate!=='')
+        .map(enrichContract)
+        .sort((a,b)=>a.daysLeft-b.daysLeft)
+        .slice(0,3)
+    ,[contracts,priceHistory,today]);
+    const expiringDisplay = useMemo(()=>[...new Map(
+        [...nearest3,...expiring14].map(c=>[c.id,c])
+    ).values()].sort((a,b)=>a.daysLeft-b.daysLeft),[nearest3,expiring14]);
+    // Legacy: 7-day expiring for existing sell schedule section
+    const expiring = expiring14.filter(c=>c.daysLeft<=7);
 
     if (activeContracts.length===0&&expiring.length===0) return null;
 
     return (
         <div className="trading-desk p-5 mb-6">
             {/* Header */}
-            <div className="flex items-center gap-2 mb-5">
+            <div className="flex items-center gap-2 mb-5 flex-wrap">
                 <Icon.Desk/>
                 <h2 className="font-bold text-sm text-cyan-300 uppercase tracking-wider">Trading Desk</h2>
                 <span className="text-xs text-slate-500">· {activeContracts.length} active contract{activeContracts.length!==1?'s':''}</span>
+                <span className="flex-1"/>
+                {Object.entries(totalByUnderlying).filter(([,v])=>v>0).map(([sym,total])=>(
+                    <span key={sym} className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border"
+                        style={{background:'rgba(251,146,60,0.12)',color:'#fb923c',borderColor:'rgba(251,146,60,0.3)'}}>
+                        <span className="opacity-70">Desk Accumulated</span>
+                        {(Math.floor(total*1e8)/1e8).toFixed(8)} {sym.split('/')[0]}
+                    </span>
+                ))}
             </div>
 
             {/* Price reference — only for underlyings in use */}
@@ -1820,43 +1857,52 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
                 );
             })}
 
-            {/* Maturing within 7 days — each contract shown separately */}
-            {expiring.length>0&&(
+            {/* Upcoming contract expiries — nearest 3 + within 14 days */}
+            {expiringDisplay.length>0&&(
                 <div>
-                    <p className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-2 flex items-center gap-1.5"><Icon.Calendar/> Maturing Within 7 Days — Sell Schedule</p>
+                    <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <Icon.Calendar/> Upcoming Trade Expiries
+                        </p>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                            {expiringDisplay.length} contract{expiringDisplay.length!==1?'s':''}
+                        </span>
+                    </div>
                     <div className="overflow-x-auto scrollbar-hide rounded-lg border border-slate-800 overflow-hidden">
                         <table className="w-full text-xs">
                             <thead>
                                 <tr className="border-b border-slate-800 bg-slate-900/60">
+                                    <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Maturity Date</th>
                                     <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Client</th>
                                     <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Contract ID</th>
-                                    <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Asset</th>
-                                    <th className="text-left px-4 py-2.5 text-slate-400 font-medium">Maturity Date</th>
+                                    <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Notional Left</th>
+                                    <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Cumul. Underlying</th>
                                     <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Days Left</th>
-                                    <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Amount to Sell</th>
-                                    <th className="text-right px-4 py-2.5 text-slate-400 font-medium">Est. Value (Live)</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {expiring.map(c=>(
-                                    <tr key={c.id} className="border-b border-slate-800/50 sell-row">
-                                        <td className="px-4 py-3 font-medium text-slate-200">{c.clientName}</td>
-                                        <td className="px-4 py-3 mono text-slate-400 text-xs">{c.id}</td>
-                                        <td className="px-4 py-3">
-                                            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${c.underlying==='BTC'?'bg-orange-500/15 text-orange-400':'bg-purple-500/15 text-purple-400'}`}>{c.underlying}</span>
-                                        </td>
-                                        <td className="px-4 py-3 mono text-slate-300">{fmtDate(c.maturityDate)}</td>
-                                        <td className={`px-4 py-3 text-right font-bold mono ${c.daysLeft===0?'text-red-400':c.daysLeft<=2?'text-red-400':c.daysLeft<=4?'text-yellow-400':'text-slate-300'}`}>
-                                            {c.daysLeft===0?'TODAY':c.daysLeft===1?'TOMORROW':`${c.daysLeft}d`}
-                                        </td>
-                                        <td className="px-4 py-3 text-right mono font-bold text-red-300">
-                                            {fmtCrypto(c.accumulated,8)} {c.underlying}
-                                        </td>
-                                        <td className="px-4 py-3 text-right mono text-slate-300">
-                                            {livePrices[c.underlying]&&c.accumulated>0?`$${fmt(c.accumulated*livePrices[c.underlying],0)}`:'—'}
-                                        </td>
-                                    </tr>
-                                ))}
+                                {expiringDisplay.map(c=>{
+                                    const isUrgent  = c.daysLeft<=3;
+                                    const isWarning = c.daysLeft<=7;
+                                    return (
+                                        <tr key={c.id} className={`border-b border-slate-800/50 ${isUrgent?'bg-red-900/10':isWarning?'bg-amber-900/10':''}`}>
+                                            <td className={`px-4 py-3 mono font-medium ${isUrgent?'text-red-400':isWarning?'text-amber-400':'text-slate-300'}`}>
+                                                {fmtDate(c.maturityDate)}
+                                            </td>
+                                            <td className="px-4 py-3 text-slate-200 font-medium">{c.clientName}</td>
+                                            <td className="px-4 py-3 mono text-slate-500 text-[10px]">{c.id}</td>
+                                            <td className="px-4 py-3 text-right mono text-slate-300">
+                                                {c.notionalLeft>0?`$${fmt(c.notionalLeft,2)}`:'—'}
+                                            </td>
+                                            <td className="px-4 py-3 text-right mono text-cyan-400 font-medium">
+                                                {c.accumulated>0?`${fmtCrypto(c.accumulated,8)} ${c.underlying}`:'—'}
+                                            </td>
+                                            <td className={`px-4 py-3 text-right mono font-bold ${isUrgent?'text-red-400':isWarning?'text-amber-400':'text-slate-400'}`}>
+                                                {c.daysLeft===0?'Today':c.daysLeft===1?'1 day':`${c.daysLeft} days`}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
