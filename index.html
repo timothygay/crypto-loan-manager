@@ -1761,7 +1761,7 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
         .sort((a,b)=>a.daysLeft-b.daysLeft)
     ,[contracts,priceHistory,today]);
     const nearest3 = useMemo(()=>contracts
-        .filter(c=>c.maturityDate&&c.maturityDate!=='')
+        .filter(c=>c.maturityDate&&c.maturityDate!==''&&daysUntil(c.maturityDate)>=0)
         .map(enrichContract)
         .sort((a,b)=>a.daysLeft-b.daysLeft)
         .slice(0,3)
