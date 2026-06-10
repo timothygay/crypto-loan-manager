@@ -4586,6 +4586,7 @@ const accTradeToRow = (t) => [
     t.barrierStartDate||t.tradeDate||'',  // col 23
     parseInt(t.guaranteedPeriods)||0,      // col 24
     t.cpTradeId||'',                       // col 25
+    t.remainingNotional!==undefined ? t.remainingNotional : '', // col 26
 ];
 
 const accRowToTrade = (r) => ({
@@ -4614,6 +4615,7 @@ const accRowToTrade = (r) => ({
     barrierStartDate: r[23] || '',
     guaranteedPeriods: parseInt(r[24]) || 0,
     cpTradeId: r[25] || '',
+    remainingNotional: r[26] !== undefined && r[26] !== '' ? parseFloat(r[26]) : undefined,
 });
 
 // ─── ACCUMULATOR DASHBOARD ────────────────────────────────────────────────────
@@ -5862,9 +5864,11 @@ const AccumulatorModule = ({prices}) => {
         };
 
         // Mark fixing as confirmed in object
+        // Use remainingAfterLog (correct running notional balance) not amounts.remaining
+        // which is 0 for non-KO events.
         fixings[date] = {...(fixings[date]||{}), price: fp, scenario, confirmed: true, isKO,
-            cryptoDelivery: cryptoQty, baseReturned: baseAmount, remainingAfter};
-        const updatedTrade = {...trade, fixings, status:newStatus};
+            cryptoDelivery: cryptoQty, baseReturned: baseAmount, remainingAfter: remainingAfterLog};
+        const updatedTrade = {...trade, fixings, status:newStatus, remainingNotional: remainingAfterLog};
 
         // Update state and push trade
         setTrades(prev => prev.map(t => t.id === tradeId ? updatedTrade : t));
