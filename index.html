@@ -1151,7 +1151,7 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                     setTopUpLoading(true);
                     const toApply = mcLoans.filter(r => {
                         const amt = parseFloat(mcTopUp[r.loan.id]?.amount);
-                        return !isNaN(amt) && amt > 0;
+                        return !isNaN(amt) && amt !== 0;
                     });
                     for (const r of toApply) {
                         const amt = parseFloat(mcTopUp[r.loan.id].amount);
@@ -1165,7 +1165,7 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
 
                 const anyTopUp = mcLoans.some(r => {
                     const amt = parseFloat(mcTopUp[r.loan.id]?.amount);
-                    return !isNaN(amt) && amt > 0;
+                    return !isNaN(amt) && amt !== 0;
                 });
 
                 return (
