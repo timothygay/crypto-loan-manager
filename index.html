@@ -839,33 +839,29 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                     <p className="text-xl font-bold mono text-white mb-0.5">${fmt(totalActive, 0)}</p>
                     <p className="text-xs text-slate-500 mb-2">{activeLoans.length} active loan{activeLoans.length!==1?'s':''}</p>
                     {/* Currency breakdown */}
-                    {(()=>{
-                        const currencies = [...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean);
-                        return currencies.length > 1 ? (
-                            <div className="flex gap-2 mb-3">
-                                {currencies.map(cur=>{
-                                    const total = activeLoans.filter(l=>l.underlying===cur).reduce((s,l)=>s+l.loanAmount,0);
-                                    const isCryptoCur = ['BTC','ETH'].includes(cur.toUpperCase());
-                                    // For crypto: show native amount + USD equivalent in brackets
-                                    const cryptoPrice = isCryptoCur ? (prices[cur] || 0) : 0;
-                                    const cryptoUsd   = isCryptoCur && cryptoPrice ? total * cryptoPrice : 0;
-                                    return (
-                                        <div key={cur} className="flex-1 bg-slate-800/60 rounded px-2 py-1 text-center">
-                                            <p className="text-xs text-slate-400">{cur}</p>
-                                            {isCryptoCur ? (
-                                                <>
-                                                    <p className="text-xs font-bold mono text-cyan-400">{(Math.floor(total*1e8)/1e8).toFixed(8)}</p>
-                                                    {cryptoUsd > 0 && <p className="text-[10px] mono text-slate-400">(~${fmt(cryptoUsd,0)})</p>}
-                                                </>
-                                            ) : (
-                                                <p className="text-xs font-bold mono text-cyan-400">${fmt(total,0)}</p>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        ) : null;
-                    })()}
+                    {[...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean).length > 1 && (
+                        <div className="flex gap-2 mb-3">
+                            {[...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean).map(cur=>{
+                                const total = activeLoans.filter(l=>l.underlying===cur).reduce((s,l)=>s+l.loanAmount,0);
+                                const isCryptoCur = ['BTC','ETH'].includes(cur.toUpperCase());
+                                const cryptoPrice = isCryptoCur ? (prices[cur] || 0) : 0;
+                                const cryptoUsd   = isCryptoCur && cryptoPrice ? total * cryptoPrice : 0;
+                                return (
+                                    <div key={cur} className="flex-1 bg-slate-800/60 rounded px-2 py-1 text-center">
+                                        <p className="text-xs text-slate-400">{cur}</p>
+                                        {isCryptoCur ? (
+                                            <>
+                                                <p className="text-xs font-bold mono text-cyan-400">{(Math.floor(total*1e8)/1e8).toFixed(8)}</p>
+                                                {cryptoUsd > 0 && <p className="text-[10px] mono text-slate-400">(~${fmt(cryptoUsd,0)})</p>}
+                                            </>
+                                        ) : (
+                                            <p className="text-xs font-bold mono text-cyan-400">${fmt(total,0)}</p>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                     {/* Counterparty breakdown */}
                     <div className="space-y-1.5">
                         {counterparties.map(cp => (
@@ -878,21 +874,7 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                                     <div className="w-16 h-1 bg-slate-700 rounded-full overflow-hidden">
                                         <div className="h-full bg-cyan-500 rounded-full" style={{width:`${Math.min(100,(cp.total/totalActive)*100)}%`}}/>
                                     </div>
-{(()=>{
-                                        const stableTotal = cp.loans
-                                            ? cp.loans.filter(l=>!loanIsCrypto(l)).reduce((s,l)=>s+l.loanAmount,0)
-                                            : cp.total;
-                                        const cryptoLoans = cp.loans ? cp.loans.filter(l=>loanIsCrypto(l)) : [];
-                                        return (
-                                            <div className="flex flex-col items-end gap-0.5">
-                                                {stableTotal>0 && <span className="text-xs mono text-slate-300">${fmt(stableTotal,0)}</span>}
-                                                {cryptoLoans.map(l=>{
-                                                    const p = prices[l.underlying]||0;
-                                                    return <span key={l.id} className="text-xs mono text-slate-300">{(Math.floor(l.loanAmount*1e8)/1e8).toFixed(2)} {l.underlying}{p>0?<span className="text-slate-500"> (~${fmt(l.loanAmount*p,0)})</span>:''}</span>;
-                                                })}
-                                            </div>
-                                        );
-                                    })()}
+                                {(()=>{const stableTotal=cp.loans?cp.loans.filter(l=>!loanIsCrypto(l)).reduce((s,l)=>s+l.loanAmount,0):cp.total;const cryptoLoans=cp.loans?cp.loans.filter(l=>loanIsCrypto(l)):[];return(<div className="flex flex-col items-end gap-0.5">{stableTotal>0&&<span className="text-xs mono text-slate-300">${fmt(stableTotal,0)}</span>}{cryptoLoans.map(l=>{const p=prices[l.underlying]||0;return<span key={l.id} className="text-xs mono text-slate-300">{(Math.floor(l.loanAmount*1e8)/1e8).toFixed(2)} {l.underlying}{p>0?<span className="text-slate-500"> (~${fmt(l.loanAmount*p,0)})</span>:''}</span>;})}</div>);})()}
                                 </div>
                             </div>
                         ))}
@@ -1105,47 +1087,6 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                     </div>
 
                     {/* Totals row + Apply button */}
-                    {(()=>{
-                        // Sum per currency — show total of all non-zero amounts entered
-                        const totalsMap = {};
-                        mcLoans.forEach(r => {
-                            const amt = parseFloat(mcTopUp[r.loan.id]?.amount);
-                            if (isNaN(amt) || amt === 0) return;
-                            const ccy = r.loan.collateralType;
-                            totalsMap[ccy] = (totalsMap[ccy] || 0) + amt;
-                        });
-                        const hasTotals = Object.keys(totalsMap).length > 0;
-                        const activeLoanCount = mcLoans.filter(r=>{const a=parseFloat(mcTopUp[r.loan.id]?.amount);return !isNaN(a)&&a!==0;}).length;
-                        return (
-                            <>
-                            {hasTotals && (
-                                <div className="mt-2 px-2 py-2 bg-slate-800/60 rounded-lg border border-slate-700/40 flex flex-wrap items-center gap-4">
-                                    <span className="text-xs text-slate-400 font-medium">Sum of entered amounts:</span>
-                                    {Object.entries(totalsMap).map(([ccy, sum]) => {
-                                        const isNeg = sum < 0;
-                                        return (
-                                            <span key={ccy} className={`mono text-sm font-bold ${isNeg ? 'text-red-400' : 'text-green-400'}`}>
-                                                {isNeg ? '' : '+'}{(Math.round(sum * 1e8) / 1e8).toFixed(8)} {ccy}
-                                            </span>
-                                        );
-                                    })}
-                                    <span className="text-[10px] text-slate-600 ml-auto">verify this matches your intended total before applying</span>
-                                </div>
-                            )}
-                            <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700/40">
-                                <p className="text-xs text-slate-500">
-                                    {activeLoanCount} loan{activeLoanCount!==1?'s':''} with amount entered
-                                </p>
-                                <button
-                                    onClick={applyTopUps}
-                                    disabled={!anyTopUp||topUpLoading}
-                                    className="px-4 py-1.5 bg-green-700/30 hover:bg-green-700/50 border border-green-600/40 rounded text-xs text-green-400 font-medium transition-colors disabled:opacity-40 flex items-center gap-2">
-                                    {topUpLoading ? '⟳ Applying...' : '✓ Apply Collateral Changes'}
-                                </button>
-                            </div>
-                            </>
-                        );
-                    })()}
                 </div>
                 );
             })()}
@@ -6517,23 +6458,16 @@ const DCIModule = ({deribitPrices={}}) => {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {(()=>{
+                                                        {ladder.callRows.map((row, i) => {
                                                             const livePrice = deribitPrices && deribitPrices[asset];
-                                                            return ladder.callRows.map((row, i) => {
-                                                                const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
-                                                                return (
-                                                                    <tr key={i} className={`border-b border-slate-800/40 transition-colors ${isActive ? 'bg-green-900/25 border-l-2 border-l-green-400' : 'hover:bg-slate-700/20'}`}>
-                                                                        <td className={`py-1.5 mono ${isActive ? 'text-green-300 font-semibold' : 'text-slate-300'}`}>
-                                                                            {row.label}
-                                                                            {isActive && <span className="ml-2 text-[10px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded">← live</span>}
-                                                                        </td>
-                                                                        <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-green-300' : 'text-green-400'}`}>
-                                                                            {row.isZero ? '—' : (Math.floor(row.qty*1e8)/1e8).toFixed(8) + ' ' + asset}
-                                                                        </td>
-                                                                    </tr>
-                                                                );
-                                                            });
-                                                        })()}
+                                                            const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
+                                                            return (
+                                                                <tr key={i} className={`border-b border-slate-800/40 ${isActive ? 'bg-green-900/25 border-l-2 border-l-green-400' : 'hover:bg-slate-700/20'}`}>
+                                                                    <td className={`py-1.5 mono ${isActive ? 'text-green-300 font-semibold' : 'text-slate-300'}`}>{row.label}{isActive && <span className="ml-2 text-[10px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded">← live</span>}</td>
+                                                                    <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-green-300' : 'text-green-400'}`}>{row.isZero ? '—' : (Math.floor(row.qty*1e8)/1e8).toFixed(8) + ' ' + asset}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
                                                     </tbody>
                                                 </table>
                                             </div>
@@ -6553,26 +6487,20 @@ const DCIModule = ({deribitPrices={}}) => {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {(()=>{
+                                                        {ladder.putRows.map((row, i) => {
                                                             const livePrice = deribitPrices && deribitPrices[asset];
-                                                            return ladder.putRows.map((row, i) => {
-                                                                const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
-                                                                return (
-                                                                    <tr key={i} className={`border-b border-slate-800/40 transition-colors ${isActive ? 'bg-red-900/25 border-l-2 border-l-red-400' : 'hover:bg-slate-700/20'}`}>
-                                                                        <td className={`py-1.5 mono ${isActive ? 'text-red-300 font-semibold' : 'text-slate-300'}`}>
-                                                                            {row.label}
-                                                                            {isActive && <span className="ml-2 text-[10px] bg-red-500/20 text-red-400 px-1 py-0.5 rounded">← live</span>}
-                                                                        </td>
-                                                                        <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-red-300' : 'text-red-400'}`}>
-                                                                            {(()=>{
-                                                                            if (row.isZero) return '—';
-                                                                            const cryptoQty  = Math.floor(row.qty*1e8)/1e8;
-                                                                            const stableAmt  = livePrice ? cryptoQty * livePrice : null;
-                                                                            return (<>
-                                                                                <span>{cryptoQty.toFixed(8)} {asset}</span>
-                                                                                {stableAmt && <span className="ml-1 text-slate-500 text-[10px]">({fmt(stableAmt,0)} USDT)</span>}
-                                                                            </>);
-                                                                        })()}
+                                                            const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
+                                                            const cryptoQty = row.isZero ? 0 : Math.floor(row.qty*1e8)/1e8;
+                                                            const stableAmt = (!row.isZero && livePrice) ? cryptoQty * livePrice : null;
+                                                            return (
+                                                                <tr key={i} className={`border-b border-slate-800/40 ${isActive ? 'bg-red-900/25 border-l-2 border-l-red-400' : 'hover:bg-slate-700/20'}`}>
+                                                                    <td className={`py-1.5 mono ${isActive ? 'text-red-300 font-semibold' : 'text-slate-300'}`}>{row.label}{isActive && <span className="ml-2 text-[10px] bg-red-500/20 text-red-400 px-1 py-0.5 rounded">← live</span>}</td>
+                                                                    <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-red-300' : 'text-red-400'}`}>
+                                                                        {row.isZero ? '—' : (<>{cryptoQty.toFixed(8)} {asset}{stableAmt && <span className="ml-1 text-slate-500 text-[10px]">({fmt(stableAmt,0)} USDT)</span>}</>)}
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
                                                                         </td>
                                                                     </tr>
                                                                 );
