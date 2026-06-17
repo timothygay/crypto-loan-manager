@@ -563,6 +563,100 @@ const PriceTicker = ({bybitPrices, binancePrices, bybitUpdate, binanceUpdate, de
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOAN MODULE
+// ─── MC MODAL COMPONENT ──────────────────────────────────────────────────────
+const MCModal = ({mcLoans, mcTopUp, setMcTopUp, bulkTopUp, setBulkTopUp,
+                  topUpLoading, setTopUpLoading, onTopUp, onClose}) => {
+    const t8 = n => (Math.floor(n * 1e8) / 1e8).toFixed(8);
+    const requiredTopUp = (r) => {
+        if (!r.price || r.price <= 0 || r.loan.collateralAmount <= 0) return 0;
+        return Math.max(0, r.loan.loanAmount*(r.loan.originalCollateralRatio/100) - r.loan.collateralAmount*r.price) / r.price;
+    };
+    const applyBulkSplit = (ccy, totalStr) => {
+        const total = parseFloat(totalStr); if (isNaN(total)||total===0) return;
+        const checked = mcLoans.filter(r=>r.loan.collateralType===ccy&&mcTopUp[r.loan.id]?.checked);
+        if (!checked.length) return;
+        let splits = {};
+        if (total > 0) {
+            const req=checked.map(r=>({r,req:requiredTopUp(r)})),sumR=req.reduce((s,x)=>s+x.req,0);
+            if (total<=sumR) req.forEach(({r,req})=>{splits[r.loan.id]=sumR>0?t8(total*req/sumR):'0';});
+            else { const ex=total-sumR,sumL=checked.reduce((s,r)=>s+r.loan.loanAmount,0); req.forEach(({r,req})=>{splits[r.loan.id]=t8(req+(sumL>0?ex*(r.loan.loanAmount/sumL):0));}); }
+        } else {
+            const abs=Math.abs(total),rec=r=>{if(!r.price||r.price<=0)return 0;return Math.max(0,r.loan.collateralAmount*r.price-r.loan.loanAmount*(r.loan.originalCollateralRatio/100))/r.price;};
+            const ra=checked.map(r=>({r,rec:rec(r)})),sumRec=ra.reduce((s,x)=>s+x.rec,0);
+            if (abs<=sumRec) ra.forEach(({r,rec})=>{splits[r.loan.id]=sumRec>0?'-'+t8(abs*rec/sumRec):'0';});
+            else { const ex=abs-sumRec,sumL=checked.reduce((s,r)=>s+r.loan.loanAmount,0); ra.forEach(({r,rec})=>{splits[r.loan.id]='-'+t8(rec+(sumL>0?ex*(r.loan.loanAmount/sumL):0));}); }
+        }
+        setMcTopUp(prev=>{const next={...prev};Object.entries(splits).forEach(([id,amt])=>{next[id]={...(next[id]||{}),amount:amt};});return next;});
+    };
+    const applyTopUps = async () => {
+        if (!onTopUp) return; setTopUpLoading(true);
+        for (const r of mcLoans.filter(r=>{const a=parseFloat(mcTopUp[r.loan.id]?.amount);return !isNaN(a)&&a!==0;}))
+            await onTopUp(r.loan.id,'Collateral Top-up',parseFloat(mcTopUp[r.loan.id].amount));
+        setMcTopUp({}); setBulkTopUp({}); setTopUpLoading(false);
+    };
+    const collCcys=[...new Set(mcLoans.map(r=>r.loan.collateralType).filter(Boolean))];
+    const totalsMap={};
+    mcLoans.forEach(r=>{const a=parseFloat(mcTopUp[r.loan.id]?.amount);if(isNaN(a)||a===0)return;totalsMap[r.loan.collateralType]=(totalsMap[r.loan.collateralType]||0)+a;});
+    const hasTotals=Object.keys(totalsMap).length>0;
+    const activeLoanCount=mcLoans.filter(r=>{const a=parseFloat(mcTopUp[r.loan.id]?.amount);return !isNaN(a)&&a!==0;}).length;
+    const anyTopUp=Object.values(mcTopUp).some(v=>{const a=parseFloat(v?.amount);return !isNaN(a)&&a!==0;});
+    return (
+        <div className="card p-4 mb-3 border border-orange-500/20">
+            <div className="flex justify-between items-center mb-3">
+                <p className="text-sm font-semibold text-orange-400">Margin Call Distances — All Active Loans</p>
+                <button onClick={onClose} className="text-slate-500 hover:text-slate-300 text-lg">✕</button>
+            </div>
+            {collCcys.length>0&&(<div className="flex flex-wrap gap-4 mb-3 p-3 bg-slate-800/40 rounded-lg border border-slate-700/40"><span className="text-xs text-slate-400 font-medium self-center">Bulk Top-up / Recall:</span>{collCcys.map(ccy=>(<div key={ccy} className="flex items-center gap-2"><span className="text-xs text-slate-400">{ccy}</span><input type="number" step="0.00000001" value={bulkTopUp[ccy]||''} onChange={e=>setBulkTopUp(p=>({...p,[ccy]:e.target.value}))} placeholder={`+/- ${ccy} to distribute`} className="w-44 px-2 py-1 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-slate-200 mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"/><button onClick={()=>applyBulkSplit(ccy,bulkTopUp[ccy]||'')} className="px-2 py-1 bg-cyan-700/30 hover:bg-cyan-700/50 border border-cyan-600/30 rounded text-xs text-cyan-400 transition-colors">Split</button></div>))}<p className="text-[10px] text-slate-500 self-center">Check rows, enter total, click Split to distribute</p></div>)}
+            <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+                <thead><tr className="border-b border-slate-700 text-slate-400"><th className="pb-2 w-6"></th><th className="text-left pb-2">Counterparty</th><th className="text-left pb-2">Loan ID</th><th className="text-right pb-2">Loan Amount</th><th className="text-right pb-2">Collateral</th><th className="text-right pb-2">Current Price</th><th className="text-right pb-2">Ratio %</th><th className="text-right pb-2">MC Price</th><th className="text-right pb-2">Buffer $</th><th className="text-right pb-2">Buffer %</th><th className="text-right pb-2">Top-up / Recall</th></tr></thead>
+                <tbody>{mcLoans.map(r=>{
+                    const isChecked=!!(mcTopUp[r.loan.id]?.checked),topUpVal=mcTopUp[r.loan.id]?.amount||'',req=requiredTopUp(r);
+                    const rec=(()=>{if(!r.price||r.price<=0)return 0;return Math.max(0,(r.loan.collateralAmount*r.price-r.loan.loanAmount*(r.loan.originalCollateralRatio/100))/r.price);})();
+                    return (<tr key={r.loan.id} className={`border-b border-slate-800/50 ${r.atRisk?'bg-red-900/10':isChecked?'bg-cyan-900/10':''}`}>
+                        <td className="py-2 pr-2"><input type="checkbox" checked={isChecked} onChange={e=>setMcTopUp(prev=>({...prev,[r.loan.id]:{...(prev[r.loan.id]||{}),checked:e.target.checked}}))} className="accent-cyan-500 cursor-pointer"/></td>
+                        <td className="py-2 text-slate-300">{r.loan.counterparty}</td>
+                        <td className="py-2 mono text-slate-400 text-[11px]">{r.loan.id}</td>
+                        <td className="py-2 text-right mono text-slate-300">{loanIsCrypto(r.loan)?`${(Math.floor(r.loan.loanAmount*1e8)/1e8).toFixed(8)} ${r.loan.underlying}`:`$${fmt(r.loan.loanAmount,0)} ${r.loan.underlying||''}`}</td>
+                        <td className="py-2 text-right mono text-slate-300">{r.loan.collateralAmount>0?`${(Math.floor(r.loan.collateralAmount*1e8)/1e8).toFixed(8)} ${r.loan.collateralType}`:'—'}</td>
+                        <td className="py-2 text-right mono text-slate-300">${fmt(r.price,0)}</td>
+                        <td className="py-2 text-right mono text-slate-300">{fmt(r.ratio,1)}%</td>
+                        <td className="py-2 text-right mono text-orange-400">${fmt(r.mcPrice,0)}</td>
+                        <td className={`py-2 text-right mono ${r.atRisk?'text-red-400':r.pctDrop<10?'text-amber-400':'text-green-400'}`}>{r.atRisk?'BREACHED':'$'+fmt(r.absDrop,0)}</td>
+                        <td className={`py-2 text-right mono font-medium ${r.atRisk?'text-red-400':r.pctDrop<10?'text-amber-400':'text-green-400'}`}>{r.atRisk?'BREACHED':fmt(r.pctDrop,1)+'%'}</td>
+                        <td className="py-2 text-right"><div className="flex flex-col items-end gap-0.5"><input type="number" step="0.00000001" value={topUpVal} onChange={e=>setMcTopUp(prev=>({...prev,[r.loan.id]:{...(prev[r.loan.id]||{}),amount:e.target.value}}))} placeholder="+/- 0.00000000" className="w-32 px-2 py-0.5 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-slate-200 mono text-right focus:outline-none focus:border-green-500/60 placeholder-slate-600"/>{req>0?<span className="text-[9px] text-amber-600 mono">need +{t8(req)}</span>:rec>0?<span className="text-[9px] text-cyan-700 mono">can recall -{t8(rec)}</span>:null}</div></td>
+                    </tr>);
+                })}</tbody>
+            </table>
+            </div>
+            {hasTotals&&(<div className="mt-2 px-2 py-2 bg-slate-800/60 rounded-lg border border-slate-700/40 flex flex-wrap items-center gap-4"><span className="text-xs text-slate-400 font-medium">Sum of entered amounts:</span>{Object.entries(totalsMap).map(([ccy,sum])=>(<span key={ccy} className={`mono text-sm font-bold ${sum<0?'text-red-400':'text-green-400'}`}>{sum<0?'':'+'}{(Math.round(sum*1e8)/1e8).toFixed(8)} {ccy}</span>))}<span className="text-[10px] text-slate-600 ml-auto">verify total before applying</span></div>)}
+            <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700/40">
+                <p className="text-xs text-slate-500">{activeLoanCount} loan{activeLoanCount!==1?'s':''} with amount entered</p>
+                <button onClick={applyTopUps} disabled={!anyTopUp||topUpLoading} className="px-4 py-1.5 bg-green-700/30 hover:bg-green-700/50 border border-green-600/40 rounded text-xs text-green-400 font-medium transition-colors disabled:opacity-40 flex items-center gap-2">{topUpLoading?'Applying...':'Apply Collateral Changes'}</button>
+            </div>
+        </div>
+    );
+};
+
+// ─── CP BREAKDOWN COMPONENT ─────────────────────────────────────────────────
+const CPBreakdown = ({cpName, cpLoans, prices, onClose}) => {
+    const secured=cpLoans.filter(l=>l.secured!==false),unsecured=cpLoans.filter(l=>l.secured===false);
+    const secTotal=secured.reduce((s,l)=>s+l.loanAmount,0),unsecTotal=unsecured.reduce((s,l)=>s+l.loanAmount,0),total=secTotal+unsecTotal;
+    const stableUnsec=unsecured.filter(l=>!loanIsCrypto(l)).reduce((s,l)=>s+l.loanAmount,0),cryptoUnsec=unsecured.filter(l=>loanIsCrypto(l));
+    const stableAll=cpLoans.filter(l=>!loanIsCrypto(l)).reduce((s,l)=>s+l.loanAmount,0),cryptoAll=cpLoans.filter(l=>loanIsCrypto(l));
+    return (
+        <div className="mt-2 bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
+            <div className="flex justify-between items-center mb-2">
+                <span className="text-xs font-semibold text-slate-200">{cpName}</span>
+                <button onClick={onClose} className="text-slate-500 hover:text-slate-300 text-sm">✕</button>
+            </div>
+            {secured.length>0&&(<div className="mb-2"><div className="flex justify-between text-xs mb-0.5"><span className="text-green-400">🔒 Secured</span><span className="mono text-slate-200">${fmt(secTotal,0)}</span></div><div className="h-1 bg-slate-700 rounded-full overflow-hidden mb-1"><div className="h-full bg-green-500 rounded-full" style={{width:`${total>0?(secTotal/total)*100:0}%`}}/></div>{secured.map(l=>(<div key={l.id} className="flex justify-between text-[10px] mono text-slate-400 pl-1"><span>{l.id}</span><span>{loanIsCrypto(l)?(Math.floor(l.loanAmount*1e8)/1e8).toFixed(8):'$'+fmt(l.loanAmount,0)} {l.underlying}</span></div>))}</div>)}
+            {unsecured.length>0&&(<div><div className="flex justify-between text-xs mb-0.5"><span className="text-blue-400">📋 Unsecured</span><span className="mono text-slate-200">{stableUnsec>0&&`$${fmt(stableUnsec,0)}`}{cryptoUnsec.map(l=>{const p=prices[l.underlying]||0;return <span key={l.id} className="ml-1">{(Math.floor(l.loanAmount*1e8)/1e8).toFixed(2)} {l.underlying}{p>0?` (~$${fmt(l.loanAmount*p,0)})`:''}</span>;})}</span></div><div className="h-1 bg-slate-700 rounded-full overflow-hidden mb-1"><div className="h-full bg-blue-500 rounded-full" style={{width:`${total>0?(unsecTotal/total)*100:0}%`}}/></div>{unsecured.map(l=>(<div key={l.id} className="flex justify-between text-[10px] mono text-slate-400 pl-1"><span>{l.id}</span><span>{loanIsCrypto(l)?(Math.floor(l.loanAmount*1e8)/1e8).toFixed(8):'$'+fmt(l.loanAmount,0)} {l.underlying}</span></div>))}</div>)}
+            {secured.length>0&&unsecured.length>0&&(<div className="mt-2 pt-2 border-t border-slate-700/50 flex justify-between text-xs"><span className="text-slate-400">Total</span><span className="mono text-white font-semibold">{stableAll>0&&`$${fmt(stableAll,0)}`}{cryptoAll.map(l=>{const p=prices[l.underlying]||0;return <span key={l.id} className="ml-1">{(Math.floor(l.loanAmount*1e8)/1e8).toFixed(2)} {l.underlying}{p>0?` (~$${fmt(l.loanAmount*p,0)})`:''}</span>;})}</span></div>)}
+        </div>
+    );
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOAN TRADING DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -745,33 +839,29 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                     <p className="text-xl font-bold mono text-white mb-0.5">${fmt(totalActive, 0)}</p>
                     <p className="text-xs text-slate-500 mb-2">{activeLoans.length} active loan{activeLoans.length!==1?'s':''}</p>
                     {/* Currency breakdown */}
-                    {(()=>{
-                        const currencies = [...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean);
-                        return currencies.length > 1 ? (
-                            <div className="flex gap-2 mb-3">
-                                {currencies.map(cur=>{
-                                    const total = activeLoans.filter(l=>l.underlying===cur).reduce((s,l)=>s+l.loanAmount,0);
-                                    const isCryptoCur = ['BTC','ETH'].includes(cur.toUpperCase());
-                                    // For crypto: show native amount + USD equivalent in brackets
-                                    const cryptoPrice = isCryptoCur ? (prices[cur] || 0) : 0;
-                                    const cryptoUsd   = isCryptoCur && cryptoPrice ? total * cryptoPrice : 0;
-                                    return (
-                                        <div key={cur} className="flex-1 bg-slate-800/60 rounded px-2 py-1 text-center">
-                                            <p className="text-xs text-slate-400">{cur}</p>
-                                            {isCryptoCur ? (
-                                                <>
-                                                    <p className="text-xs font-bold mono text-cyan-400">{(Math.floor(total*1e8)/1e8).toFixed(8)}</p>
-                                                    {cryptoUsd > 0 && <p className="text-[10px] mono text-slate-400">(~${fmt(cryptoUsd,0)})</p>}
-                                                </>
-                                            ) : (
-                                                <p className="text-xs font-bold mono text-cyan-400">${fmt(total,0)}</p>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        ) : null;
-                    })()}
+                    {[...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean).length > 1 && (
+                        <div className="flex gap-2 mb-3">
+                            {[...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean).map(cur=>{
+                                const total = activeLoans.filter(l=>l.underlying===cur).reduce((s,l)=>s+l.loanAmount,0);
+                                const isCryptoCur = ['BTC','ETH'].includes(cur.toUpperCase());
+                                const cryptoPrice = isCryptoCur ? (prices[cur] || 0) : 0;
+                                const cryptoUsd   = isCryptoCur && cryptoPrice ? total * cryptoPrice : 0;
+                                return (
+                                    <div key={cur} className="flex-1 bg-slate-800/60 rounded px-2 py-1 text-center">
+                                        <p className="text-xs text-slate-400">{cur}</p>
+                                        {isCryptoCur ? (
+                                            <>
+                                                <p className="text-xs font-bold mono text-cyan-400">{(Math.floor(total*1e8)/1e8).toFixed(8)}</p>
+                                                {cryptoUsd > 0 && <p className="text-[10px] mono text-slate-400">(~${fmt(cryptoUsd,0)})</p>}
+                                            </>
+                                        ) : (
+                                            <p className="text-xs font-bold mono text-cyan-400">${fmt(total,0)}</p>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                     {/* Counterparty breakdown */}
                     <div className="space-y-1.5">
                         {counterparties.map(cp => (
@@ -784,87 +874,12 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                                     <div className="w-16 h-1 bg-slate-700 rounded-full overflow-hidden">
                                         <div className="h-full bg-cyan-500 rounded-full" style={{width:`${Math.min(100,(cp.total/totalActive)*100)}%`}}/>
                                     </div>
-{(()=>{
-                                        const stableTotal = cp.loans
-                                            ? cp.loans.filter(l=>!loanIsCrypto(l)).reduce((s,l)=>s+l.loanAmount,0)
-                                            : cp.total;
-                                        const cryptoLoans = cp.loans ? cp.loans.filter(l=>loanIsCrypto(l)) : [];
-                                        return (
-                                            <div className="flex flex-col items-end gap-0.5">
-                                                {stableTotal>0 && <span className="text-xs mono text-slate-300">${fmt(stableTotal,0)}</span>}
-                                                {cryptoLoans.map(l=>{
-                                                    const p = prices[l.underlying]||0;
-                                                    return <span key={l.id} className="text-xs mono text-slate-300">{(Math.floor(l.loanAmount*1e8)/1e8).toFixed(2)} {l.underlying}{p>0?<span className="text-slate-500"> (~${fmt(l.loanAmount*p,0)})</span>:''}</span>;
-                                                })}
-                                            </div>
-                                        );
-                                    })()}
+                                {(()=>{const stableTotal=cp.loans?cp.loans.filter(l=>!loanIsCrypto(l)).reduce((s,l)=>s+l.loanAmount,0):cp.total;const cryptoLoans=cp.loans?cp.loans.filter(l=>loanIsCrypto(l)):[];return(<div className="flex flex-col items-end gap-0.5">{stableTotal>0&&<span className="text-xs mono text-slate-300">${fmt(stableTotal,0)}</span>}{cryptoLoans.map(l=>{const p=prices[l.underlying]||0;return<span key={l.id} className="text-xs mono text-slate-300">{(Math.floor(l.loanAmount*1e8)/1e8).toFixed(2)} {l.underlying}{p>0?<span className="text-slate-500"> (~${fmt(l.loanAmount*p,0)})</span>:''}</span>;})}</div>);})()}
                                 </div>
                             </div>
                         ))}
                     </div>
-                    {showCPModal && (()=>{
-                        const cpLoans   = activeLoans.filter(l=>l.counterparty===showCPModal);
-                        const secured   = cpLoans.filter(l=>l.secured!==false);
-                        const unsecured = cpLoans.filter(l=>l.secured===false);
-                        const secTotal  = secured.reduce((s,l)=>s+l.loanAmount,0);
-                        const unsecTotal= unsecured.reduce((s,l)=>s+l.loanAmount,0);
-                        const total     = secTotal+unsecTotal;
-                        return (
-                            <div className="mt-2 bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
-                                <div className="flex justify-between items-center mb-2">
-                                    <span className="text-xs font-semibold text-slate-200">{showCPModal}</span>
-                                    <button onClick={()=>setShowCPModal(null)} className="text-slate-500 hover:text-slate-300 text-sm">✕</button>
-                                </div>
-                                {secured.length>0&&(
-                                    <div className="mb-2">
-                                        <div className="flex justify-between text-xs mb-0.5">
-                                            <span className="text-green-400">🔒 Secured</span>
-                                            <span className="mono text-slate-200">${fmt(secTotal,0)}</span>
-                                        </div>
-                                        <div className="h-1 bg-slate-700 rounded-full overflow-hidden mb-1">
-                                            <div className="h-full bg-green-500 rounded-full" style={{width:`${total>0?(secTotal/total)*100:0}%`}}/>
-                                        </div>
-                                        {secured.map(l=>(
-                                            <div key={l.id} className="flex justify-between text-[10px] mono text-slate-400 pl-1">
-                                                <span>{l.id}</span><span>{loanIsCrypto(l)?(Math.floor(l.loanAmount*1e8)/1e8).toFixed(8):'$'+fmt(l.loanAmount,0)} {l.underlying}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                {unsecured.length>0&&(
-                                    <div>
-                                        <div className="flex justify-between text-xs mb-0.5">
-                                            <span className="text-blue-400">📋 Unsecured</span>
-                                            <span className="mono text-slate-200">{(()=>{
-                                                const stableUnsec = unsecured.filter(l=>!loanIsCrypto(l)).reduce((s,l)=>s+l.loanAmount,0);
-                                                const cryptoUnsec = unsecured.filter(l=>loanIsCrypto(l));
-                                                return <>{stableUnsec>0&&`$${fmt(stableUnsec,0)}`}{cryptoUnsec.map(l=>{const p=prices[l.underlying]||0;return <span key={l.id} className="ml-1">{(Math.floor(l.loanAmount*1e8)/1e8).toFixed(2)} {l.underlying}{p>0?` (~$${fmt(l.loanAmount*p,0)})`:''}</span>;})}</>;
-                                            })()}</span>
-                                        </div>
-                                        <div className="h-1 bg-slate-700 rounded-full overflow-hidden mb-1">
-                                            <div className="h-full bg-blue-500 rounded-full" style={{width:`${total>0?(unsecTotal/total)*100:0}%`}}/>
-                                        </div>
-                                        {unsecured.map(l=>(
-                                            <div key={l.id} className="flex justify-between text-[10px] mono text-slate-400 pl-1">
-                                                <span>{l.id}</span><span>{loanIsCrypto(l)?(Math.floor(l.loanAmount*1e8)/1e8).toFixed(8):'$'+fmt(l.loanAmount,0)} {l.underlying}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                {secured.length>0&&unsecured.length>0&&(
-                                    <div className="mt-2 pt-2 border-t border-slate-700/50 flex justify-between text-xs">
-                                        <span className="text-slate-400">Total</span>
-                                        <span className="mono text-white font-semibold">{(()=>{
-                                            const stableAll = cpLoans.filter(l=>!loanIsCrypto(l)).reduce((s,l)=>s+l.loanAmount,0);
-                                            const cryptoAll = cpLoans.filter(l=>loanIsCrypto(l));
-                                            return <>{stableAll>0&&`$${fmt(stableAll,0)}`}{cryptoAll.map(l=>{const p=prices[l.underlying]||0;return <span key={l.id} className="ml-1">{(Math.floor(l.loanAmount*1e8)/1e8).toFixed(2)} {l.underlying}{p>0?` (~$${fmt(l.loanAmount*p,0)})`:''}</span>;})}</>;
-                                        })()}</span>
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })()}
+                    {showCPModal && <CPBreakdown cpName={showCPModal} cpLoans={activeLoans.filter(l=>l.counterparty===showCPModal)} prices={prices} onClose={()=>setShowCPModal(null)}/>}
                 </div>
 
                 {/* 2 — Collateral by type */}
@@ -1061,206 +1076,33 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
             )}
 
             {/* MC breakdown modal with bulk top-up */}
-            {showMCModal && (()=>{
-                // ── Collateral currencies present in the table ────────────────
-                const collCcys = [...new Set(mcLoans.map(r=>r.loan.collateralType).filter(Boolean))];
+            {showMCModal && <MCModal mcLoans={mcLoans} mcTopUp={mcTopUp} setMcTopUp={setMcTopUp} bulkTopUp={bulkTopUp} setBulkTopUp={setBulkTopUp} topUpLoading={topUpLoading} setTopUpLoading={setTopUpLoading} onTopUp={onTopUp} onClose={()=>setShowMCModal(false)}/>}
+        </div>
+    );
+};
 
-                // ── Required top-up per loan to restore to original ratio ─────
-                const requiredTopUp = (r) => {
-                    if (!r.price || r.price <= 0 || r.loan.collateralAmount <= 0) return 0;
-                    const targetCollVal = r.loan.loanAmount * (r.loan.originalCollateralRatio / 100);
-                    const currentCollVal = r.loan.collateralAmount * r.price;
-                    const deficit = Math.max(0, targetCollVal - currentCollVal);
-                    return deficit / r.price; // in collateral units (BTC/ETH)
-                };
-
-                // ── Recompute proportional split when bulk input changes ───────
-                const applyBulkSplit = (ccy, totalStr) => {
-                    const total = parseFloat(totalStr);
-                    if (isNaN(total) || total <= 0) return;
-                    // Checked loans for this currency
-                    const checked = mcLoans.filter(r =>
-                        r.loan.collateralType === ccy &&
-                        mcTopUp[r.loan.id]?.checked
-                    );
-                    if (!checked.length) return;
-
-                    const required = checked.map(r => ({ r, req: requiredTopUp(r) }));
-                    const sumRequired = required.reduce((s, x) => s + x.req, 0);
-
-                    let splits = {};
-                    if (total <= sumRequired) {
-                        // Not enough to fully restore all — split proportionally by required
-                        required.forEach(({ r, req }) => {
-                            splits[r.loan.id] = sumRequired > 0
-                                ? (Math.floor((total * req / sumRequired) * 1e8) / 1e8).toFixed(8)
-                                : '0';
-                        });
-                    } else {
-                        // Enough to fully restore — first fill required, then split excess by loan size
-                        const excess = total - sumRequired;
-                        const sumLoan = checked.reduce((s, r) => s + r.loan.loanAmount, 0);
-                        required.forEach(({ r, req }) => {
-                            const extraShare = sumLoan > 0 ? excess * (r.loan.loanAmount / sumLoan) : 0;
-                            splits[r.loan.id] = (Math.floor((req + extraShare) * 1e8) / 1e8).toFixed(8);
-                        });
-                    }
-                    setMcTopUp(prev => {
-                        const next = { ...prev };
-                        Object.entries(splits).forEach(([id, amt]) => {
-                            next[id] = { ...(next[id] || {}), amount: amt };
-                        });
-                        return next;
-                    });
-                };
-
-                // ── Apply all non-zero top-ups ────────────────────────────────
-                const applyTopUps = async () => {
-                    if (!onTopUp) return;
-                    setTopUpLoading(true);
-                    const toApply = mcLoans.filter(r => {
-                        const amt = parseFloat(mcTopUp[r.loan.id]?.amount);
-                        return !isNaN(amt) && amt > 0;
-                    });
-                    for (const r of toApply) {
-                        const amt = parseFloat(mcTopUp[r.loan.id].amount);
-                        await onTopUp(r.loan.id, 'Collateral Top-up', amt);
-                    }
-                    // Clear inputs after apply
-                    setMcTopUp({});
-                    setBulkTopUp({});
-                    setTopUpLoading(false);
-                };
-
-                const anyTopUp = mcLoans.some(r => {
-                    const amt = parseFloat(mcTopUp[r.loan.id]?.amount);
-                    return !isNaN(amt) && amt > 0;
-                });
-
-                return (
-                <div className="card p-4 mb-3 border border-orange-500/20">
-                    <div className="flex justify-between items-center mb-3">
-                        <p className="text-sm font-semibold text-orange-400">Margin Call Distances — All Active Loans</p>
-                        <button onClick={()=>setShowMCModal(false)} className="text-slate-500 hover:text-slate-300 text-lg">✕</button>
-                    </div>
-
-                    {/* Bulk top-up inputs per currency */}
-                    {collCcys.length > 0 && (
-                        <div className="flex flex-wrap gap-4 mb-3 p-3 bg-slate-800/40 rounded-lg border border-slate-700/40">
-                            <span className="text-xs text-slate-400 font-medium self-center">Bulk Top-up:</span>
-                            {collCcys.map(ccy => (
-                                <div key={ccy} className="flex items-center gap-2">
-                                    <span className="text-xs text-slate-400">{ccy}</span>
-                                    <input
-                                        type="number" step="0.00000001" min="0"
-                                        value={bulkTopUp[ccy]||''}
-                                        onChange={e => setBulkTopUp(p=>({...p,[ccy]:e.target.value}))}
-                                        placeholder={`Total ${ccy} to distribute`}
-                                        className="w-44 px-2 py-1 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-slate-200 mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"/>
-                                    <button
-                                        onClick={() => applyBulkSplit(ccy, bulkTopUp[ccy]||'')}
-                                        className="px-2 py-1 bg-cyan-700/30 hover:bg-cyan-700/50 border border-cyan-600/30 rounded text-xs text-cyan-400 transition-colors">
-                                        Split
-                                    </button>
-                                </div>
-                            ))}
-                            <p className="text-[10px] text-slate-500 self-center">Check rows below, enter total, click Split to auto-divide proportionally</p>
-                        </div>
-                    )}
-
-                    <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
-                        <thead>
-                            <tr className="border-b border-slate-700 text-slate-400">
-                                <th className="pb-2 w-6"></th>
-                                <th className="text-left pb-2">Counterparty</th>
-                                <th className="text-left pb-2">Loan ID</th>
-                                <th className="text-right pb-2">Loan Amount</th>
-                                <th className="text-right pb-2">Collateral</th>
-                                <th className="text-right pb-2">Current Price</th>
-                                <th className="text-right pb-2">Ratio %</th>
-                                <th className="text-right pb-2">MC Price</th>
-                                <th className="text-right pb-2">Buffer $</th>
-                                <th className="text-right pb-2">Buffer %</th>
-                                <th className="text-right pb-2">Top-up ({mcLoans[0]?.loan.collateralType||''})</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {mcLoans.map(r => {
-                                const isChecked = !!(mcTopUp[r.loan.id]?.checked);
-                                const topUpVal  = mcTopUp[r.loan.id]?.amount || '';
-                                const req       = requiredTopUp(r);
-                                return (
-                                <tr key={r.loan.id} className={`border-b border-slate-800/50 ${r.atRisk?'bg-red-900/10':isChecked?'bg-cyan-900/10':''}`}>
-                                    <td className="py-2 pr-2">
-                                        <input type="checkbox" checked={isChecked}
-                                            onChange={e => setMcTopUp(prev => ({
-                                                ...prev,
-                                                [r.loan.id]: { ...(prev[r.loan.id]||{}), checked: e.target.checked }
-                                            }))}
-                                            className="accent-cyan-500 cursor-pointer"/>
-                                    </td>
-                                    <td className="py-2 text-slate-300">{r.loan.counterparty}</td>
-                                    <td className="py-2 mono text-slate-400 text-[11px]">{r.loan.id}</td>
-                                    <td className="py-2 text-right mono text-slate-300">
-                                        {loanIsCrypto(r.loan)
-                                            ? `${(Math.floor(r.loan.loanAmount*1e8)/1e8).toFixed(8)} ${r.loan.underlying}`
-                                            : `$${fmt(r.loan.loanAmount,0)} ${r.loan.underlying||''}`}
-                                    </td>
-                                    <td className="py-2 text-right mono text-slate-300">
-                                        {r.loan.collateralAmount>0
-                                            ? `${(Math.floor(r.loan.collateralAmount*1e8)/1e8).toFixed(8)} ${r.loan.collateralType}`
-                                            : '—'}
-                                    </td>
-                                    <td className="py-2 text-right mono text-slate-300">${fmt(r.price,0)}</td>
-                                    <td className="py-2 text-right mono text-slate-300">{fmt(r.ratio,1)}%</td>
-                                    <td className="py-2 text-right mono text-orange-400">${fmt(r.mcPrice,0)}</td>
-                                    <td className={`py-2 text-right mono ${r.atRisk?'text-red-400':r.pctDrop<10?'text-amber-400':'text-green-400'}`}>
-                                        {r.atRisk?'BREACHED':'$'+fmt(r.absDrop,0)}
-                                    </td>
-                                    <td className={`py-2 text-right mono font-medium ${r.atRisk?'text-red-400':r.pctDrop<10?'text-amber-400':'text-green-400'}`}>
-                                        {r.atRisk?'BREACHED':fmt(r.pctDrop,1)+'%'}
-                                    </td>
-                                    <td className="py-2 text-right">
-                                        <div className="flex flex-col items-end gap-0.5">
-                                            <input
-                                                type="number" step="0.00000001" min="0"
-                                                value={topUpVal}
-                                                onChange={e => setMcTopUp(prev => ({
-                                                    ...prev,
-                                                    [r.loan.id]: { ...(prev[r.loan.id]||{}), amount: e.target.value }
-                                                }))}
-                                                placeholder="0.00000000"
-                                                className="w-32 px-2 py-0.5 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-slate-200 mono text-right focus:outline-none focus:border-green-500/60 placeholder-slate-600"/>
-                                            {req > 0 && (
-                                                <span className="text-[9px] text-slate-600 mono">
-                                                    need {(Math.floor(req*1e8)/1e8).toFixed(8)}
-                                                </span>
-                                            )}
-                                        </div>
-                                    </td>
-                                </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                    </div>
-
-                    {/* Apply button */}
-                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700/40">
-                        <p className="text-xs text-slate-500">
-                            {mcLoans.filter(r=>{const a=parseFloat(mcTopUp[r.loan.id]?.amount);return !isNaN(a)&&a>0;}).length} loan(s) with top-up entered
-                        </p>
-                        <button
-                            onClick={applyTopUps}
-                            disabled={!anyTopUp||topUpLoading}
-                            className="px-4 py-1.5 bg-green-700/30 hover:bg-green-700/50 border border-green-600/40 rounded text-xs text-green-400 font-medium transition-colors disabled:opacity-40 flex items-center gap-2">
-                            {topUpLoading ? '⟳ Applying...' : '✓ Apply Top-ups'}
-                        </button>
-                    </div>
+// ─── Loan transaction list with expand/collapse ──────────────────────────────
+const TxnList = ({txns}) => {
+    const [showAll, setShowAll] = React.useState(false);
+    if (!txns || txns.length === 0) return null;
+    const displayed = showAll ? [...txns].reverse() : txns.slice(-3).reverse();
+    return (
+        <div className="mt-3 pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-slate-500">Recent transactions</p>
+                {txns.length > 3 && (
+                    <button onClick={()=>setShowAll(v=>!v)}
+                        className="text-[10px] text-cyan-500 hover:text-cyan-400 transition-colors">
+                        {showAll ? 'Show less ▲' : `See all ${txns.length} ▼`}
+                    </button>
+                )}
+            </div>
+            {displayed.map(t=>(
+                <div key={t.id} className="flex justify-between text-xs text-slate-400 mono">
+                    <span>{t.type}: {t.amount}</span>
+                    <span>{fmtDateTimeSGT(t.timestamp)}</span>
                 </div>
-                );
-            })()}
+            ))}
         </div>
     );
 };
@@ -1651,7 +1493,7 @@ const LoanModule = ({prices}) => {
                                     <button onClick={()=>setShowTxn({loanId:loan.id,type:'Loan Repayment'})} className="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/30 rounded-lg text-xs text-blue-400 flex items-center gap-1 transition-colors"><Icon.Plus/>Loan Repayment</button>
                                     <button onClick={()=>setShowTxn({loanId:loan.id,type:'Interest Payment'})} className="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 rounded-lg text-xs text-purple-400 flex items-center gap-1 transition-colors"><Icon.Plus/>Interest Payment</button>
                                 </div>
-                                {txns.length>0&&<div className="mt-3 pt-3 border-t border-slate-800"><p className="text-xs text-slate-500 mb-2">Recent transactions</p>{txns.slice(-3).reverse().map(t=><div key={t.id} className="flex justify-between text-xs text-slate-400 mono"><span>{t.type}: {t.amount}</span><span>{fmtDateTimeSGT(t.timestamp)}</span></div>)}</div>}
+                                <TxnList txns={txns}/>
                             </div>
                         );
                     })}
@@ -2643,11 +2485,7 @@ const SSPSLedger = ({contract, priceHistory, prices, onBack, onFetchPrice, onMan
                                             {row.partNotional>0 ? (
                                                 <span className="flex flex-col gap-0.5">
                                                     <span>${fmt(row.partNotional,2)}</span>
-                                                    {contract.discountFactor>0 && (()=>{
-                                                        const scale    = row.triggerHit ? contract.scalingFactor : 1;
-                                                        const deskCost = (contract.baseNotional * scale) / (1 - contract.discountFactor);
-                                                        return <span style={{background:'rgba(139,92,246,0.15)',color:'#a78bfa',border:'1px solid rgba(139,92,246,0.3)'}} className="text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap">Desk: ${fmt(deskCost,2)}</span>;
-                                                    })()}
+                                                    {contract.discountFactor>0 && (<span style={{background:'rgba(139,92,246,0.15)',color:'#a78bfa',border:'1px solid rgba(139,92,246,0.3)'}} className="text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap">Desk: ${fmt((contract.baseNotional*(row.triggerHit?contract.scalingFactor:1))/(1-contract.discountFactor),2)}</span>)}
                                                 </span>
                                             ) : isInitial ? <span className="text-slate-500">Initial fixing</span> : '—'}
                                         </td>
@@ -4586,6 +4424,7 @@ const accTradeToRow = (t) => [
     t.barrierStartDate||t.tradeDate||'',  // col 23
     parseInt(t.guaranteedPeriods)||0,      // col 24
     t.cpTradeId||'',                       // col 25
+    t.remainingNotional!==undefined ? t.remainingNotional : '', // col 26
 ];
 
 const accRowToTrade = (r) => ({
@@ -4614,7 +4453,22 @@ const accRowToTrade = (r) => ({
     barrierStartDate: r[23] || '',
     guaranteedPeriods: parseInt(r[24]) || 0,
     cpTradeId: r[25] || '',
+    remainingNotional: r[26] !== undefined && r[26] !== '' ? parseFloat(r[26]) : undefined,
 });
+
+// ─── KO MONITOR PANEL COMPONENT ──────────────────────────────────────────────
+const KOMonitorPanel = ({activeTrades, portfolioTotals, prices}) => {
+    const today=todayUTC();
+    const bc=(p)=>p===null?'text-slate-500':Math.abs(p)<5?'text-red-400':Math.abs(p)<15?'text-amber-400':'text-green-400';
+    const bb=(p)=>p===null?'bg-slate-600':Math.abs(p)<5?'bg-red-500':Math.abs(p)<15?'bg-amber-500':'bg-green-500';
+    const km=activeTrades.filter(t=>t.knockOutEnabled&&parseFloat(t.knockOutPrice)>0&&(!t.barrierStartDate||t.barrierStartDate<=today)).map(t=>{const pair=t.underlyingPair||'',q=pair.split('/')[1]||'USDT',lp=q==='USDC'?(prices[pair]||0):(prices[accBaseAsset(pair)]||0),kp=parseFloat(t.knockOutPrice),dd=lp>0?kp-lp:null,pd=lp>0?((kp-lp)/lp)*100:null;return{t,lp,kp,dd,pd,pair};}).sort((a,b)=>a.pd===null?1:b.pd===null?-1:Math.abs(a.pd)-Math.abs(b.pd)).slice(0,3);
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-3">
+            {Object.entries(portfolioTotals).map(([ccy,{original,remaining}])=>(<div key={ccy} className="card p-4"><p className="text-xs text-slate-400 mb-1 font-medium">Active Notional — {ccy}</p><p className="text-xl font-bold mono text-white">{ccy} {fmt(remaining,2)}</p><div className="mt-2 h-1.5 bg-slate-800 rounded-full overflow-hidden"><div className="h-full bg-violet-500 rounded-full" style={{width:`${Math.min(100,(remaining/original)*100)}%`}}/></div><p className="text-xs text-slate-500 mt-1">{fmt((remaining/original)*100,1)}% remaining · {activeTrades.filter(t=>t.notionalCurrency===ccy).length} trade(s)</p></div>))}
+            {km.length>0&&(<div className="card p-4"><p className="text-xs text-slate-400 mb-3 font-medium flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-orange-400 inline-block"/>KO Monitor — Nearest 3</p><div className="space-y-3">{km.map(({t,lp,kp,dd,pd,pair},idx)=>(<div key={t.id}><div className="flex items-center justify-between mb-0.5"><div className="flex items-center gap-1.5"><span className="text-[10px] text-slate-500 font-medium">#{idx+1}</span><span className="text-xs font-medium text-slate-200 truncate max-w-[100px]">{t.clientName}</span><span className="text-[10px] text-slate-500">{pair}</span></div><span className={`text-xs font-bold mono ${bc(pd)}`}>{pd!==null?`${pd>0?'+':''}${fmt(pd,2)}%`:'—'}</span></div><div className="flex items-center gap-2 text-[10px] mono mb-1 flex-wrap"><span className="text-slate-500">Live: <span className="text-slate-300">{lp>0?'$'+fmt(lp,2):'—'}</span></span><span className="text-slate-600">→</span><span className="text-orange-400">KO: ${fmt(kp,2)}</span>{dd!==null&&<span className={bc(pd)}>(${fmt(Math.abs(dd),0)} away)</span>}</div><div className="h-1 bg-slate-800 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${bb(pd)}`} style={{width:pd!==null?`${Math.min(100,Math.max(2,100-Math.abs(pd)*3))}%`:'0%'}}/></div>{idx<km.length-1&&<div className="border-t border-slate-800/60 mt-3"/>}</div>))}</div>{activeTrades.filter(t=>t.knockOutEnabled&&(!t.barrierStartDate||t.barrierStartDate<=today)).length>3&&<p className="text-[10px] text-slate-600 mt-3">+{activeTrades.filter(t=>t.knockOutEnabled&&(!t.barrierStartDate||t.barrierStartDate<=today)).length-3} more not shown</p>}{activeTrades.filter(t=>t.knockOutEnabled&&t.barrierStartDate&&t.barrierStartDate>today).map(t=>(<div key={t.id} className="mt-2 pt-2 border-t border-slate-800/60 text-[10px] text-slate-500 flex items-center gap-1.5"><span className="px-1 py-0.5 bg-slate-700/50 rounded text-slate-400">KO inactive</span><span className="truncate">{t.clientName}</span><span className="text-slate-600">barrier from {t.barrierStartDate}</span></div>))}</div>)}
+        </div>
+    );
+};
 
 // ─── ACCUMULATOR DASHBOARD ────────────────────────────────────────────────────
 const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, onScrollToTrade}) => {
@@ -4724,105 +4578,7 @@ const AccumulatorDashboard = ({trades, prices, onConfirmFixing, onFetchPrice, on
             </div>
 
             {/* Portfolio summary + KO Monitor */}
-            {(Object.keys(portfolioTotals).length > 0 || activeTrades.some(t=>t.knockOutEnabled)) && (()=>{
-                const todayForKO = todayUTC();
-                const koMonitor = activeTrades
-                    .filter(t => t.knockOutEnabled && parseFloat(t.knockOutPrice) > 0
-                        && (!t.barrierStartDate || t.barrierStartDate <= todayForKO))
-                    .map(t => {
-                        const pair = t.underlyingPair || '';
-                        const quote = pair.split('/')[1] || 'USDT';
-                        const livePrice = quote === 'USDC' ? (prices[pair] || 0) : (prices[accBaseAsset(pair)] || 0);
-                        const koPrice = parseFloat(t.knockOutPrice);
-                        const dollarDist = livePrice > 0 ? koPrice - livePrice : null;
-                        const pctDist    = livePrice > 0 ? ((koPrice - livePrice) / livePrice) * 100 : null;
-                        return { t, livePrice, koPrice, dollarDist, pctDist, pair };
-                    })
-                    .sort((a, b) => {
-                        if (a.pctDist === null && b.pctDist === null) return 0;
-                        if (a.pctDist === null) return 1;
-                        if (b.pctDist === null) return -1;
-                        return Math.abs(a.pctDist) - Math.abs(b.pctDist);
-                    })
-                    .slice(0, 3);
-
-                const koBufColor = (pct) => {
-                    if (pct === null) return 'text-slate-500';
-                    const abs = Math.abs(pct);
-                    if (abs < 5)  return 'text-red-400';
-                    if (abs < 15) return 'text-amber-400';
-                    return 'text-green-400';
-                };
-                const koBufBar = (pct) => {
-                    if (pct === null) return 'bg-slate-600';
-                    const abs = Math.abs(pct);
-                    if (abs < 5)  return 'bg-red-500';
-                    if (abs < 15) return 'bg-amber-500';
-                    return 'bg-green-500';
-                };
-
-                return (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-3">
-                        {Object.entries(portfolioTotals).map(([ccy,{original,remaining}])=>(
-                            <div key={ccy} className="card p-4">
-                                <p className="text-xs text-slate-400 mb-1 font-medium">Active Notional — {ccy}</p>
-                                <p className="text-xl font-bold mono text-white">{ccy} {fmt(remaining,2)}</p>
-                                <div className="mt-2 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                                    <div className="h-full bg-violet-500 rounded-full" style={{width:`${Math.min(100,(remaining/original)*100)}%`}}/>
-                                </div>
-                                <p className="text-xs text-slate-500 mt-1">{fmt((remaining/original)*100,1)}% remaining of {ccy} {fmt(original,2)} original · {activeTrades.filter(t=>t.notionalCurrency===ccy).length} trade(s)</p>
-                            </div>
-                        ))}
-                        {koMonitor.length > 0 && (
-                            <div className="card p-4">
-                                <p className="text-xs text-slate-400 mb-3 font-medium flex items-center gap-1.5">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-orange-400 inline-block"/>
-                                    KO Monitor — Nearest 3
-                                </p>
-                                <div className="space-y-3">
-                                    {koMonitor.map(({t, livePrice, koPrice, dollarDist, pctDist, pair}, idx) => (
-                                        <div key={t.id}>
-                                            <div className="flex items-center justify-between mb-0.5">
-                                                <div className="flex items-center gap-1.5">
-                                                    <span className="text-[10px] text-slate-500 font-medium">#{idx+1}</span>
-                                                    <span className="text-xs font-medium text-slate-200 truncate max-w-[100px]">{t.clientName}</span>
-                                                    <span className="text-[10px] text-slate-500">{pair}</span>
-                                                </div>
-                                                <span className={`text-xs font-bold mono ${koBufColor(pctDist)}`}>
-                                                    {pctDist !== null ? `${pctDist > 0 ? '+' : ''}${fmt(pctDist,2)}%` : '—'}
-                                                </span>
-                                            </div>
-                                            <div className="flex items-center gap-2 text-[10px] mono mb-1 flex-wrap">
-                                                <span className="text-slate-500">Live: <span className="text-slate-300">{livePrice > 0 ? '$'+fmt(livePrice,2) : '—'}</span></span>
-                                                <span className="text-slate-600">→</span>
-                                                <span className="text-orange-400">KO: ${fmt(koPrice,2)}</span>
-                                                {dollarDist !== null && <span className={koBufColor(pctDist)}>(${fmt(Math.abs(dollarDist),0)} away)</span>}
-                                            </div>
-                                            <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
-                                                <div
-                                                    className={`h-full rounded-full transition-all ${koBufBar(pctDist)}`}
-                                                    style={{width: pctDist !== null ? `${Math.min(100, Math.max(2, 100 - Math.abs(pctDist) * 3))}%` : '0%'}}
-                                                />
-                                            </div>
-                                            {idx < koMonitor.length - 1 && <div className="border-t border-slate-800/60 mt-3"/>}
-                                        </div>
-                                    ))}
-                                </div>
-                                {activeTrades.filter(t=>t.knockOutEnabled && (!t.barrierStartDate || t.barrierStartDate <= todayForKO)).length > 3 && (
-                                    <p className="text-[10px] text-slate-600 mt-3">+{activeTrades.filter(t=>t.knockOutEnabled && (!t.barrierStartDate||t.barrierStartDate<=todayForKO)).length - 3} more KO trades not shown</p>
-                                )}
-                                {activeTrades.filter(t=>t.knockOutEnabled && t.barrierStartDate && t.barrierStartDate > todayForKO).map(t=>(
-                                    <div key={t.id} className="mt-2 pt-2 border-t border-slate-800/60 text-[10px] text-slate-500 flex items-center gap-1.5">
-                                        <span className="px-1 py-0.5 bg-slate-700/50 rounded text-slate-400">KO inactive</span>
-                                        <span className="truncate">{t.clientName}</span>
-                                        <span className="text-slate-600">barrier from {t.barrierStartDate}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                );
-            })()}
+            {(Object.keys(portfolioTotals).length > 0 || activeTrades.some(t=>t.knockOutEnabled)) && (<KOMonitorPanel activeTrades={activeTrades} portfolioTotals={portfolioTotals} prices={prices}/>)}
 
             {/* Settlements table renderer — shared by overdue and upcoming */}
             {(()=>{
@@ -5862,9 +5618,11 @@ const AccumulatorModule = ({prices}) => {
         };
 
         // Mark fixing as confirmed in object
+        // Use remainingAfterLog (correct running notional balance) not amounts.remaining
+        // which is 0 for non-KO events.
         fixings[date] = {...(fixings[date]||{}), price: fp, scenario, confirmed: true, isKO,
-            cryptoDelivery: cryptoQty, baseReturned: baseAmount, remainingAfter};
-        const updatedTrade = {...trade, fixings, status:newStatus};
+            cryptoDelivery: cryptoQty, baseReturned: baseAmount, remainingAfter: remainingAfterLog};
+        const updatedTrade = {...trade, fixings, status:newStatus, remainingNotional: remainingAfterLog};
 
         // Update state and push trade
         setTrades(prev => prev.map(t => t.id === tradeId ? updatedTrade : t));
@@ -5987,6 +5745,25 @@ const AccumulatorModule = ({prices}) => {
     );
 };
 
+
+// ─── TRS ASSET BREAKDOWN COMPONENT ──────────────────────────────────────────
+const TRSAssetBreakdown = ({assets, totalNav, bybitPrices}) => {
+    const usd=(c,b)=>{const v=parseFloat(b)||0;return c==='BTC'?v*(bybitPrices.BTC||0):c==='ETH'?v*(bybitPrices.ETH||0):['USDT','USDC','BUSD','DAI'].includes(c)?v:0;};
+    const pill=(c)=>c==='BTC'?'bg-orange-500/15 border-orange-500/30 text-orange-400':c==='ETH'?'bg-purple-500/15 border-purple-500/30 text-purple-400':['USDT','USDC','BUSD','DAI'].includes(c)?'bg-green-500/15 border-green-500/30 text-green-400':'bg-cyan-500/15 border-cyan-500/30 text-cyan-400';
+    const barcl=(c)=>c==='BTC'?'bg-orange-500':c==='ETH'?'bg-purple-500':['USDT','USDC','BUSD','DAI'].includes(c)?'bg-green-500':'bg-cyan-500';
+    const rows=assets.map(a=>({...a,u:usd(a.coin,a.walletBalance)})).sort((a,b)=>b.u-a.u);
+    const sU=rows.reduce((s,a)=>s+a.u,0),mtm=totalNav-sU,mP=totalNav>0?(mtm/totalNav)*100:0;
+    return (
+        <div className="card overflow-hidden">
+            <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between"><p className="text-sm font-semibold text-slate-300">Asset Breakdown</p><p className="text-xs text-slate-500">USD value = wallet balance x live Bybit price</p></div>
+            <div className="overflow-x-auto scrollbar-hide"><table className="w-full text-sm">
+                <thead><tr className="border-b border-slate-800 bg-slate-900/40 text-xs text-slate-400 font-medium"><th className="text-left px-5 py-3">Asset</th><th className="text-right px-5 py-3">Wallet Balance</th><th className="text-right px-5 py-3">USD Value</th><th className="text-right px-5 py-3 min-w-[160px]">% of NAV</th></tr></thead>
+                <tbody>{rows.map((a,i)=>{const isS=['USDT','USDC','BUSD','DAI'].includes(a.coin),pct=totalNav>0?(a.u/totalNav)*100:0;return(<tr key={a.coin} className={`border-b border-slate-800/50 ${i%2===1?'bg-slate-900/20':''}`}><td className="px-5 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold border ${pill(a.coin)}`}>{a.coin}</span></td><td className="px-5 py-3 text-right mono text-slate-300">{isS?fmt(parseFloat(a.walletBalance),2):fmtCrypto(parseFloat(a.walletBalance),8)}</td><td className="px-5 py-3 text-right mono text-white font-semibold">${fmt(a.u,2)}</td><td className="px-5 py-3 text-right"><div className="flex items-center justify-end gap-2"><div className="w-28 h-1.5 bg-slate-800 rounded-full overflow-hidden"><div className={`h-full rounded-full ${barcl(a.coin)}`} style={{width:`${Math.min(100,pct)}%`}}/></div><span className="text-xs mono text-slate-400 w-14 text-right">{fmt(pct,1)}%</span></div></td></tr>);})}</tbody>
+                <tfoot>{Math.abs(mtm)>0.01&&(<tr className="border-t border-slate-700/50 bg-slate-900/20"><td className="px-5 py-3 text-sm text-slate-400 italic">Open Positions (MTM)</td><td className="px-5 py-3 text-right mono text-slate-500 text-xs italic">unrealised PnL</td><td className={`px-5 py-3 text-right mono font-semibold italic ${mtm>=0?'text-green-400':'text-red-400'}`}>{mtm>=0?'+':''}{fmt(mtm,2)}</td><td className={`px-5 py-3 text-right mono text-xs italic ${mtm>=0?'text-green-400':'text-red-400'}`}>{mP>=0?'+':''}{fmt(mP,3)}%</td></tr>)}<tr className="border-t border-slate-600 bg-slate-900/30"><td colSpan="2" className="px-5 py-3 text-sm font-bold text-slate-200">Total NAV</td><td className="px-5 py-3 text-right mono text-white font-bold">${fmt(totalNav,2)}</td><td className="px-5 py-3 text-right mono text-slate-400 text-xs">100.0%</td></tr></tfoot>
+            </table></div>
+        </div>
+    );
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TRS MODULE — Total Return Swap · Bybit Subaccount SMA01
@@ -6307,84 +6084,7 @@ const TRSModule = ({bybitPrices}) => {
                     </div>
 
                     {/* Asset breakdown — simplified, USD value from live prices */}
-                    {data.assets && data.assets.length > 0 && (()=>{
-                        const assetsWithUsd = data.assets
-                            .map(a=>({...a, computedUsd: computeUsdValue(a.coin, a.walletBalance)}))
-                            .sort((a,b)=>b.computedUsd-a.computedUsd);
-                        return (
-                            <div className="card overflow-hidden">
-                                <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-                                    <p className="text-sm font-semibold text-slate-300">Asset Breakdown</p>
-                                    <p className="text-xs text-slate-500">USD value = wallet balance × live Bybit price</p>
-                                </div>
-                                <div className="overflow-x-auto scrollbar-hide">
-                                    <table className="w-full text-sm">
-                                        <thead>
-                                            <tr className="border-b border-slate-800 bg-slate-900/40 text-xs text-slate-400 font-medium">
-                                                <th className="text-left px-5 py-3">Asset</th>
-                                                <th className="text-right px-5 py-3">Wallet Balance</th>
-                                                <th className="text-right px-5 py-3">USD Value</th>
-                                                <th className="text-right px-5 py-3 min-w-[160px]">% of NAV</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {assetsWithUsd.map((asset,i)=>{
-                                                const isStable = ['USDT','USDC','BUSD','DAI'].includes(asset.coin);
-                                                const pct = data.totalNav>0?(asset.computedUsd/data.totalNav)*100:0;
-                                                return (
-                                                    <tr key={asset.coin} className={`border-b border-slate-800/50 ${i%2===1?'bg-slate-900/20':''}`}>
-                                                        <td className="px-5 py-3">
-                                                            <span className={`px-2 py-0.5 rounded text-xs font-bold border ${assetPillStyle(asset.coin)}`}>{asset.coin}</span>
-                                                        </td>
-                                                        <td className="px-5 py-3 text-right mono text-slate-300">
-                                                            {isStable?fmt(parseFloat(asset.walletBalance),2):fmtCrypto(parseFloat(asset.walletBalance),8)}
-                                                        </td>
-                                                        <td className="px-5 py-3 text-right mono text-white font-semibold">
-                                                            ${fmt(asset.computedUsd,2)}
-                                                        </td>
-                                                        <td className="px-5 py-3 text-right">
-                                                            <div className="flex items-center justify-end gap-2">
-                                                                <div className="w-28 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                                                                    <div className={`h-full rounded-full ${barColor(asset.coin)}`} style={{width:`${Math.min(100,pct)}%`}}/>
-                                                                </div>
-                                                                <span className="text-xs mono text-slate-400 w-14 text-right">{fmt(pct,1)}%</span>
-                                                            </div>
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                        <tfoot>
-                                            {(()=>{
-                                                const sumUsd = assetsWithUsd.reduce((s,a)=>s+a.computedUsd,0);
-                                                const mtm    = data.totalNav - sumUsd;
-                                                const mtmPct = data.totalNav > 0 ? (mtm / data.totalNav) * 100 : 0;
-                                                return (<>
-                                                    {Math.abs(mtm) > 0.01 && (
-                                                        <tr className="border-t border-slate-700/50 bg-slate-900/20">
-                                                            <td className="px-5 py-3 text-sm text-slate-400 italic">Open Positions (MTM)</td>
-                                                            <td className="px-5 py-3 text-right mono text-slate-500 text-xs italic">unrealised PnL</td>
-                                                            <td className={`px-5 py-3 text-right mono font-semibold italic ${mtm>=0?'text-green-400':'text-red-400'}`}>
-                                                                {mtm>=0?'+':''}{fmt(mtm,2)}
-                                                            </td>
-                                                            <td className={`px-5 py-3 text-right mono text-xs italic ${mtm>=0?'text-green-400':'text-red-400'}`}>
-                                                                {mtmPct>=0?'+':''}{fmt(mtmPct,3)}%
-                                                            </td>
-                                                        </tr>
-                                                    )}
-                                                    <tr className="border-t border-slate-600 bg-slate-900/30">
-                                                        <td colSpan="2" className="px-5 py-3 text-sm font-bold text-slate-200">Total NAV</td>
-                                                        <td className="px-5 py-3 text-right mono text-white font-bold">${fmt(data.totalNav,2)}</td>
-                                                        <td className="px-5 py-3 text-right mono text-slate-400 text-xs">100.0%</td>
-                                                    </tr>
-                                                </>);
-                                            })()}
-                                        </tfoot>
-                                    </table>
-                                </div>
-                            </div>
-                        );
-                    })()}
+                    {data.assets && data.assets.length > 0 && (<TRSAssetBreakdown assets={data.assets} totalNav={data.totalNav} bybitPrices={bybitPrices}/>)}
                 </>
             )}
         </div>
@@ -6739,23 +6439,16 @@ const DCIModule = ({deribitPrices={}}) => {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {(()=>{
+                                                        {ladder.callRows.map((row, i) => {
                                                             const livePrice = deribitPrices && deribitPrices[asset];
-                                                            return ladder.callRows.map((row, i) => {
-                                                                const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
-                                                                return (
-                                                                    <tr key={i} className={`border-b border-slate-800/40 transition-colors ${isActive ? 'bg-green-900/25 border-l-2 border-l-green-400' : 'hover:bg-slate-700/20'}`}>
-                                                                        <td className={`py-1.5 mono ${isActive ? 'text-green-300 font-semibold' : 'text-slate-300'}`}>
-                                                                            {row.label}
-                                                                            {isActive && <span className="ml-2 text-[10px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded">← live</span>}
-                                                                        </td>
-                                                                        <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-green-300' : 'text-green-400'}`}>
-                                                                            {row.isZero ? '—' : (Math.floor(row.qty*1e8)/1e8).toFixed(8) + ' ' + asset}
-                                                                        </td>
-                                                                    </tr>
-                                                                );
-                                                            });
-                                                        })()}
+                                                            const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
+                                                            return (
+                                                                <tr key={i} className={`border-b border-slate-800/40 ${isActive ? 'bg-green-900/25 border-l-2 border-l-green-400' : 'hover:bg-slate-700/20'}`}>
+                                                                    <td className={`py-1.5 mono ${isActive ? 'text-green-300 font-semibold' : 'text-slate-300'}`}>{row.label}{isActive && <span className="ml-2 text-[10px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded">← live</span>}</td>
+                                                                    <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-green-300' : 'text-green-400'}`}>{row.isZero ? '—' : (Math.floor(row.qty*1e8)/1e8).toFixed(8) + ' ' + asset}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
                                                     </tbody>
                                                 </table>
                                             </div>
@@ -6775,31 +6468,20 @@ const DCIModule = ({deribitPrices={}}) => {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {(()=>{
+                                                        {ladder.putRows.map((row, i) => {
                                                             const livePrice = deribitPrices && deribitPrices[asset];
-                                                            return ladder.putRows.map((row, i) => {
-                                                                const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
-                                                                return (
-                                                                    <tr key={i} className={`border-b border-slate-800/40 transition-colors ${isActive ? 'bg-red-900/25 border-l-2 border-l-red-400' : 'hover:bg-slate-700/20'}`}>
-                                                                        <td className={`py-1.5 mono ${isActive ? 'text-red-300 font-semibold' : 'text-slate-300'}`}>
-                                                                            {row.label}
-                                                                            {isActive && <span className="ml-2 text-[10px] bg-red-500/20 text-red-400 px-1 py-0.5 rounded">← live</span>}
-                                                                        </td>
-                                                                        <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-red-300' : 'text-red-400'}`}>
-                                                                            {(()=>{
-                                                                            if (row.isZero) return '—';
-                                                                            const cryptoQty  = Math.floor(row.qty*1e8)/1e8;
-                                                                            const stableAmt  = livePrice ? cryptoQty * livePrice : null;
-                                                                            return (<>
-                                                                                <span>{cryptoQty.toFixed(8)} {asset}</span>
-                                                                                {stableAmt && <span className="ml-1 text-slate-500 text-[10px]">({fmt(stableAmt,0)} USDT)</span>}
-                                                                            </>);
-                                                                        })()}
-                                                                        </td>
-                                                                    </tr>
-                                                                );
-                                                            });
-                                                        })()}
+                                                            const isActive = livePrice && livePrice >= row.lo && livePrice < row.hi;
+                                                            const cryptoQty = row.isZero ? 0 : Math.floor(row.qty*1e8)/1e8;
+                                                            const stableAmt = (!row.isZero && livePrice) ? cryptoQty * livePrice : null;
+                                                            return (
+                                                                <tr key={i} className={`border-b border-slate-800/40 ${isActive ? 'bg-red-900/25 border-l-2 border-l-red-400' : 'hover:bg-slate-700/20'}`}>
+                                                                    <td className={`py-1.5 mono ${isActive ? 'text-red-300 font-semibold' : 'text-slate-300'}`}>{row.label}{isActive && <span className="ml-2 text-[10px] bg-red-500/20 text-red-400 px-1 py-0.5 rounded">← live</span>}</td>
+                                                                    <td className={`py-1.5 mono text-right font-medium ${row.isZero ? 'text-slate-600' : isActive ? 'text-red-300' : 'text-red-400'}`}>
+                                                                        {row.isZero ? '—' : (<>{cryptoQty.toFixed(8)} {asset}{stableAmt && <span className="ml-1 text-slate-500 text-[10px]">({fmt(stableAmt,0)} USDT)</span>}</>)}
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
                                                     </tbody>
                                                 </table>
                                             </div>
