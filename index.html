@@ -1283,48 +1283,41 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                     </table>
                     </div>
 
-                    {/* Totals row + Apply button */}
-                    {(()=>{
-                        // Sum per currency — show total of all non-zero amounts entered
-                        const totalsMap = {};
-                        mcLoans.forEach(r => {
-                            const amt = parseFloat(mcTopUp[r.loan.id]?.amount);
-                            if (isNaN(amt) || amt === 0) return;
-                            const ccy = r.loan.collateralType;
-                            totalsMap[ccy] = (totalsMap[ccy] || 0) + amt;
-                        });
-                        const hasTotals = Object.keys(totalsMap).length > 0;
-                        const activeLoanCount = mcLoans.filter(r=>{const a=parseFloat(mcTopUp[r.loan.id]?.amount);return !isNaN(a)&&a!==0;}).length;
-                        return (
-                            <>
-                            {hasTotals && (
-                                <div className="mt-2 px-2 py-2 bg-slate-800/60 rounded-lg border border-slate-700/40 flex flex-wrap items-center gap-4">
-                                    <span className="text-xs text-slate-400 font-medium">Sum of entered amounts:</span>
-                                    {Object.entries(totalsMap).map(([ccy, sum]) => {
-                                        const isNeg = sum < 0;
-                                        return (
-                                            <span key={ccy} className={`mono text-sm font-bold ${isNeg ? 'text-red-400' : 'text-green-400'}`}>
-                                                {isNeg ? '' : '+'}{(Math.round(sum * 1e8) / 1e8).toFixed(8)} {ccy}
-                                            </span>
-                                        );
-                                    })}
-                                    <span className="text-[10px] text-slate-600 ml-auto">verify this matches your intended total before applying</span>
-                                </div>
-                            )}
-                            <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700/40">
-                                <p className="text-xs text-slate-500">
-                                    {activeLoanCount} loan{activeLoanCount!==1?'s':''} with amount entered
-                                </p>
-                                <button
-                                    onClick={applyTopUps}
-                                    disabled={!anyTopUp||topUpLoading}
-                                    className="px-4 py-1.5 bg-green-700/30 hover:bg-green-700/50 border border-green-600/40 rounded text-xs text-green-400 font-medium transition-colors disabled:opacity-40 flex items-center gap-2">
-                                    {topUpLoading ? '⟳ Applying...' : '✓ Apply Collateral Changes'}
-                                </button>
-                            </div>
-                            </>
-                        );
-                    })()}
+                    {/* Totals row — computed inline from mcTopUp state */}
+                    {Object.keys(collCcys.reduce((acc, ccy) => {
+                        const s = mcLoans.filter(r=>r.loan.collateralType===ccy)
+                            .reduce((sum,r)=>{const a=parseFloat(mcTopUp[r.loan.id]?.amount);return sum+(isNaN(a)?0:a);},0);
+                        if (s!==0) acc[ccy]=s;
+                        return acc;
+                    },{})).length > 0 && (
+                        <div className="mt-2 px-2 py-2 bg-slate-800/60 rounded-lg border border-slate-700/40 flex flex-wrap items-center gap-4">
+                            <span className="text-xs text-slate-400 font-medium">Sum of entered amounts:</span>
+                            {collCcys.map(ccy => {
+                                const sum = mcLoans.filter(r=>r.loan.collateralType===ccy)
+                                    .reduce((s,r)=>{const a=parseFloat(mcTopUp[r.loan.id]?.amount);return s+(isNaN(a)?0:a);},0);
+                                if (sum===0) return null;
+                                const isNeg = sum < 0;
+                                return (
+                                    <span key={ccy} className={`mono text-sm font-bold ${isNeg?'text-red-400':'text-green-400'}`}>
+                                        {isNeg?'':'+'}{ (Math.round(sum*1e8)/1e8).toFixed(8)} {ccy}
+                                    </span>
+                                );
+                            })}
+                            <span className="text-[10px] text-slate-600 ml-auto">verify this matches your intended total before applying</span>
+                        </div>
+                    )}
+                    {/* Apply button */}
+                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700/40">
+                        <p className="text-xs text-slate-500">
+                            {mcLoans.filter(r=>{const a=parseFloat(mcTopUp[r.loan.id]?.amount);return !isNaN(a)&&a!==0;}).length} loan(s) with amount entered
+                        </p>
+                        <button
+                            onClick={applyTopUps}
+                            disabled={!anyTopUp||topUpLoading}
+                            className="px-4 py-1.5 bg-green-700/30 hover:bg-green-700/50 border border-green-600/40 rounded text-xs text-green-400 font-medium transition-colors disabled:opacity-40 flex items-center gap-2">
+                            {topUpLoading ? '⟳ Applying...' : '✓ Apply Collateral Changes'}
+                        </button>
+                    </div>
                 </div>
                 );
             })()}
