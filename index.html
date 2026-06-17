@@ -1077,19 +1077,6 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
 
             {/* MC breakdown modal with bulk top-up */}
             {showMCModal && <MCModal mcLoans={mcLoans} mcTopUp={mcTopUp} setMcTopUp={setMcTopUp} bulkTopUp={bulkTopUp} setBulkTopUp={setBulkTopUp} topUpLoading={topUpLoading} setTopUpLoading={setTopUpLoading} onTopUp={onTopUp} onClose={()=>setShowMCModal(false)}/>}
-                                        </div>
-                                    </td>
-                                </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                    </div>
-
-                    {/* Totals row + Apply button */}
-                </div>
-                );
-            })()}
         </div>
     );
 };
