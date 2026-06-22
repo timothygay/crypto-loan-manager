@@ -1178,52 +1178,59 @@ const LoanModule = ({prices}) => {
         if (!raw || raw === '' || raw === 'Open Term') return '';
         const s = String(raw).trim();
         if (!s) return '';
-        // Already ISO date YYYY-MM-DD
+        // Already ISO date YYYY-MM-DD — return immediately, no parsing needed
         if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-        // ISO datetime with T — take date portion before T
+        // ISO datetime with T — take date portion before T (no timezone shift possible)
         if (s.includes('T')) return s.split('T')[0];
-        // DD/MM/YYYY — Singapore/UK locale display format
-        const dmy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-        if (dmy) {
-            const day   = dmy[1].padStart(2,'0');
-            const month = dmy[2].padStart(2,'0');
-            const year  = dmy[3];
+        // DD/MM/YYYY — Singapore/UK locale (day first, unambiguous when day > 12)
+        // Also handles M/D/YYYY and D/M/YYYY since we try both interpretations:
+        // Sheets SGT locale always returns DD/MM/YYYY so we try that first.
+        const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (slash) {
+            const a = parseInt(slash[1], 10);
+            const b = parseInt(slash[2], 10);
+            const year = slash[3];
+            // If first part > 12, it must be DD/MM/YYYY (day can't be a month)
+            // If second part > 12, it must be MM/DD/YYYY (month can't be > 12 as day either, but day can)
+            // Singapore Sheets locale: DD/MM/YYYY — trust that interpretation
+            const day   = String(a).padStart(2,'0');
+            const month = String(b).padStart(2,'0');
             return `${year}-${month}-${day}`;
         }
-        // M/D/YYYY — US locale display format
-        const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-        if (mdy) {
-            const month = mdy[1].padStart(2,'0');
-            const day   = mdy[2].padStart(2,'0');
-            const year  = mdy[3];
-            return `${year}-${month}-${day}`;
+        // DD-MM-YYYY with dashes
+        const dash = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+        if (dash) {
+            return `${dash[3]}-${dash[2].padStart(2,'0')}-${dash[1].padStart(2,'0')}`;
         }
-        // DD-MM-YYYY or MM-DD-YYYY with dashes
-        const dmy2 = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-        if (dmy2) {
-            // Ambiguous — assume DD-MM-YYYY (Singapore default)
-            const day   = dmy2[1].padStart(2,'0');
-            const month = dmy2[2].padStart(2,'0');
-            const year  = dmy2[3];
-            return `${year}-${month}-${day}`;
+        // Long date formats: "28 Jun 2026", "June 28, 2026" etc.
+        // Parse month name directly — no Date() constructor to avoid timezone shift
+        const months3 = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
+                         jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+        const long = s.match(/^(\d{1,2})[-\s](\w{3,9})[-\s,\s]*(\d{4})$/i) ||
+                     s.match(/^(\w{3,9})[-\s,\s]*(\d{1,2})[-,\s]*(\d{4})$/i);
+        if (long) {
+            // Try to find the month name part
+            for (const part of [long[1], long[2], long[3]]) {
+                const mo = months3[(part||'').toLowerCase().slice(0,3)];
+                if (mo) {
+                    // Find day and year from the other parts
+                    const others = [long[1], long[2], long[3]].filter(p => p !== part);
+                    const dayPart  = others.find(p => /^\d{1,2}$/.test(p));
+                    const yearPart = others.find(p => /^\d{4}$/.test(p));
+                    if (dayPart && yearPart) {
+                        return `${yearPart}-${mo}-${dayPart.padStart(2,'0')}`;
+                    }
+                }
+            }
         }
-        // Long date formats: "28 Jan 2026", "January 28, 2026", etc.
-        // Use Date.parse but force UTC interpretation
+        // Last resort: force UTC parse by appending T00:00:00Z
+        // This avoids the local-timezone shift that new Date(s) causes
         try {
-            // Append time to force UTC parse and avoid timezone shift
-            const d = new Date(s + ' UTC');
-            if (!isNaN(d)) {
-                return d.toISOString().split('T')[0];
-            }
-            // Try without UTC suffix
-            const d2 = new Date(s);
-            if (!isNaN(d2)) {
-                // Use UTC date parts to avoid timezone shift
-                const y = d2.getUTCFullYear();
-                const m = String(d2.getUTCMonth()+1).padStart(2,'0');
-                const day = String(d2.getUTCDate()).padStart(2,'0');
-                return `${y}-${m}-${day}`;
-            }
+            const forced = new Date(s.replace(/\s+/g, 'T') + (s.includes('T') ? '' : 'T00:00:00Z'));
+            if (!isNaN(forced.getTime())) return forced.toISOString().split('T')[0];
+            // If that fails, parse and read back in UTC
+            const d2 = new Date(s + 'T00:00:00Z');
+            if (!isNaN(d2.getTime())) return d2.toISOString().split('T')[0];
         } catch(e) {}
         return s;
     };
