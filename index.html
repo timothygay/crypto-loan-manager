@@ -1486,7 +1486,7 @@ const LoanModule = ({prices}) => {
     ? `Paid: ${(Math.floor((loan.interestPaid||0)*1e8)/1e8).toFixed(8)} ${loan.underlying}`
     : `Paid: $${fmt(loan.interestPaid)}`,
   'text-cyan-400',true],
-                                        ['Collateral',`${fmtCrypto(loan.collateralAmount,6)} ${loan.collateralType}`,`≈$${fmt(m.collVal,0)}`,'text-white',!m.isUnsecured],
+                                        ['Collateral',`${fmtCrypto(loan.collateralAmount,8)} ${loan.collateralType}`,`≈$${fmt(m.collVal,0)}`,'text-white',!m.isUnsecured],
                                         ['Ratio',`${fmt(m.ratio)}%`,`Target: ${loan.originalCollateralRatio}%`,m.atRisk?'text-red-400':'text-green-400',!m.isUnsecured],
                                         ['MC Price',`$${fmt(m.mcPrice,0)}`,`@ ${loan.marginCallThreshold}%`,'text-orange-400',!m.isUnsecured],
                                     ].filter(([,,,,show])=>show).map(([lbl,val,sub,cls])=>(
