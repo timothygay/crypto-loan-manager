@@ -6658,13 +6658,17 @@ const App = () => {
 
     const fetchBybitPrices=useCallback(async()=>{
         try {
-            const [btc,eth]=await Promise.allSettled([
+            const [btc,eth,btcUsdc,ethUsdc]=await Promise.allSettled([
                 fetchBybitLive('BTCUSDT'),
                 fetchBybitLive('ETHUSDT'),
+                fetchBybitLive('BTCUSDC'),
+                fetchBybitLive('ETHUSDC'),
             ]);
             setBybitPrices(p=>({
-                BTC:btc.status==='fulfilled'?btc.value:p.BTC,
-                ETH:eth.status==='fulfilled'?eth.value:p.ETH,
+                BTC:       btc.status==='fulfilled'?btc.value:p.BTC,
+                ETH:       eth.status==='fulfilled'?eth.value:p.ETH,
+                'BTC/USDC':btcUsdc.status==='fulfilled'?btcUsdc.value:p['BTC/USDC']||0,
+                'ETH/USDC':ethUsdc.status==='fulfilled'?ethUsdc.value:p['ETH/USDC']||0,
             }));
             setBybitUpdate(new Date());
         } catch(e){console.error('Bybit price error',e);}
