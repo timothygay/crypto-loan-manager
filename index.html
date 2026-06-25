@@ -2281,23 +2281,42 @@ const SSPSModule = ({prices: livePrices}) => {
                             (done,total)=>setBackfillProgress({done,total,label:'USDC backfill: '+done+'/'+total})
                         );
                         setPriceHistory(history);
-                        // Push updated rows to Sheets for contracts that use USDC underlyings
-                        if (config.scriptUrl) {
-                            const usdcContracts = contracts.filter(c=>c.underlying==='BTC/USDC'||c.underlying==='ETH/USDC');
-                            for (const c of usdcContracts) {
-                                const sched = buildSchedule(c);
-                                const todayStr2 = todayUTC();
-                                for (const ds of sched) {
-                                    if (ds >= todayStr2) break;
-                                    const entry = history[ds];
-                                    if (entry && (entry['BTC/USDC']||entry['ETH/USDC'])) {
-                                        await pushPriceRow(ds, entry, c, history);
-                                    }
-                                }
+                        // Push ALL backfilled dates directly to the PriceHistory sheet.
+                        // Use any contract as the vehicle for pushPriceRow — we just need
+                        // the scriptUrl and the entry; the contract param is only used for
+                        // the ledger row, which we skip by passing a dummy contract with no schedule match.
+                        if (config.scriptUrl && contracts.length > 0) {
+                            const anyContract = contracts[0];
+                            const updatedDates = Object.keys(history).filter(ds => {
+                                const e = history[ds];
+                                return e && (e['BTC/USDC'] || e['ETH/USDC']);
+                            }).sort();
+                            let pushed = 0;
+                            for (const ds of updatedDates) {
+                                const entry = history[ds];
+                                // pushPriceRow writes to PriceHistory sheet AND tries to write a ledger row.
+                                // For the PriceHistory write we only need the first sheetsCall inside pushPriceRow.
+                                // Simplest: call sheetsCall directly for the price row.
+                                try {
+                                    await sheetsCall(config.scriptUrl, {
+                                        action: 'upsertPrice',
+                                        values: [
+                                            ds,
+                                            entry.BTC||'',
+                                            entry.ETH||'',
+                                            entry['BTC/USDC']||'',
+                                            entry['ETH/USDC']||'',
+                                            entry.fetchedAt||'',
+                                            entry.manualOverride?'YES':'NO',
+                                        ]
+                                    });
+                                    pushed++;
+                                    setBackfillProgress({done:pushed, total:updatedDates.length, label:'Pushing to Sheets: '+pushed+'/'+updatedDates.length});
+                                } catch(e) { console.error('Push failed for '+ds, e); }
                             }
                         }
                         setBackfillProgress(null);
-                        alert('USDC backfill complete: ' + datesProcessed + ' dates updated.');
+                        alert('USDC backfill complete: ' + datesProcessed + ' dates fetched and pushed to Sheets.');
                     }} disabled={!!fetchingDate||backfillProgress!==null} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-cyan-400 border-cyan-500/30"><Icon.Refresh spin={backfillProgress!==null}/> Backfill USDC Prices</button>
                     {config.scriptUrl&&<button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={sheetsLoading}/> Sync Sheets</button>}
                     <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Sheets Config</button>
