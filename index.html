@@ -491,6 +491,37 @@ const runBackfill = async (fromDate, toDate, existingHistory, onProgress) => {
     return { history, datesProcessed: dates.length };
 };
 
+// Backfill USDC prices for dates that already have BTC/ETH but missing USDC prices
+const runBackfillUSDC = async (existingHistory, onProgress) => {
+    const history = { ...existingHistory };
+    const todayStr = todayUTC();
+    // Collect dates that have BTC or ETH but are missing BTC/USDC or ETH/USDC
+    const dates = Object.keys(history).filter(ds => {
+        if (ds >= todayStr) return false; // skip today and future
+        const e = history[ds];
+        if (!e || e.fetchError) return false;
+        // Only backfill if the entry has at least one USDT price (valid date)
+        // but is missing both USDC prices
+        return (e.BTC || e.ETH) && (!e['BTC/USDC'] && !e['ETH/USDC']);
+    }).sort();
+    for (let i=0; i<dates.length; i++) {
+        const ds = dates[i];
+        const [btcUsdc, ethUsdc] = await Promise.allSettled([
+            fetchBybitFixing('BTCUSDC', ds),
+            fetchBybitFixing('ETHUSDC', ds),
+        ]);
+        history[ds] = {
+            ...history[ds],
+            'BTC/USDC': btcUsdc.status==='fulfilled' ? btcUsdc.value : null,
+            'ETH/USDC': ethUsdc.status==='fulfilled' ? ethUsdc.value : null,
+            fetchedAt: new Date().toISOString(),
+        };
+        if (onProgress) onProgress(i+1, dates.length);
+        await new Promise(r => setTimeout(r, 150));
+    }
+    return { history, datesProcessed: dates.length };
+};
+
 // ─── PRICE TICKER ─────────────────────────────────────────────────────────────
 // bybitPrices  → BTC/ETH (Loans + SSPS)
 // binancePrices → BTC/ETH/ADA/XRP (FCN + Accumulator)
@@ -1749,7 +1780,8 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
         activeContracts.forEach(c => {
             const rows = computeLedger(c, priceHistory);
             const last = rows.filter(r => r.fixingPrice).slice(-1)[0];
-            const sym  = c.underlying || 'BTC';
+            // Group by base asset (BTC or ETH) regardless of quote currency (USDT or USDC)
+            const sym  = (c.underlying || 'BTC').split('/')[0];
             totals[sym] = (totals[sym] || 0) + (last ? last.totalUnderlying : 0);
         });
         return totals;
@@ -2242,6 +2274,31 @@ const SSPSModule = ({prices: livePrices}) => {
                     <label className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer"><Icon.Upload/> Import<input type="file" accept=".json" onChange={importData} className="hidden"/></label>
                     <button onClick={()=>fetchTodayPrices(today)} disabled={!!fetchingDate} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={!!fetchingDate}/> Fetch Today's Prices</button>
                     <button onClick={clearAndRefetchAll} disabled={!!fetchingDate||backfillProgress!==null} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-yellow-400 border-yellow-500/30"><Icon.Refresh spin={backfillProgress!==null}/> Clear & Re-fetch All Prices</button>
+                    <button onClick={async()=>{
+                        setBackfillProgress({done:0,total:0,label:'Backfilling USDC prices…'});
+                        const {history, datesProcessed} = await runBackfillUSDC(
+                            priceHistory,
+                            (done,total)=>setBackfillProgress({done,total,label:'USDC backfill: '+done+'/'+total})
+                        );
+                        setPriceHistory(history);
+                        // Push updated rows to Sheets for contracts that use USDC underlyings
+                        if (config.scriptUrl) {
+                            const usdcContracts = contracts.filter(c=>c.underlying==='BTC/USDC'||c.underlying==='ETH/USDC');
+                            for (const c of usdcContracts) {
+                                const sched = buildSchedule(c);
+                                const todayStr2 = todayUTC();
+                                for (const ds of sched) {
+                                    if (ds >= todayStr2) break;
+                                    const entry = history[ds];
+                                    if (entry && (entry['BTC/USDC']||entry['ETH/USDC'])) {
+                                        await pushPriceRow(ds, entry, c, history);
+                                    }
+                                }
+                            }
+                        }
+                        setBackfillProgress(null);
+                        alert('USDC backfill complete: ' + datesProcessed + ' dates updated.');
+                    }} disabled={!!fetchingDate||backfillProgress!==null} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-cyan-400 border-cyan-500/30"><Icon.Refresh spin={backfillProgress!==null}/> Backfill USDC Prices</button>
                     {config.scriptUrl&&<button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={sheetsLoading}/> Sync Sheets</button>}
                     <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Sheets Config</button>
                     <span className={`text-xs ${syncColor} flex items-center gap-1`}>{syncStatus==='ok'&&<Icon.Check/>}{syncLabel}</span>
