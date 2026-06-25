@@ -467,18 +467,22 @@ const runBackfill = async (fromDate, toDate, existingHistory, onProgress) => {
     while (d.getTime() <= stopMs) {
         const ds = d.toISOString().split('T')[0];
         const e = existingHistory[ds];
-        if (!e || (!e.BTC && !e.ETH)) dates.push(ds);
+        if (!e || (!e.BTC && !e.ETH && !e['BTC/USDC'] && !e['ETH/USDC'])) dates.push(ds);
         d.setUTCDate(d.getUTCDate()+1);
     }
     for (let i=0; i<dates.length; i++) {
         const ds = dates[i];
-        const [btc, eth] = await Promise.allSettled([
+        const [btc, eth, btcUsdc, ethUsdc] = await Promise.allSettled([
             fetchBybitFixing('BTCUSDT', ds),
             fetchBybitFixing('ETHUSDT', ds),
+            fetchBybitFixing('BTCUSDC', ds),
+            fetchBybitFixing('ETHUSDC', ds),
         ]);
         history[ds] = {
-            BTC: btc.status==='fulfilled' ? btc.value : (existingHistory[ds]?.BTC||null),
-            ETH: eth.status==='fulfilled' ? eth.value : (existingHistory[ds]?.ETH||null),
+            BTC:        btc.status==='fulfilled'     ? btc.value     : (existingHistory[ds]?.BTC||null),
+            ETH:        eth.status==='fulfilled'     ? eth.value     : (existingHistory[ds]?.ETH||null),
+            'BTC/USDC': btcUsdc.status==='fulfilled' ? btcUsdc.value : (existingHistory[ds]?.['BTC/USDC']||null),
+            'ETH/USDC': ethUsdc.status==='fulfilled' ? ethUsdc.value : (existingHistory[ds]?.['ETH/USDC']||null),
             fetchedAt: new Date().toISOString(),
         };
         if (onProgress) onProgress(i+1, dates.length);
@@ -1824,7 +1828,7 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
                 const yestPrice=lastFixing[sym]?.price;
                 return(
                     <div key={sym} className="mb-4">
-                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{sym}/USDT · Buy Schedule</p>
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{sym.includes('/')?sym:sym+'/USDT'} · Buy Schedule</p>
                         <div className="overflow-x-auto scrollbar-hide rounded-lg border border-slate-800 overflow-hidden">
                             <table className="w-full text-xs">
                                 <thead>
@@ -1971,7 +1975,7 @@ const SSPSModule = ({prices: livePrices}) => {
         if (!config.scriptUrl) return;
         try {
             setSyncStatus('syncing');
-            await sheetsCall(config.scriptUrl,{action:'upsertPrice',values:[dateStr,entry.BTC||'',entry.ETH||'',entry.fetchedAt||'',entry.manualOverride?'YES':'NO']});
+            await sheetsCall(config.scriptUrl,{action:'upsertPrice',values:[dateStr,entry.BTC||'',entry.ETH||'',entry['BTC/USDC']||'',entry['ETH/USDC']||'',entry.fetchedAt||'',entry.manualOverride?'YES':'NO']});
             // Use fullHistory if provided (backfill path), otherwise fall back to current state
             const histForCompute = fullHistory ? {...fullHistory,[dateStr]:entry} : {...priceHistory,[dateStr]:entry};
             const rows=computeLedger(contract, histForCompute);
@@ -2027,7 +2031,7 @@ const SSPSModule = ({prices: livePrices}) => {
                     if (!r[0]) return;
                     let dateKey = normaliseSheetDate(r[0]);
                     if (!dateKey) return;
-                    fromSheets[dateKey]={BTC:r[1]?+r[1]:null,ETH:r[2]?+r[2]:null,fetchedAt:r[3]||'',manualOverride:r[4]==='YES'};
+                    fromSheets[dateKey]={BTC:r[1]?+r[1]:null,ETH:r[2]?+r[2]:null,'BTC/USDC':r[3]?+r[3]:null,'ETH/USDC':r[4]?+r[4]:null,fetchedAt:r[5]||'',manualOverride:r[6]==='YES'};
                 });
                 if (Object.keys(fromSheets).length > 0) {
                     // Merge: local data wins if it was fetched MORE RECENTLY than Sheets data.
@@ -2069,10 +2073,12 @@ const SSPSModule = ({prices: livePrices}) => {
         setFetchingDate(dateStr);
         let entry={ fetchedAt:new Date().toISOString() };
         try {
-            const [btc,eth]=await Promise.allSettled([fetchBybitFixing('BTCUSDT',dateStr),fetchBybitFixing('ETHUSDT',dateStr)]);
+            const [btc,eth,btcUsdc,ethUsdc]=await Promise.allSettled([fetchBybitFixing('BTCUSDT',dateStr),fetchBybitFixing('ETHUSDT',dateStr),fetchBybitFixing('BTCUSDC',dateStr),fetchBybitFixing('ETHUSDC',dateStr)]);
             entry.BTC=btc.status==='fulfilled'?btc.value:null;
             entry.ETH=eth.status==='fulfilled'?eth.value:null;
-            if (!entry.BTC&&!entry.ETH) entry.fetchError=true;
+            entry['BTC/USDC']=btcUsdc.status==='fulfilled'?btcUsdc.value:null;
+            entry['ETH/USDC']=ethUsdc.status==='fulfilled'?ethUsdc.value:null;
+            if (!entry.BTC&&!entry.ETH&&!entry['BTC/USDC']&&!entry['ETH/USDC']) entry.fetchError=true;
         } catch(e){ entry.fetchError=true; }
         const newHist={...priceHistory,[dateStr]:entry};
         setPriceHistory(newHist);
@@ -2084,8 +2090,14 @@ const SSPSModule = ({prices: livePrices}) => {
         setFetchingDate(null);
     };
 
-    const manualPriceOverride = async (dateStr, btcVal, ethVal) => {
-        const entry={ ...(priceHistory[dateStr]||{}), BTC:btcVal?parseFloat(btcVal):(priceHistory[dateStr]?.BTC||null), ETH:ethVal?parseFloat(ethVal):(priceHistory[dateStr]?.ETH||null), manualOverride:true, fetchedAt:new Date().toISOString() };
+    const manualPriceOverride = async (dateStr, btcVal, ethVal, btcUsdcVal, ethUsdcVal) => {
+        const prev = priceHistory[dateStr]||{};
+        const entry={ ...prev,
+            BTC:        btcVal     ? parseFloat(btcVal)     : (prev.BTC||null),
+            ETH:        ethVal     ? parseFloat(ethVal)     : (prev.ETH||null),
+            'BTC/USDC': btcUsdcVal ? parseFloat(btcUsdcVal) : (prev['BTC/USDC']||null),
+            'ETH/USDC': ethUsdcVal ? parseFloat(ethUsdcVal) : (prev['ETH/USDC']||null),
+            manualOverride:true, fetchedAt:new Date().toISOString() };
         const newHist={...priceHistory,[dateStr]:entry};
         setPriceHistory(newHist);
         for (const c of contracts){
@@ -2274,8 +2286,10 @@ const SSPSModule = ({prices: livePrices}) => {
             {todayEntry?(
                 <div className="bg-green-900/20 border border-green-500/30 rounded-lg p-3 mb-4 text-xs text-green-400 flex items-center gap-2 flex-wrap">
                     <Icon.Check/> Today's fixing prices loaded
-                    {todayEntry.BTC&&<span className="mono">BTC: ${fmt(todayEntry.BTC,0)}</span>}
-                    {todayEntry.ETH&&<span className="mono">ETH: ${fmt(todayEntry.ETH,0)}</span>}
+                    {todayEntry.BTC&&<span className="mono">BTC/USDT: ${fmt(todayEntry.BTC,0)}</span>}
+                    {todayEntry.ETH&&<span className="mono">ETH/USDT: ${fmt(todayEntry.ETH,0)}</span>}
+                    {todayEntry['BTC/USDC']&&<span className="mono">BTC/USDC: ${fmt(todayEntry['BTC/USDC'],0)}</span>}
+                    {todayEntry['ETH/USDC']&&<span className="mono">ETH/USDC: ${fmt(todayEntry['ETH/USDC'],0)}</span>}
                     {todayEntry.manualOverride&&<span className="text-yellow-400">(manual)</span>}
                     {todayEntry.fetchError&&<span className="text-yellow-400">(fetch failed — enter manually)</span>}
                 </div>
@@ -2341,7 +2355,9 @@ const SSPSContractCard = ({contract, priceHistory, prices, onDrill, onDelete, on
                             {status==='Fully Invested'&&<Icon.Lock/>} {status}
                         </span>
                         {isExpiringSoon&&<span className="badge-expiring px-2 py-0.5 rounded-full text-xs flex items-center gap-1"><Icon.Calendar/> Expires {dl===0?'TODAY':dl===1?'TOMORROW':`in ${dl}d`}</span>}
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${contract.underlying==='BTC'?'bg-orange-500/15 text-orange-400 border border-orange-500/25':'bg-purple-500/15 text-purple-400 border border-purple-500/25'}`}>{contract.underlying}/USDT</span>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${contract.underlying==='BTC'||contract.underlying==='BTC/USDC'?'bg-orange-500/15 text-orange-400 border border-orange-500/25':'bg-purple-500/15 text-purple-400 border border-purple-500/25'}`}>
+                            {contract.underlying==='BTC'?'BTC/USDT':contract.underlying==='ETH'?'ETH/USDT':contract.underlying}
+                        </span>
                     </div>
                     <p className="text-xs text-slate-500 mono mt-0.5">{contract.id} · {fmtDate(contract.tradeDate)} → {fmtDate(contract.maturityDate)} · {contract.tenor}d</p>
                 </div>
@@ -2393,7 +2409,7 @@ const SSPSLedger = ({contract, priceHistory, prices, onBack, onFetchPrice, onMan
     const avgCost=totalUnderlying>0?totalSpent/totalUnderlying:0;
     const isFullyInvested=notionalLeft<=0.01;
 
-    const handleManualSave=async(date)=>{ const e=manualInputs[date]||{}; setSaving(true); await onManualPrice(date,e.BTC||'',e.ETH||''); setSaving(false); setShowManualDate(null); setManualInputs(p=>({...p,[date]:{}})); };
+    const handleManualSave=async(date)=>{ const e=manualInputs[date]||{}; setSaving(true); await onManualPrice(date,e.BTC||'',e.ETH||'',e['BTC/USDC']||'',e['ETH/USDC']||''); setSaving(false); setShowManualDate(null); setManualInputs(p=>({...p,[date]:{}})); };
 
     return(
         <div>
@@ -2442,6 +2458,8 @@ const SSPSLedger = ({contract, priceHistory, prices, onBack, onFetchPrice, onMan
                         <Field label="Date"><Input type="date" value={showManualDate} onChange={e=>setShowManualDate(e.target.value)}/></Field>
                         <Field label="BTC/USDT (08:00 UTC open)"><Input type="number" placeholder={`Current: ${priceHistory[showManualDate]?.BTC||'N/A'}`} onChange={e=>setManualInputs(p=>({...p,[showManualDate]:{...p[showManualDate],BTC:e.target.value}}))} step="0.01"/></Field>
                         <Field label="ETH/USDT (08:00 UTC open)"><Input type="number" placeholder={`Current: ${priceHistory[showManualDate]?.ETH||'N/A'}`} onChange={e=>setManualInputs(p=>({...p,[showManualDate]:{...p[showManualDate],ETH:e.target.value}}))} step="0.01"/></Field>
+                        <Field label="BTC/USDC (08:00 UTC open)"><Input type="number" placeholder={`Current: ${priceHistory[showManualDate]?.['BTC/USDC']||'N/A'}`} onChange={e=>setManualInputs(p=>({...p,[showManualDate]:{...p[showManualDate],'BTC/USDC':e.target.value}}))} step="0.01"/></Field>
+                        <Field label="ETH/USDC (08:00 UTC open)"><Input type="number" placeholder={`Current: ${priceHistory[showManualDate]?.['ETH/USDC']||'N/A'}`} onChange={e=>setManualInputs(p=>({...p,[showManualDate]:{...p[showManualDate],'ETH/USDC':e.target.value}}))} step="0.01"/></Field>
                     </div>
                     <div className="flex gap-2">
                         <button onClick={()=>handleManualSave(showManualDate)} disabled={saving} className="btn-primary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">{saving?<><Icon.Refresh spin={true}/> Saving…</>:<><Icon.Check/> Save</>}</button>
@@ -2549,7 +2567,7 @@ const SSPSFormModal = ({onSave, onClose}) => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <Field label="Trade Date" hint="First fixing day. Participation buying starts next calendar day."><Input type="date" value={form.tradeDate} onChange={f('tradeDate')}/></Field>
                         <Field label="Maturity Date" hint="Last fixing day. Tenor calculated automatically."><Input type="date" value={form.maturityDate} onChange={f('maturityDate')}/></Field>
-                        <Field label="Underlying"><Select value={form.underlying} onChange={f('underlying')}><option value="BTC">BTC/USDT</option><option value="ETH">ETH/USDT</option></Select></Field>
+                        <Field label="Underlying"><Select value={form.underlying} onChange={f('underlying')}><option value="BTC">BTC/USDT</option><option value="ETH">ETH/USDT</option><option value="BTC/USDC">BTC/USDC</option><option value="ETH/USDC">ETH/USDC</option></Select></Field>
                         <Field label="Notional (USDT)"><Input type="number" value={form.notional} onChange={f('notional')} step="1000"/></Field>
                     </div>
                 </div>
