@@ -1658,7 +1658,9 @@ const computeLedger = (contract, priceHistory) => {
     for (let i=0; i<schedule.length; i++) {
         const date=schedule[i];
         const ph=priceHistory[date];
-        const fixingPrice = ph && ph[contract.underlying] ? ph[contract.underlying] : null;
+        // Support legacy price history entries keyed as 'BTC'/'ETH' (pre-USDC contracts)
+        const legacyLookup = contract.underlying==='BTC/USDT'?ph?.BTC:contract.underlying==='ETH/USDT'?ph?.ETH:null;
+        const fixingPrice = ph && (ph[contract.underlying] || legacyLookup) ? (ph[contract.underlying] || legacyLookup) : null;
         let dodChange=null, triggerHit=false, partNotional=0, underlyingBought=0, notionalUsed=0;
 
         if (fixingPrice !== null) {
@@ -1666,7 +1668,8 @@ const computeLedger = (contract, priceHistory) => {
             let priorPrice=null;
             for (let j=i-1; j>=0; j--) {
                 const pp=priceHistory[schedule[j]];
-                if (pp && pp[contract.underlying]) { priorPrice=pp[contract.underlying]; break; }
+                const ppKey = contract.underlying==='BTC/USDT'?(pp?.['BTC/USDT']??pp?.BTC):contract.underlying==='ETH/USDT'?(pp?.['ETH/USDT']??pp?.ETH):pp?.[contract.underlying];
+                if (pp && ppKey) { priorPrice=ppKey; break; }
             }
             if (priorPrice && i>0) { dodChange=(fixingPrice-priorPrice)/priorPrice; triggerHit=dodChange<=trigger; }
 
@@ -1741,8 +1744,10 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
             )
             .sort((a,b)=>b[0].localeCompare(a[0]));   // newest first
         underlyings.forEach(sym=>{
+            // Support both full pair ('BTC/USDT') and legacy short ('BTC') keys in price history
+            const legacyKey = sym.split('/')[0]; // 'BTC/USDT' → 'BTC', 'BTC/USDC' → 'BTC' (won't match)
             for (const [date,entry] of sorted) {
-                const price = entry[sym];
+                const price = entry[sym] || (sym==='BTC/USDT'?entry['BTC']:sym==='ETH/USDT'?entry['ETH']:null);
                 if (price && +price > 0) {
                     result[sym]={price:+price, date};
                     break;
@@ -1860,7 +1865,7 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
                 const yestPrice=lastFixing[sym]?.price;
                 return(
                     <div key={sym} className="mb-4">
-                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{sym.includes('/')?sym:sym+'/USDT'} · Buy Schedule</p>
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{sym} · Buy Schedule</p>
                         <div className="overflow-x-auto scrollbar-hide rounded-lg border border-slate-800 overflow-hidden">
                             <table className="w-full text-xs">
                                 <thead>
@@ -2045,7 +2050,7 @@ const SSPSModule = ({prices: livePrices}) => {
                     tradeDate:normaliseSheetDate(r[2])||'',
                     participationStart:normaliseSheetDate(r[3])||'',
                     maturityDate:normaliseSheetDate(r[4])||'',
-                    tenor:+r[5]||0, fixingDays:+r[6]||0, underlying:r[7]||'BTC',
+                    tenor:+r[5]||0, fixingDays:+r[6]||0, underlying:(r[7]==='BTC'?'BTC/USDT':r[7]==='ETH'?'ETH/USDT':r[7])||'BTC/USDT',
                     notional:+r[8]||0, baseNotional:+r[9]||0,
                     trigger:parseFloat(r[10])/100||0, scalingFactor:+r[11]||1,
                     discountFactor:parseFloat(r[12])/100||0,
@@ -2410,7 +2415,7 @@ const SSPSContractCard = ({contract, priceHistory, prices, onDrill, onDelete, on
     const notionalLeft=lastRow?lastRow.notionalLeft:contract.notional;
     const totalUnderlying=lastRow?lastRow.totalUnderlying:0;
     const totalSpent=lastRow?lastRow.totalSpent:0;
-    const livePrice=prices[contract.underlying]||0;
+    const livePrice=(contract.underlying==='BTC/USDT'?prices.BTC:contract.underlying==='ETH/USDT'?prices.ETH:prices[contract.underlying])||0;
     const mtm=totalUnderlying*livePrice, pnl=mtm-totalSpent;
     const avgCost=totalUnderlying>0?totalSpent/totalUnderlying:0;
     const isFullyInvested=notionalLeft<=0.01;
@@ -2431,8 +2436,8 @@ const SSPSContractCard = ({contract, priceHistory, prices, onDrill, onDelete, on
                             {status==='Fully Invested'&&<Icon.Lock/>} {status}
                         </span>
                         {isExpiringSoon&&<span className="badge-expiring px-2 py-0.5 rounded-full text-xs flex items-center gap-1"><Icon.Calendar/> Expires {dl===0?'TODAY':dl===1?'TOMORROW':`in ${dl}d`}</span>}
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${contract.underlying==='BTC'||contract.underlying==='BTC/USDC'?'bg-orange-500/15 text-orange-400 border border-orange-500/25':'bg-purple-500/15 text-purple-400 border border-purple-500/25'}`}>
-                            {contract.underlying==='BTC'?'BTC/USDT':contract.underlying==='ETH'?'ETH/USDT':contract.underlying}
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${(contract.underlying||'').startsWith('BTC')?'bg-orange-500/15 text-orange-400 border border-orange-500/25':'bg-purple-500/15 text-purple-400 border border-purple-500/25'}`}>
+                            {contract.underlying}
                         </span>
                     </div>
                     <p className="text-xs text-slate-500 mono mt-0.5">{contract.id} · {fmtDate(contract.tradeDate)} → {fmtDate(contract.maturityDate)} · {contract.tenor}d</p>
@@ -2480,7 +2485,7 @@ const SSPSLedger = ({contract, priceHistory, prices, onBack, onFetchPrice, onMan
     const totalUnderlying=lastRow?lastRow.totalUnderlying:0;
     const totalSpent=lastRow?lastRow.totalSpent:0;
     const notionalLeft=lastRow?lastRow.notionalLeft:contract.notional;
-    const livePrice=prices[contract.underlying]||0;
+    const livePrice=(contract.underlying==='BTC/USDT'?prices.BTC:contract.underlying==='ETH/USDT'?prices.ETH:prices[contract.underlying])||0;
     const mtm=totalUnderlying*livePrice, pnl=mtm-totalSpent;
     const avgCost=totalUnderlying>0?totalSpent/totalUnderlying:0;
     const isFullyInvested=notionalLeft<=0.01;
@@ -2514,7 +2519,7 @@ const SSPSLedger = ({contract, priceHistory, prices, onBack, onFetchPrice, onMan
             {/* Contract parameters */}
             <div className="card p-4 mb-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
-                    {[['Contract ID',contract.id],['Underlying',`${contract.underlying}/USDT`],['Trade Date',fmtDate(contract.tradeDate)],['Participation Start',fmtDate(contract.participationStart)],['Maturity',fmtDate(contract.maturityDate)],['Tenor',`${contract.tenor} days`],['Notional',`$${fmt(contract.notional,0)}`],['Base Daily Notional',`$${fmt(contract.baseNotional,2)}`],['Perf. Trigger',`${(contract.trigger*100).toFixed(1)}%`],['Scaling Factor',`${contract.scalingFactor}x`],['Discount Factor',`${(contract.discountFactor*100).toFixed(2)}%`],['Fixing Days',`${ledger.length}`]].map(([k,v])=>(
+                    {[['Contract ID',contract.id],['Underlying',contract.underlying],['Trade Date',fmtDate(contract.tradeDate)],['Participation Start',fmtDate(contract.participationStart)],['Maturity',fmtDate(contract.maturityDate)],['Tenor',`${contract.tenor} days`],['Notional',`$${fmt(contract.notional,0)}`],['Base Daily Notional',`$${fmt(contract.baseNotional,2)}`],['Perf. Trigger',`${(contract.trigger*100).toFixed(1)}%`],['Scaling Factor',`${contract.scalingFactor}x`],['Discount Factor',`${(contract.discountFactor*100).toFixed(2)}%`],['Fixing Days',`${ledger.length}`]].map(([k,v])=>(
                         <div key={k} className="card-inner p-2.5"><p className="text-slate-400 mb-0.5">{k}</p><p className="font-medium mono text-slate-200">{v}</p></div>
                     ))}
                 </div>
@@ -2558,7 +2563,7 @@ const SSPSLedger = ({contract, priceHistory, prices, onBack, onFetchPrice, onMan
                         <tbody>
                             {displayLedger.map((row)=>{
                                 const ph=priceHistory[row.date];
-                                const rawP=ph?ph[contract.underlying]:null;
+                                const rawP=ph?(contract.underlying==='BTC/USDT'?(ph['BTC/USDT']??ph.BTC):contract.underlying==='ETH/USDT'?(ph['ETH/USDT']??ph.ETH):ph[contract.underlying]):null;
                                 const discP=rawP?rawP*(1-contract.discountFactor):null;
                                 const isToday=row.date===today;
                                 const isInitial=row.date===contract.tradeDate;
@@ -2608,7 +2613,7 @@ const SSPSLedger = ({contract, priceHistory, prices, onBack, onFetchPrice, onMan
 // ─── SSPS CONTRACT FORM — custom trade + maturity dates, no email ─────────────
 const SSPSFormModal = ({onSave, onClose}) => {
     const today=todayUTC();
-    const [form,setForm]=useState({ contractId:'', clientName:'', tradeDate:todayLocal(), maturityDate:'', underlying:'BTC', notional:100000, trigger:-0.03, scalingFactor:1.5, discountFactor:0 });
+    const [form,setForm]=useState({ contractId:'', clientName:'', tradeDate:todayLocal(), maturityDate:'', underlying:'BTC/USDT', notional:100000, trigger:-0.03, scalingFactor:1.5, discountFactor:0 });
     const f=k=>e=>setForm(p=>({...p,[k]:e.target.type==='number'?parseFloat(e.target.value):e.target.value}));
 
     const tenor=useMemo(()=>{
@@ -2643,7 +2648,7 @@ const SSPSFormModal = ({onSave, onClose}) => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <Field label="Trade Date" hint="First fixing day. Participation buying starts next calendar day."><Input type="date" value={form.tradeDate} onChange={f('tradeDate')}/></Field>
                         <Field label="Maturity Date" hint="Last fixing day. Tenor calculated automatically."><Input type="date" value={form.maturityDate} onChange={f('maturityDate')}/></Field>
-                        <Field label="Underlying"><Select value={form.underlying} onChange={f('underlying')}><option value="BTC">BTC/USDT</option><option value="ETH">ETH/USDT</option><option value="BTC/USDC">BTC/USDC</option><option value="ETH/USDC">ETH/USDC</option></Select></Field>
+                        <Field label="Underlying"><Select value={form.underlying} onChange={f('underlying')}><option value="BTC/USDT">BTC/USDT</option><option value="ETH/USDT">ETH/USDT</option><option value="BTC/USDC">BTC/USDC</option><option value="ETH/USDC">ETH/USDC</option></Select></Field>
                         <Field label="Notional (USDT)"><Input type="number" value={form.notional} onChange={f('notional')} step="1000"/></Field>
                     </div>
                 </div>
