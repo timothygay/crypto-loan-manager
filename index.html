@@ -2148,7 +2148,20 @@ const SSPSModule = ({prices: livePrices}) => {
         const today=todayUTC();
         if (contract.tradeDate>=today) return null;
         const sched=buildSchedule(contract);
-        const missing=sched.filter(d=>d<today&&(!priceHistory[d]||(!priceHistory[d].BTC&&!priceHistory[d].ETH)));
+        // Check for the price key that this contract actually uses:
+        // BTC/USDT and legacy 'BTC' contracts → need ph.BTC
+        // ETH/USDT and legacy 'ETH' contracts → need ph.ETH
+        // BTC/USDC contracts → need ph['BTC/USDC']
+        // ETH/USDC contracts → need ph['ETH/USDC']
+        const hasPrice = (ph) => {
+            if (!ph) return false;
+            const u = contract.underlying;
+            if (u==='BTC/USDC') return !!ph['BTC/USDC'];
+            if (u==='ETH/USDC') return !!ph['ETH/USDC'];
+            if (u==='ETH/USDT'||u==='ETH') return !!ph.ETH;
+            return !!ph.BTC; // BTC/USDT and legacy BTC
+        };
+        const missing=sched.filter(d=>d<today&&!hasPrice(priceHistory[d]));
         return missing.length>0?{count:missing.length,from:missing[0],to:missing[missing.length-1]}:null;
     };
 
@@ -2186,7 +2199,13 @@ const SSPSModule = ({prices: livePrices}) => {
             if (ds>=todayStr) break; // don't push today or future dates
             const entry=history[ds];
             // Pass 'history' so each row is computed with all prior prices (not stale state)
-            if (entry && (entry.BTC||entry.ETH)) await pushPriceRow(ds,entry,contract,history);
+            // Push row if this contract's relevant price key is populated
+            const hasPriceForContract = entry && (
+                contract.underlying==='BTC/USDC' ? entry['BTC/USDC'] :
+                contract.underlying==='ETH/USDC' ? entry['ETH/USDC'] :
+                (entry.BTC||entry.ETH)
+            );
+            if (hasPriceForContract) await pushPriceRow(ds,entry,contract,history);
         }
         // Refresh the contract summary row in Sheets with latest ledger totals
         const finalLedger = computeLedger(contract, history);
