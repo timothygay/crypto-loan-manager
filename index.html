@@ -2343,6 +2343,44 @@ const SSPSModule = ({prices: livePrices}) => {
                         alert('USDC backfill complete: ' + datesProcessed + ' dates fetched and pushed to Sheets.');
                     }} disabled={!!fetchingDate||backfillProgress!==null} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-cyan-400 border-cyan-500/30"><Icon.Refresh spin={backfillProgress!==null}/> Backfill USDC Prices</button>
                     {config.scriptUrl&&<button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={sheetsLoading}/> Sync Sheets</button>}
+                    {config.scriptUrl&&<button onClick={async()=>{
+                        if (!confirm('Re-push ALL ledger rows for ALL contracts to Google Sheets?\nThis overwrites existing rows with values computed from your current price history.\nNo prices will be re-fetched from Bybit.')) return;
+                        setBackfillProgress({done:0, total:0, label:'Re-pushing ledger to Sheets…'});
+                        const todayStr = todayUTC();
+                        let pushed = 0;
+                        // Count total rows to push for progress display
+                        const allRows = contracts.flatMap(c => {
+                            const sched = buildSchedule(c);
+                            return sched.filter(ds => {
+                                if (ds >= todayStr) return false;
+                                const ph = priceHistory[ds];
+                                if (!ph) return false;
+                                const u = c.underlying;
+                                return u==='BTC/USDC' ? !!ph['BTC/USDC'] :
+                                       u==='ETH/USDC' ? !!ph['ETH/USDC'] :
+                                       u==='ETH/USDT'||u==='ETH' ? !!ph.ETH :
+                                       !!ph.BTC;
+                            }).map(ds => ({c, ds}));
+                        });
+                        const total = allRows.length;
+                        setBackfillProgress({done:0, total, label:'Re-pushing 0/' + total + ' rows…'});
+                        // Build a running history so each row is computed with all prior prices
+                        for (const {c, ds} of allRows) {
+                            try {
+                                await pushPriceRow(ds, priceHistory[ds], c, priceHistory);
+                                pushed++;
+                                setBackfillProgress({done:pushed, total, label:'Re-pushing ' + pushed + '/' + total + ' rows…'});
+                            } catch(e) { console.error('Re-push failed for ' + ds, e); }
+                        }
+                        // Re-push contract summary rows with latest ledger totals
+                        for (const c of contracts) {
+                            const ledger = computeLedger(c, priceHistory);
+                            const lastRow = ledger.filter(r=>r.fixingPrice).slice(-1)[0];
+                            await pushContract(c, lastRow||null);
+                        }
+                        setBackfillProgress(null);
+                        alert('Done. Re-pushed ' + pushed + ' ledger rows to Google Sheets.');
+                    }} disabled={!!fetchingDate||backfillProgress!==null} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-green-400 border-green-500/30"><Icon.Refresh spin={backfillProgress!==null}/> Re-push Ledger to Sheets</button>}
                     <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Sheets Config</button>
                     <span className={`text-xs ${syncColor} flex items-center gap-1`}>{syncStatus==='ok'&&<Icon.Check/>}{syncLabel}</span>
                 </div>
