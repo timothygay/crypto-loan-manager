@@ -1143,6 +1143,104 @@ const TxnList = ({txns}) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ─── CLIENT RATES TAB (Securitised Loans) ───────────────────────────────────
+// Read-only mirror of the "Client Rates" tab in the Crypto Loans Database
+// Google Sheet. Purely a passthrough — values shown here are exactly what's
+// entered in the sheet, nothing is calculated.
+const ClientRatesTab = ({config}) => {
+    const [rows, setRows]       = useState([]);
+    const [headers, setHeaders] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError]     = useState('');
+    const [lastSync, setLastSync] = useState(null);
+
+    const fetchRates = useCallback(async () => {
+        if (!config.scriptUrl) return;
+        setLoading(true);
+        setError('');
+        try {
+            const res = await fetch(`${config.scriptUrl}?action=read&sheetName=Client Rates`).then(r=>r.json());
+            if (!res.success) throw new Error(res.error || 'Failed to read Client Rates sheet');
+            const values = res.values || [];
+            if (values.length === 0) { setRows([]); setHeaders([]); setLoading(false); return; }
+            // First row of returned values is the first DATA row (readData skips
+            // the header row internally), so we need the header separately.
+            // readData starts from row 2 — fetch row 1 headers via a lightweight
+            // approach: treat the first column of each row as the period label,
+            // and use a fixed header set matching the known sheet layout.
+            setRows(values);
+            setLastSync(new Date());
+        } catch (e) {
+            console.error('Client Rates fetch error:', e);
+            setError(e.message || 'Failed to load Client Rates');
+        }
+        setLoading(false);
+    }, [config.scriptUrl]);
+
+    useEffect(() => { fetchRates(); }, [fetchRates]);
+
+    if (!config.scriptUrl) {
+        return (
+            <div className="card p-6 text-center">
+                <p className="text-slate-400 text-sm">Configure your Loans Apps Script URL in Config to view Client Rates.</p>
+            </div>
+        );
+    }
+
+    // Expected columns: Period | PS | PS (BTC) | PS (ETH) | PSL | PSL (Unsecured)
+    const colLabels = ['Period', 'PS', 'PS (BTC)', 'PS (ETH)', 'PSL', 'PSL (Unsecured)'];
+
+    return (
+        <div className="space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+                <p className="text-xs text-slate-500">
+                    Mirrors the "Client Rates" tab in your Crypto Loans Database sheet. Update rates there — this view refreshes on demand.
+                </p>
+                <div className="flex items-center gap-2">
+                    {lastSync && <span className="text-xs text-slate-500">Synced {lastSync.toLocaleTimeString()}</span>}
+                    <button onClick={fetchRates} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
+                        <Icon.Refresh spin={loading}/> Sync
+                    </button>
+                </div>
+            </div>
+
+            {error && <div className="bg-red-900/20 border border-red-500/30 rounded p-3 text-red-400 text-sm">{error}</div>}
+
+            {rows.length === 0 && !loading && !error && (
+                <div className="card p-6 text-center">
+                    <p className="text-slate-400 text-sm">No data found in the "Client Rates" sheet tab.</p>
+                </div>
+            )}
+
+            {rows.length > 0 && (
+                <div className="card overflow-hidden">
+                    <div className="overflow-x-auto scrollbar-hide">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-slate-800 bg-slate-900/40 text-xs text-slate-400 font-medium">
+                                    {colLabels.map((label, i) => (
+                                        <th key={i} className={i===0 ? "text-left px-5 py-3" : "text-right px-5 py-3"}>{label}</th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.map((row, i) => (
+                                    <tr key={i} className={`border-b border-slate-800/50 ${i%2===1?'bg-slate-900/20':''}`}>
+                                        <td className="px-5 py-3 text-slate-200 font-medium whitespace-nowrap">{row[0] || '—'}</td>
+                                        {[1,2,3,4,5].map(ci => (
+                                            <td key={ci} className="px-5 py-3 text-right mono text-white">{row[ci] || '—'}</td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 const LoanModule = ({prices}) => {
     const [loans, setLoans] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_loans')||'[]');}catch{return[];} });
     const [transactions, setTransactions] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_transactions')||'[]');}catch{return[];} });
@@ -1153,6 +1251,7 @@ const LoanModule = ({prices}) => {
     const [showTxn, setShowTxn] = useState(null);
     const [loading, setLoading] = useState(false);
     const [filterStatus, setFilterStatus] = useState('all');
+    const [loanSubTab, setLoanSubTab] = useState('loans');
 
 
     useEffect(()=>{ localStorage.setItem('cpb_loans',JSON.stringify(loans)); },[loans]);
@@ -1437,6 +1536,17 @@ const LoanModule = ({prices}) => {
 
     return (
         <div>
+            {/* Loans sub-tabs */}
+            <div className="flex gap-1 mb-5 border-b border-slate-800">
+                {[['loans','Loans'],['rates','Client Rates']].map(([id,label])=>(
+                    <button key={id} onClick={()=>setLoanSubTab(id)}
+                        className={`px-4 py-2 text-sm font-medium transition-all ${loanSubTab===id?'tab-active':'tab-inactive'}`}>
+                        {label}
+                    </button>
+                ))}
+            </div>
+
+            {loanSubTab==='rates' ? <ClientRatesTab config={config}/> : (<>
             <LoanDashboard loans={loans} prices={prices} calcMetrics={calcMetrics} onTopUp={addTxn}/>
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
@@ -1544,6 +1654,7 @@ const LoanModule = ({prices}) => {
             {showAdd&&<LoanFormModal title="New Loan" onSave={addLoan} onClose={()=>setShowAdd(false)} calcTenor={calcTenor}/>}
             {editingLoan&&<LoanFormModal title={`Edit: ${editingLoan.id}`} loan={editingLoan} onSave={updateLoan} onClose={()=>setEditingLoan(null)} calcTenor={calcTenor}/>}
             {showTxn&&<Modal title={showTxn.type} onClose={()=>setShowTxn(null)}><TxnForm onSubmit={a=>addTxn(showTxn.loanId,showTxn.type,a)} onCancel={()=>setShowTxn(null)}/></Modal>}
+            </>)}
         </div>
     );
 };
