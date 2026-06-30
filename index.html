@@ -6425,7 +6425,6 @@ const DCIPriceLadder = () => {
         <div className="space-y-4">
             <div className="flex items-center gap-3">
                 <span className={`px-2 py-0.5 rounded text-xs font-bold border ${asset==='BTC'?'bg-orange-500/15 border-orange-500/30 text-orange-400':'bg-purple-500/15 border-purple-500/30 text-purple-400'}`}>{asset}</span>
-                <span className="text-xs text-slate-400">Spot: <span className="mono text-slate-200">${fmt(spot[asset],2)}</span></span>
             </div>
             {expiryWindow.map(({expiryKey, label}) => {
                 const rows = buildRows(asset, expiryKey);
