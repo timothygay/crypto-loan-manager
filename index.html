@@ -6474,7 +6474,7 @@ const daysToExpirySGT = (expiryDate) => {
     return Math.max(diffDays, 0);
 };
 
-const DCIPriceLadder = () => {
+const DCIPriceLadder = ({spotPrices={}}) => {
     const STORAGE_KEY = 'cpb_dci_ladder_skew';
     const [skewPct, setSkewPct] = useState(() => {
         const saved = localStorage.getItem(STORAGE_KEY);
@@ -6565,26 +6565,30 @@ const DCIPriceLadder = () => {
         return 0.5 * (1 + sign * (1 - poly * Math.exp(-x*x/2)));
     };
 
-    const black76Price = (isCall, F, K, r, T, sigma) => {
-        if (!F || !K || !sigma || sigma <= 0 || T <= 0) return null;
-        const d1 = (Math.log(F/K) + 0.5 * sigma*sigma * T) / (sigma * Math.sqrt(T));
+    // Standard Black-Scholes with r=0, using SPOT price S.
+    // Matches company formula exactly:
+    //   Call = S*N(d1) - K*N(d2)
+    //   Put  = K*N(-d2) - S*N(-d1)
+    // where d1 = [ln(S/K) + 0.5*σ²*T] / (σ*√T),  d2 = d1 - σ*√T
+    const bsPrice = (isCall, S, K, T, sigma) => {
+        if (!S || !K || !sigma || sigma <= 0 || T <= 0) return null;
+        const d1 = (Math.log(S/K) + 0.5 * sigma*sigma * T) / (sigma * Math.sqrt(T));
         const d2 = d1 - sigma * Math.sqrt(T);
-        const disc = Math.exp(-r * T);
         return isCall
-            ? disc * (F * normCDF(d1)  - K * normCDF(d2))
-            : disc * (K * normCDF(-d2) - F * normCDF(-d1));
+            ? S * normCDF(d1)  - K * normCDF(d2)
+            : K * normCDF(-d2) - S * normCDF(-d1);
     };
 
     // BS APR = (bsPrice / strike) * (365 / days) * 100  [strike-based yield, annualised]
-    const computeBSAPR = (isCall, row) => {
+    // Uses spot price S (from bybitPrices) and r=0, matching company formula exactly.
+    const computeBSAPR = (isCall, row, S) => {
         const expiryDate = isCall ? row.callExpiryDate : row.putExpiryDate;
         const iv         = isCall ? row.callIV         : row.putIV;
-        if (!iv || !expiryDate || !row.forward || !row.strike) return null;
+        if (!iv || !expiryDate || !S || !row.strike) return null;
         const days = daysToExpirySGT(expiryDate);
         if (days <= 0) return null;
-        const T    = days / 365;
-        const r    = 0; // hardcoded to 0 to match standard market convention
-        const price = black76Price(isCall, row.forward, row.strike, r, T, iv);
+        const T     = days / 365;
+        const price = bsPrice(isCall, S, row.strike, T, iv);
         if (price === null || price <= 0) return null;
         return (price / row.strike) * (365 / days) * 100; // as a %
     };
@@ -6628,8 +6632,10 @@ const DCIPriceLadder = () => {
                                         {rows.map((row,i) => {
                                             const callAPR          = computeAPR(row.call, row.callExpiryDate);
                                             const putAPR           = computeAPR(row.put,  row.putExpiryDate);
-                                            const bsCallAPR        = computeBSAPR(true,  row);
-                                            const bsPutAPR         = computeBSAPR(false, row);
+                                            // Spot price for this asset from bybitPrices
+                                            const assetSpot        = asset==='BTC' ? (spotPrices.BTC||0) : (spotPrices.ETH||0);
+                                            const bsCallAPR        = computeBSAPR(true,  row, assetSpot);
+                                            const bsPutAPR         = computeBSAPR(false, row, assetSpot);
                                             // Client APR is based on BS APR (not market APR)
                                             const clientCallAPR    = bsCallAPR !== null ? bsCallAPR * (1-skew) : null;
                                             const clientPutAPR     = bsPutAPR  !== null ? bsPutAPR  * (1-skew) : null;
@@ -6638,11 +6644,11 @@ const DCIPriceLadder = () => {
                                             const days             = expiryDate ? daysToExpirySGT(expiryDate) : 0;
                                             const T                = days > 0 ? days / 365 : 0;
                                             const r                = 0; // hardcoded to 0 to match standard market convention
-                                            const bsCallPrice      = (row.callIV && row.forward && T > 0)
-                                                ? black76Price(true,  row.forward, row.strike, r, T, row.callIV)
+                                            const bsCallPrice      = (row.callIV && assetSpot > 0 && T > 0)
+                                                ? bsPrice(true,  assetSpot, row.strike, T, row.callIV)
                                                 : null;
-                                            const bsPutPrice       = (row.putIV  && row.forward && T > 0)
-                                                ? black76Price(false, row.forward, row.strike, r, T, row.putIV)
+                                            const bsPutPrice       = (row.putIV  && assetSpot > 0 && T > 0)
+                                                ? bsPrice(false, assetSpot, row.strike, T, row.putIV)
                                                 : null;
                                             const na  = <span className="text-slate-600">—</span>;
                                             const pct = (v, cls) => v !== null
@@ -6714,7 +6720,7 @@ const DCIPriceLadder = () => {
     );
 };
 
-const DCIModule = ({deribitPrices={}}) => {
+const DCIModule = ({deribitPrices={}, bybitPrices={}}) => {
     const STORAGE_KEY    = 'cpb_dci_config';
     const DCI_SHEET_NAME = 'DCI Active';
 
@@ -6964,7 +6970,7 @@ const DCIModule = ({deribitPrices={}}) => {
                 ))}
             </div>
 
-            {dciSubTab==='ladder' ? <DCIPriceLadder/> : (<>
+            {dciSubTab==='ladder' ? <DCIPriceLadder spotPrices={bybitPrices}/> : (<>
 
             {/* Settings modal */}
             {showSettings && (
@@ -7349,7 +7355,7 @@ const App = () => {
                         <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
                     ))}
                 </div>
-                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:tab==='trs'?<TRSModule bybitPrices={bybitPrices}/>:<DCIModule deribitPrices={deribitPrices}/>}
+                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:tab==='trs'?<TRSModule bybitPrices={bybitPrices}/>:<DCIModule deribitPrices={deribitPrices} bybitPrices={bybitPrices}/>}
             </div>
             {/* Floating theme toggle — fixed bottom-right */}
             <button
