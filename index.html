@@ -6509,21 +6509,21 @@ const getDCIExpiryWindow = () => {
     }));
 };
 
-// Days-to-expiry using SGT 4pm cutoff, as whole days, for APR calc
+// Days-to-expiry using SGT 4pm cutoff, as whole days, for APR calc.
+// Convention: before 4pm SGT on Jul 1, days to Jul 10 expiry = 10 (count today).
+//             after  4pm SGT on Jul 1, days to Jul 10 expiry = 9  (today doesn't count).
 const daysToExpirySGT = (expiryDate) => {
     const now = new Date();
     const sgt = new Date(now.getTime() + 8*60*60*1000);
-    // "Effective today" — if past 4pm SGT, treat as if it's already tomorrow for counting purposes
     const cutoffHour = sgt.getUTCHours() + sgt.getUTCMinutes()/60;
     const pastCutoff = cutoffHour >= 16;
-    // Build effective "today" date at 00:00 SGT, then add 1 day if past cutoff
+    // Calendar date in SGT
     const todaySGT = new Date(Date.UTC(sgt.getUTCFullYear(), sgt.getUTCMonth(), sgt.getUTCDate()));
-    const effectiveDate = pastCutoff ? new Date(todaySGT.getTime() + 24*60*60*1000) : todaySGT;
-    // expiryDate is 08:00 UTC on its calendar date — take its calendar date in UTC
+    // Expiry calendar date (08:00 UTC expiry → just the date portion)
     const expiryDay = new Date(Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate()));
-    const diffMs = expiryDay.getTime() - effectiveDate.getTime();
-    const diffDays = Math.round(diffMs / (24*60*60*1000));
-    return Math.max(diffDays, 0);
+    const diffDays = Math.round((expiryDay.getTime() - todaySGT.getTime()) / (24*60*60*1000));
+    // Before 4pm SGT: today counts, so add 1. After 4pm SGT: today doesn't count.
+    return Math.max(pastCutoff ? diffDays : diffDays + 1, 0);
 };
 
 const DCIPriceLadder = ({spotPrices={}}) => {
