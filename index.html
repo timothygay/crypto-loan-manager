@@ -6386,15 +6386,15 @@ const fetchDeribitOptionChain = async (currency) => {
     const json = await res.json();
     const summary = json.result || [];
 
-    // Step 2: For instruments with a live bid, fetch bid_iv and ask_iv from the order book.
-    // get_book_summary_by_currency only returns mark_iv (model IV), not bid_iv/ask_iv.
-    // We need bid_iv specifically since we are pricing what the market will pay (bid side).
-    const withBid = summary.filter(r => r.bid_price && r.bid_price > 0);
-    if (withBid.length === 0) return summary;
+    // Step 2: Fetch bid_iv and ask_iv from the order book for ALL option instruments.
+    // get_book_summary_by_currency only returns mark_iv, not bid_iv/ask_iv.
+    // Crucially: many strikes have a bid_iv even when bid_price rounds to 0 in the
+    // summary endpoint — filtering by bid_price here would miss those strikes entirely.
+    // We fetch all instruments (depth=1 is the lightest call available).
+    if (summary.length === 0) return summary;
 
-    // Fetch order book for each instrument in parallel (depth=1 is lightest call)
     const obResults = await Promise.allSettled(
-        withBid.map(r =>
+        summary.map(r =>
             fetch(`https://www.deribit.com/api/v2/public/get_order_book?instrument_name=${r.instrument_name}&depth=1`)
                 .then(res => res.json())
                 .then(json => ({ instrument_name: r.instrument_name, ob: json.result }))
@@ -6560,7 +6560,11 @@ const DCIPriceLadder = ({spotPrices={}}) => {
             const parsed = parseDeribitInstrument(row.instrument_name);
             if (!parsed || parsed.expiryKey !== expiryKey) return;
             const bid = row.bid_price;
-            if (!bid || bid <= 0) return; // only include strikes with an actual bid
+            const hasBidIV = row.bid_iv && row.bid_iv > 0;
+            // Include strike if it has a live bid price OR a live bid IV.
+            // Many strikes have bid_iv quoted even when bid_price rounds to 0
+            // in the summary endpoint — we want to show those too.
+            if ((!bid || bid <= 0) && !hasBidIV) return;
             if (!byStrike[parsed.strike]) byStrike[parsed.strike] = {strike: parsed.strike};
             byStrike[parsed.strike][parsed.type]             = bid;
             byStrike[parsed.strike][parsed.type + 'ExpiryDate']     = parsed.expiryDate;
