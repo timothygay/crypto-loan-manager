@@ -6421,18 +6421,17 @@ const getDCIExpiryWindow = () => {
 
     // Find days until the upcoming Friday (0 if today is Friday)
     let daysToFri = (5 - day + 7) % 7;
-    // Determine if we've crossed the Thursday 16:00 SGT rollover for the
-    // CURRENT nearest Friday. Rollover happens at Thu 16:00 SGT.
-    // If today is Thursday (day=4) and hour>=16 → roll forward 1 extra week.
-    // If today is Friday/Sat/Sun and the nearest "upcoming" Friday is next week
-    // (daysToFri counts to the NEXT Friday, which is already correct since
-    // today's Friday would be daysToFri=0, but Thu rollover means by Friday
-    // the window should already exclude "today" if today is Friday).
+    // Rollover rule: past Tuesday 4pm SGT, drop the nearest Friday and
+    // show the NEXT 2 Fridays instead.
+    // day: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
     let rolled = false;
-    if (day === 4 && hour >= 16) rolled = true;          // Thursday after 4pm SGT
-    if (day === 5) rolled = true;                          // Any time Friday — already rolled since Thu 4pm
-    if (day === 6 || day === 0) rolled = false;             // Sat/Sun — not relevant, daysToFri already correct
-    if (day === 1 || day === 2 || day === 3) rolled = false; // Mon/Tue/Wed — not relevant
+    if (day === 2 && hour >= 16) rolled = true; // Tuesday at/after 4pm SGT
+    if (day === 3) rolled = true;               // All of Wednesday
+    if (day === 4) rolled = true;               // All of Thursday
+    if (day === 5) rolled = true;               // All of Friday (already past expiry)
+    // Sat (6) and Sun (0) and Mon (1) and Tue before 4pm: not rolled
+    // When rolled, daysToFri already counts to the nearest upcoming Friday;
+    // adding 7 skips it to the one after.
 
     let firstFridayOffset = daysToFri;
     if (rolled) firstFridayOffset += 7;
