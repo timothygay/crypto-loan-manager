@@ -6407,8 +6407,8 @@ const fetchDeribitOptionChain = async (currency) => {
         if (r.status === 'fulfilled' && r.value?.ob) {
             const ob = r.value.ob;
             ivMap[r.value.instrument_name] = {
-                bid_iv: ob.bidIv || null,   // IV implied by best bid — Deribit v2 uses camelCase
-                ask_iv: ob.askIv || null,   // IV implied by best ask
+                bid_iv: ob.bid_iv || null,   // IV implied by best bid — confirmed snake_case from live API
+                ask_iv: ob.ask_iv || null,   // IV implied by best ask
             };
         }
     });
