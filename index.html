@@ -6533,36 +6533,48 @@ const DCIPriceLadder = ({spotPrices={}}) => {
     useEffect(() => { localStorage.setItem(STORAGE_KEY, skewPct); }, [skewPct]);
 
     const [chains, setChains]   = useState({BTC: [], ETH: []});
-    const [spot, setSpot]       = useState({BTC: 0, ETH: 0});
     const [loading, setLoading] = useState(false);
     const [lastFetch, setLastFetch] = useState(null);
     const [fetchError, setFetchError] = useState('');
 
     const fetchAll = useCallback(async () => {
+        if (fetchAll._running) return; // prevent overlapping fetches
+        fetchAll._running = true;
         setLoading(true);
         setFetchError('');
         try {
-            const [btcChain, ethChain] = await Promise.all([
-                fetchDeribitOptionChain('BTC'),
-                fetchDeribitOptionChain('ETH'),
-            ]);
+            // Fetch BTC and ETH sequentially to reduce peak request load
+            const btcChain = await fetchDeribitOptionChain('BTC');
+            const ethChain = await fetchDeribitOptionChain('ETH');
             setChains({BTC: btcChain, ETH: ethChain});
-            // Derive a spot estimate from any instrument's underlying_price field
-            const btcSpot = btcChain.find(r => r.underlying_price > 0)?.underlying_price || 0;
-            const ethSpot = ethChain.find(r => r.underlying_price > 0)?.underlying_price || 0;
-            setSpot({BTC: btcSpot, ETH: ethSpot});
             setLastFetch(new Date());
         } catch (e) {
             console.error('DCI ladder fetch error:', e);
             setFetchError(e.message || 'Failed to fetch Deribit option chain');
         }
         setLoading(false);
+        fetchAll._running = false;
     }, []);
 
     useEffect(() => {
-        fetchAll();
-        const interval = setInterval(fetchAll, 5*60*1000); // every 5 minutes
-        return () => clearInterval(interval);
+        let cancelled = false;
+        let timer = null;
+
+        const run = async () => {
+            if (cancelled) return;
+            await fetchAll();
+            if (!cancelled) {
+                // Schedule next fetch 5 minutes AFTER the current one completes
+                // (not a fixed interval) — prevents overlapping fetches
+                timer = setTimeout(run, 5 * 60 * 1000);
+            }
+        };
+
+        run();
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
+        };
     }, [fetchAll]);
 
     const expiryWindow = useMemo(() => getDCIExpiryWindow(), [lastFetch]);
