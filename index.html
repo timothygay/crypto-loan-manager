@@ -6579,37 +6579,39 @@ const DCIPriceLadder = ({spotPrices={}}) => {
 
     const expiryWindow = useMemo(() => getDCIExpiryWindow(), [lastFetch]);
 
-    // Build combined strike rows for a given asset + expiry
-    const buildRows = (asset, expiryKey) => {
-        const chain = chains[asset] || [];
-        const byStrike = {};
-        chain.forEach(row => {
-            const parsed = parseDeribitInstrument(row.instrument_name);
-            if (!parsed || parsed.expiryKey !== expiryKey) return;
-            const bid = row.bid_price;
-            const hasBidIV = row.bid_iv && row.bid_iv > 0;
-            // Include strike if it has a live bid price OR a live bid IV.
-            // Many strikes have bid_iv quoted even when bid_price rounds to 0
-            // in the summary endpoint — we want to show those too.
-            if ((!bid || bid <= 0) && !hasBidIV) return;
-            if (!byStrike[parsed.strike]) byStrike[parsed.strike] = {strike: parsed.strike};
-            byStrike[parsed.strike][parsed.type]             = bid;
-            byStrike[parsed.strike][parsed.type + 'ExpiryDate']     = parsed.expiryDate;
-            // Use bid_iv only — IV implied by the live market bid.
-            // If bid_iv is null (no active bidder), IV and BS columns show blank.
-            // All Deribit IV fields are in % (e.g. 62.5 means 62.5%), convert to decimal.
-            const bidIV = row.bid_iv && row.bid_iv > 0 ? row.bid_iv / 100 : null;
-            if (bidIV) {
-                byStrike[parsed.strike][parsed.type + 'IV']    = bidIV;
-                byStrike[parsed.strike][parsed.type + 'BidIV'] = bidIV;
-            }
-            // underlying_price is Deribit's forward price for this expiry (used in Black-76)
-            if (row.underlying_price > 0) byStrike[parsed.strike]['forward'] = row.underlying_price;
-            // interest_rate per instrument (Deribit's implied repo, usually near 0)
-            if (row.interest_rate !== undefined) byStrike[parsed.strike]['rate'] = row.interest_rate;
+    // Build all rows once when chains data changes — keyed by "ASSET:expiryKey"
+    const allRows = useMemo(() => {
+        const result = {};
+        ['BTC','ETH'].forEach(asset => {
+            const chain = chains[asset] || [];
+            const byExpiry = {};
+            chain.forEach(row => {
+                const parsed = parseDeribitInstrument(row.instrument_name);
+                if (!parsed) return;
+                const bid    = row.bid_price;
+                const hasBidIV = row.bid_iv && row.bid_iv > 0;
+                if ((!bid || bid <= 0) && !hasBidIV) return;
+                const key = parsed.expiryKey;
+                if (!byExpiry[key]) byExpiry[key] = {};
+                const byStrike = byExpiry[key];
+                if (!byStrike[parsed.strike]) byStrike[parsed.strike] = {strike: parsed.strike};
+                byStrike[parsed.strike][parsed.type]               = bid || null;
+                byStrike[parsed.strike][parsed.type + 'ExpiryDate'] = parsed.expiryDate;
+                const bidIV = row.bid_iv && row.bid_iv > 0 ? row.bid_iv / 100 : null;
+                if (bidIV) {
+                    byStrike[parsed.strike][parsed.type + 'IV']    = bidIV;
+                    byStrike[parsed.strike][parsed.type + 'BidIV'] = bidIV;
+                }
+            });
+            // Sort strikes for each expiry
+            Object.entries(byExpiry).forEach(([expiryKey, byStrike]) => {
+                result[asset + ':' + expiryKey] = Object.values(byStrike).sort((a,b) => a.strike - b.strike);
+            });
         });
-        return Object.values(byStrike).sort((a,b) => a.strike - b.strike);
-    };
+        return result;
+    }, [chains]);
+
+    const getRows = (asset, expiryKey) => allRows[asset + ':' + expiryKey] || [];
 
     const skew = (parseFloat(skewPct) || 0) / 100;
 
@@ -6626,7 +6628,7 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                 <span className={`px-2 py-0.5 rounded text-xs font-bold border ${asset==='BTC'?'bg-orange-500/15 border-orange-500/30 text-orange-400':'bg-purple-500/15 border-purple-500/30 text-purple-400'}`}>{asset}</span>
             </div>
             {expiryWindow.map(({expiryKey, label}) => {
-                const rows = buildRows(asset, expiryKey);
+                const rows = getRows(asset, expiryKey);
                 return (
                     <div key={expiryKey} className="card overflow-hidden">
                         <div className="px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
