@@ -6386,20 +6386,35 @@ const fetchDeribitOptionChain = async (currency) => {
     const json = await res.json();
     const summary = json.result || [];
 
-    // Step 2: Fetch bid_iv and ask_iv from the order book for ALL option instruments.
-    // get_book_summary_by_currency only returns mark_iv, not bid_iv/ask_iv.
-    // Crucially: many strikes have a bid_iv even when bid_price rounds to 0 in the
-    // summary endpoint — filtering by bid_price here would miss those strikes entirely.
-    // We fetch all instruments (depth=1 is the lightest call available).
+    // Step 2: Fetch bid_iv from order books — filter to target expiries FIRST.
+    // The full chain has 200+ instruments; fetching all in parallel causes 429s.
+    // Filtering to 2 expiries gives ~20-40 instruments, well within rate limits.
     if (summary.length === 0) return summary;
 
-    const obResults = await Promise.allSettled(
-        summary.map(r =>
-            fetch(`https://www.deribit.com/api/v2/public/get_order_book?instrument_name=${r.instrument_name}&depth=1`)
-                .then(res => res.json())
-                .then(json => ({ instrument_name: r.instrument_name, ob: json.result }))
-        )
-    );
+    const targetExpiries = new Set(getDCIExpiryWindow().map(e => e.expiryKey));
+    const targetInstruments = summary.filter(r => {
+        const parsed = parseDeribitInstrument(r.instrument_name);
+        return parsed && targetExpiries.has(parsed.expiryKey);
+    });
+
+    // Batch in groups of 10 with 100ms between batches to avoid rate limiting
+    const BATCH_SIZE = 10;
+    const allOBResults = [];
+    for (let i = 0; i < targetInstruments.length; i += BATCH_SIZE) {
+        const batch = targetInstruments.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.allSettled(
+            batch.map(r =>
+                fetch(`https://www.deribit.com/api/v2/public/get_order_book?instrument_name=${r.instrument_name}&depth=1`)
+                    .then(res => res.json())
+                    .then(json => ({ instrument_name: r.instrument_name, ob: json.result }))
+            )
+        );
+        allOBResults.push(...batchResults);
+        if (i + BATCH_SIZE < targetInstruments.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+    }
+    const obResults = allOBResults;
 
     // Build a lookup map of instrument_name → {bid_iv, ask_iv}
     const ivMap = {};
