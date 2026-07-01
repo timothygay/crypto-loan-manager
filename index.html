@@ -6583,7 +6583,7 @@ const DCIPriceLadder = () => {
         const days = daysToExpirySGT(expiryDate);
         if (days <= 0) return null;
         const T    = days / 365;
-        const r    = row.rate || 0;
+        const r    = 0; // hardcoded to 0 to match standard market convention
         const price = black76Price(isCall, row.forward, row.strike, r, T, iv);
         if (price === null || price <= 0) return null;
         return (price / row.strike) * (365 / days) * 100; // as a %
@@ -6637,7 +6637,7 @@ const DCIPriceLadder = () => {
                                             const expiryDate       = row.callExpiryDate || row.putExpiryDate;
                                             const days             = expiryDate ? daysToExpirySGT(expiryDate) : 0;
                                             const T                = days > 0 ? days / 365 : 0;
-                                            const r                = row.rate || 0;
+                                            const r                = 0; // hardcoded to 0 to match standard market convention
                                             const bsCallPrice      = (row.callIV && row.forward && T > 0)
                                                 ? black76Price(true,  row.forward, row.strike, r, T, row.callIV)
                                                 : null;
