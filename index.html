@@ -6528,8 +6528,15 @@ const DCIPriceLadder = () => {
             const bid = row.bid_price;
             if (!bid || bid <= 0) return; // only include strikes with an actual bid
             if (!byStrike[parsed.strike]) byStrike[parsed.strike] = {strike: parsed.strike};
-            byStrike[parsed.strike][parsed.type] = bid;
-            byStrike[parsed.strike][parsed.type + 'ExpiryDate'] = parsed.expiryDate;
+            byStrike[parsed.strike][parsed.type]             = bid;
+            byStrike[parsed.strike][parsed.type + 'ExpiryDate']     = parsed.expiryDate;
+            // Capture BS inputs per side — mark_iv is in % (e.g. 60 means 60%), convert to decimal
+            const iv = row.mark_iv ? row.mark_iv / 100 : null;
+            if (iv && iv > 0) byStrike[parsed.strike][parsed.type + 'IV'] = iv;
+            // underlying_price is Deribit's forward price for this expiry (used in Black-76)
+            if (row.underlying_price > 0) byStrike[parsed.strike]['forward'] = row.underlying_price;
+            // interest_rate per instrument (Deribit's implied repo, usually near 0)
+            if (row.interest_rate !== undefined) byStrike[parsed.strike]['rate'] = row.interest_rate;
         });
         return Object.values(byStrike).sort((a,b) => a.strike - b.strike);
     };
@@ -6541,6 +6548,46 @@ const DCIPriceLadder = () => {
         const days = daysToExpirySGT(expiryDate);
         if (days <= 0) return null;
         return (bid / days) * 365 * 100; // as a %
+    };
+
+    // ── Black-76 (log-normal) option pricing ────────────────────────────────
+    // Uses forward price F (Deribit's underlying_price) rather than spot,
+    // which is correct for exchange-traded options priced off the futures curve.
+    // Formula: C = e^(-rT) * [F*N(d1) - K*N(d2)]
+    //          P = e^(-rT) * [K*N(-d2) - F*N(-d1)]
+    // where d1 = [ln(F/K) + 0.5*σ²*T] / (σ*√T),  d2 = d1 - σ*√T
+    const normCDF = (x) => {
+        // Abramowitz & Stegun approximation — accurate to 7 decimal places
+        const a1=0.254829592, a2=-0.284496736, a3=1.421413741,
+              a4=-1.453152027, a5=1.061405429, p=0.3275911;
+        const sign = x < 0 ? -1 : 1;
+        const t = 1 / (1 + p * Math.abs(x));
+        const poly = t*(a1 + t*(a2 + t*(a3 + t*(a4 + t*a5))));
+        return 0.5 * (1 + sign * (1 - poly * Math.exp(-x*x/2)));
+    };
+
+    const black76Price = (isCall, F, K, r, T, sigma) => {
+        if (!F || !K || !sigma || sigma <= 0 || T <= 0) return null;
+        const d1 = (Math.log(F/K) + 0.5 * sigma*sigma * T) / (sigma * Math.sqrt(T));
+        const d2 = d1 - sigma * Math.sqrt(T);
+        const disc = Math.exp(-r * T);
+        return isCall
+            ? disc * (F * normCDF(d1)  - K * normCDF(d2))
+            : disc * (K * normCDF(-d2) - F * normCDF(-d1));
+    };
+
+    // BS APR = (bsPrice / strike) * (365 / days) * 100  [strike-based yield, annualised]
+    const computeBSAPR = (isCall, row) => {
+        const expiryDate = isCall ? row.callExpiryDate : row.putExpiryDate;
+        const iv         = isCall ? row.callIV         : row.putIV;
+        if (!iv || !expiryDate || !row.forward || !row.strike) return null;
+        const days = daysToExpirySGT(expiryDate);
+        if (days <= 0) return null;
+        const T    = days / 365;
+        const r    = row.rate || 0;
+        const price = black76Price(isCall, row.forward, row.strike, r, T, iv);
+        if (price === null || price <= 0) return null;
+        return (price / row.strike) * (365 / days) * 100; // as a %
     };
 
     const AssetLadder = ({asset}) => (
@@ -6563,30 +6610,66 @@ const DCIPriceLadder = () => {
                                 <table className="w-full text-xs">
                                     <thead>
                                         <tr className="border-b border-slate-800 bg-slate-900/40 text-slate-400 font-medium">
-                                            <th className="text-right px-3 py-2">Client CALL APR</th>
-                                            <th className="text-right px-3 py-2">CALL APR</th>
-                                            <th className="text-right px-3 py-2">CALL Bid</th>
+                                            <th className="text-right px-3 py-2 text-cyan-300">Client APR</th>
+                                            <th className="text-right px-3 py-2 text-violet-400">BS Call APR</th>
+                                            <th className="text-right px-3 py-2">Market Call APR</th>
+                                            <th className="text-right px-3 py-2">Op Price</th>
+                                            <th className="text-right px-3 py-2">IV</th>
+                                            <th className="text-right px-3 py-2">Call Bid</th>
                                             <th className="text-center px-3 py-2 bg-slate-800/40">Strike</th>
-                                            <th className="text-left px-3 py-2">PUT Bid</th>
-                                            <th className="text-left px-3 py-2">PUT APR</th>
-                                            <th className="text-left px-3 py-2">Client PUT APR</th>
+                                            <th className="text-left px-3 py-2">Put Bid</th>
+                                            <th className="text-left px-3 py-2">IV</th>
+                                            <th className="text-left px-3 py-2">Op Price</th>
+                                            <th className="text-left px-3 py-2">Market Put APR</th>
+                                            <th className="text-left px-3 py-2 text-violet-400">BS Put APR</th>
+                                            <th className="text-left px-3 py-2 text-cyan-300">Client APR</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {rows.map((row,i) => {
-                                            const callAPR = computeAPR(row.call, row.callExpiryDate);
-                                            const putAPR  = computeAPR(row.put,  row.putExpiryDate);
-                                            const clientCallAPR = callAPR !== null ? callAPR * (1-skew) : null;
-                                            const clientPutAPR  = putAPR  !== null ? putAPR  * (1-skew) : null;
+                                            const callAPR          = computeAPR(row.call, row.callExpiryDate);
+                                            const putAPR           = computeAPR(row.put,  row.putExpiryDate);
+                                            const bsCallAPR        = computeBSAPR(true,  row);
+                                            const bsPutAPR         = computeBSAPR(false, row);
+                                            // Client APR is based on BS APR (not market APR)
+                                            const clientCallAPR    = bsCallAPR !== null ? bsCallAPR * (1-skew) : null;
+                                            const clientPutAPR     = bsPutAPR  !== null ? bsPutAPR  * (1-skew) : null;
+                                            // Op Price: Black-76 theoretical price in coin terms
+                                            const expiryDate       = row.callExpiryDate || row.putExpiryDate;
+                                            const days             = expiryDate ? daysToExpirySGT(expiryDate) : 0;
+                                            const T                = days > 0 ? days / 365 : 0;
+                                            const r                = row.rate || 0;
+                                            const bsCallPrice      = (row.callIV && row.forward && T > 0)
+                                                ? black76Price(true,  row.forward, row.strike, r, T, row.callIV)
+                                                : null;
+                                            const bsPutPrice       = (row.putIV  && row.forward && T > 0)
+                                                ? black76Price(false, row.forward, row.strike, r, T, row.putIV)
+                                                : null;
+                                            const na  = <span className="text-slate-600">—</span>;
+                                            const pct = (v, cls) => v !== null
+                                                ? <span className={cls}>{fmt(v,2)}%</span>
+                                                : na;
+                                            const ivFmt = (v) => v
+                                                ? <span className="text-amber-400">{fmt(v*100,1)}%</span>
+                                                : na;
+                                            const prFmt = (v) => v !== null
+                                                ? <span className="text-slate-200">{v.toFixed(4)}</span>
+                                                : na;
                                             return (
                                                 <tr key={row.strike} className={`border-b border-slate-800/40 ${i%2===1?'bg-slate-900/20':''}`}>
-                                                    <td className="text-right px-3 py-1.5 mono text-cyan-300 font-semibold">{clientCallAPR!==null?fmt(clientCallAPR,2)+'%':'—'}</td>
-                                                    <td className="text-right px-3 py-1.5 mono text-green-400">{callAPR!==null?fmt(callAPR,2)+'%':'—'}</td>
-                                                    <td className="text-right px-3 py-1.5 mono text-slate-300">{row.call?row.call.toFixed(4):'—'}</td>
+                                                    <td className="text-right px-3 py-1.5 mono font-semibold">{pct(clientCallAPR,'text-cyan-300')}</td>
+                                                    <td className="text-right px-3 py-1.5 mono">{pct(bsCallAPR,'text-violet-400')}</td>
+                                                    <td className="text-right px-3 py-1.5 mono">{pct(callAPR,'text-green-400')}</td>
+                                                    <td className="text-right px-3 py-1.5 mono">{prFmt(bsCallPrice)}</td>
+                                                    <td className="text-right px-3 py-1.5 mono">{ivFmt(row.callIV)}</td>
+                                                    <td className="text-right px-3 py-1.5 mono text-slate-300">{row.call?row.call.toFixed(4):na}</td>
                                                     <td className="text-center px-3 py-1.5 mono text-white font-semibold bg-slate-800/40">${fmt(row.strike,0)}</td>
-                                                    <td className="text-left px-3 py-1.5 mono text-slate-300">{row.put?row.put.toFixed(4):'—'}</td>
-                                                    <td className="text-left px-3 py-1.5 mono text-red-400">{putAPR!==null?fmt(putAPR,2)+'%':'—'}</td>
-                                                    <td className="text-left px-3 py-1.5 mono text-cyan-300 font-semibold">{clientPutAPR!==null?fmt(clientPutAPR,2)+'%':'—'}</td>
+                                                    <td className="text-left px-3 py-1.5 mono text-slate-300">{row.put?row.put.toFixed(4):na}</td>
+                                                    <td className="text-left px-3 py-1.5 mono">{ivFmt(row.putIV)}</td>
+                                                    <td className="text-left px-3 py-1.5 mono">{prFmt(bsPutPrice)}</td>
+                                                    <td className="text-left px-3 py-1.5 mono">{pct(putAPR,'text-red-400')}</td>
+                                                    <td className="text-left px-3 py-1.5 mono">{pct(bsPutAPR,'text-violet-400')}</td>
+                                                    <td className="text-left px-3 py-1.5 mono font-semibold">{pct(clientPutAPR,'text-cyan-300')}</td>
                                                 </tr>
                                             );
                                         })}
