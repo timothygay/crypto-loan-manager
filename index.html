@@ -6422,8 +6422,9 @@ const fetchDeribitOptionChain = async (currency) => {
         if (r.status === 'fulfilled' && r.value?.ob) {
             const ob = r.value.ob;
             ivMap[r.value.instrument_name] = {
-                bid_iv: ob.bid_iv || null,   // IV implied by best bid — confirmed snake_case from live API
-                ask_iv: ob.ask_iv || null,   // IV implied by best ask
+                bid_iv:         ob.bid_iv         || null,
+                ask_iv:         ob.ask_iv         || null,
+                best_bid_price: ob.best_bid_price || null,
             };
         }
     });
@@ -6431,8 +6432,9 @@ const fetchDeribitOptionChain = async (currency) => {
     // Merge bid_iv and ask_iv back into the summary rows
     return summary.map(r => ({
         ...r,
-        bid_iv: ivMap[r.instrument_name]?.bid_iv ?? null,
-        ask_iv: ivMap[r.instrument_name]?.ask_iv ?? null,
+        bid_iv:         ivMap[r.instrument_name]?.bid_iv         ?? null,
+        ask_iv:         ivMap[r.instrument_name]?.ask_iv         ?? null,
+        best_bid_price: ivMap[r.instrument_name]?.best_bid_price ?? r.bid_price ?? null,
     }));
 };
 
@@ -6588,7 +6590,7 @@ const DCIPriceLadder = ({spotPrices={}}) => {
             chain.forEach(row => {
                 const parsed = parseDeribitInstrument(row.instrument_name);
                 if (!parsed) return;
-                const bid    = row.bid_price;
+                const bid    = row.best_bid_price || row.bid_price || null;
                 const hasBidIV = row.bid_iv && row.bid_iv > 0;
                 if ((!bid || bid <= 0) && !hasBidIV) return;
                 const key = parsed.expiryKey;
