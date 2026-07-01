@@ -6617,11 +6617,12 @@ const DCIPriceLadder = ({spotPrices={}}) => {
 
     const skew = (parseFloat(skewPct) || 0) / 100;
 
-    const computeAPR = (bid, strike, expiryDate, iv) => {
-        if (!iv || !bid || !strike || !expiryDate) return null;
+    const computeAPR = (bid, strike, expiryDate, iv, spot) => {
+        if (!iv || !bid || !strike || !expiryDate || !spot) return null;
         const days = daysToExpirySGT(expiryDate);
         if (days <= 0) return null;
-        return (bid / strike) * (365 / days) * 100;
+        const opPrice = bid * spot; // Op Price in USD
+        return (opPrice / strike) * (365 / days) * 100;
     };
 
     const AssetLadder = ({asset}) => (
@@ -6661,8 +6662,8 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                         {rows.map((row,i) => {
                                             const assetSpot     = asset==='BTC' ? (spotPrices.BTC||0) : (spotPrices.ETH||0);
                                             // APR gated on bid_iv — confirms live market bidder
-                                            const callAPR       = computeAPR(row.call, row.strike, row.callExpiryDate, row.callIV);
-                                            const putAPR        = computeAPR(row.put,  row.strike, row.putExpiryDate,  row.putIV);
+                                            const callAPR       = computeAPR(row.call, row.strike, row.callExpiryDate, row.callIV, assetSpot);
+                                            const putAPR        = computeAPR(row.put,  row.strike, row.putExpiryDate,  row.putIV,  assetSpot);
                                             const clientCallAPR = callAPR !== null ? callAPR * (1-skew) : null;
                                             const clientPutAPR  = putAPR  !== null ? putAPR  * (1-skew) : null;
                                             // Op Price = bid (coin) × Bybit spot
