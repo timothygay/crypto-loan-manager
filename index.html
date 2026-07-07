@@ -6671,15 +6671,15 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                         <tr className="border-b border-slate-700/50 text-xs font-bold">
                                             {(visibleCols.clientApr||visibleCols.callApr||visibleCols.opPrice||visibleCols.callIV||visibleCols.callBid) && (
                                                 <th colSpan={[visibleCols.clientApr,visibleCols.callApr,visibleCols.opPrice,visibleCols.callIV,visibleCols.callBid].filter(Boolean).length}
-                                                    className="text-right px-3 py-1.5 text-green-400 bg-green-900/10 tracking-widest uppercase">
-                                                    Calls ←
+                                                    className="text-center px-3 py-1.5 text-green-300 bg-green-900/20 tracking-widest uppercase">
+                                                    Calls
                                                 </th>
                                             )}
                                             <th className="text-center px-3 py-1.5 bg-slate-800/40"></th>
                                             {(visibleCols.putBid||visibleCols.putIV||visibleCols.opPricePut||visibleCols.putApr||visibleCols.clientAprPut) && (
                                                 <th colSpan={[visibleCols.putBid,visibleCols.putIV,visibleCols.opPricePut,visibleCols.putApr,visibleCols.clientAprPut].filter(Boolean).length}
-                                                    className="text-left px-3 py-1.5 text-red-400 bg-red-900/10 tracking-widest uppercase">
-                                                    → Puts
+                                                    className="text-center px-3 py-1.5 text-red-300 bg-red-900/20 tracking-widest uppercase">
+                                                    Puts
                                                 </th>
                                             )}
                                         </tr>
