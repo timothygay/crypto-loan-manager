@@ -6668,6 +6668,21 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                             <div className="overflow-x-auto scrollbar-hide">
                                 <table className="w-full text-xs">
                                     <thead>
+                                        <tr className="border-b border-slate-700/50 text-xs font-bold">
+                                            {(visibleCols.clientApr||visibleCols.callApr||visibleCols.opPrice||visibleCols.callIV||visibleCols.callBid) && (
+                                                <th colSpan={[visibleCols.clientApr,visibleCols.callApr,visibleCols.opPrice,visibleCols.callIV,visibleCols.callBid].filter(Boolean).length}
+                                                    className="text-right px-3 py-1.5 text-green-400 bg-green-900/10 tracking-widest uppercase">
+                                                    Calls ←
+                                                </th>
+                                            )}
+                                            <th className="text-center px-3 py-1.5 bg-slate-800/40"></th>
+                                            {(visibleCols.putBid||visibleCols.putIV||visibleCols.opPricePut||visibleCols.putApr||visibleCols.clientAprPut) && (
+                                                <th colSpan={[visibleCols.putBid,visibleCols.putIV,visibleCols.opPricePut,visibleCols.putApr,visibleCols.clientAprPut].filter(Boolean).length}
+                                                    className="text-left px-3 py-1.5 text-red-400 bg-red-900/10 tracking-widest uppercase">
+                                                    → Puts
+                                                </th>
+                                            )}
+                                        </tr>
                                         <tr className="border-b border-slate-800 bg-slate-900/40 text-slate-400 font-medium">
                                             {visibleCols.clientApr    && <th className="text-right px-3 py-2 text-cyan-300">Client APR</th>}
                                             {visibleCols.callApr      && <th className="text-right px-3 py-2 text-green-400">Call APR</th>}
