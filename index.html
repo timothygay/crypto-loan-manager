@@ -6522,8 +6522,8 @@ const daysToExpirySGT = (expiryDate) => {
     // Expiry calendar date (08:00 UTC expiry → just the date portion)
     const expiryDay = new Date(Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate()));
     const diffDays = Math.round((expiryDay.getTime() - todaySGT.getTime()) / (24*60*60*1000));
-    // Before 4pm SGT: today counts, so add 1. After 4pm SGT: today doesn't count.
-    return Math.max(pastCutoff ? diffDays : diffDays + 1, 0);
+    // Before 4pm SGT: diff as-is (tomorrow to expiry inclusive). After 4pm: subtract 1.
+    return Math.max(pastCutoff ? diffDays - 1 : diffDays, 0);
 };
 
 const DCIPriceLadder = ({spotPrices={}}) => {
