@@ -3114,9 +3114,16 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}, onScro
     trades.forEach(trade => {
         if (!['Active','Knocked Out','Exercised','Matured'].includes(trade.status)) return;
         const tradeIsEnded = ['Knocked Out','Exercised','Matured'].includes(trade.status);
+        // For ended trades, find the last paid settlement — any schedule date
+        // after that is a ghost entry (e.g. maturity date after a KO) and must be suppressed.
+        const paidDates = (trade.paidSettlements||[]).slice().sort();
+        const endedOnDate = tradeIsEnded && paidDates.length > 0 ? paidDates[paidDates.length-1] : null;
         const sched = buildFCNSchedule(trade);
         sched.forEach(({date,isMaturity}) => {
             if ((trade.paidSettlements||[]).includes(date)) return;
+            // Suppress any unpaid entry for an ended trade that falls after the last paid date.
+            // This catches the maturity-date ghost row for KO'd trades.
+            if (tradeIsEnded && endedOnDate && date > endedOnDate) return;
             const coupon = calcFCNCoupon(trade, date);
             const entry = {trade,date,isMaturity,coupon,weekend:isWeekend(date)};
             const isEffectivelyPast = date < today || (date === today && fcnPast4pm);
