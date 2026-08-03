@@ -1,0 +1,18 @@
+# Local-only backend reference — MUST NEVER be pushed to this PUBLIC repo.
+# Contains Google Apps Script sources (settlement-alerts.gs holds the Telegram
+# bot token) and the HANDOVER.md operational memory.
+_backend-reference/
+
+# Secrets / env
+.env
+.env.*
+*.local
+
+# Vercel local link
+.vercel/
+
+# Deps / build
+node_modules/
+
+# OS junk
+.DS_Store
