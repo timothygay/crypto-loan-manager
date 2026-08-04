@@ -22,6 +22,8 @@ const READ_ACTIONS = new Set([
     'getdaterange', 'gettodayprices', 'readsheet',
     // SSPS
     'readcontracts', 'readprices',
+    // FCN
+    'readfcnorders', 'readpriceladder',
 ]);
 
 module.exports = async (req, res) => {

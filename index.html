@@ -3452,8 +3452,8 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus,onConfirmPayme
                 </div>
                 <div className="flex gap-2">
                     <button onClick={()=>setExpanded(!expanded)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1">Schedule {expanded?'▲':'▼'}</button>
-                    <button onClick={()=>onEdit(trade)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>
-                    <button onClick={()=>onDelete(trade.id)} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>
+                    {canWrite() && <button onClick={()=>onEdit(trade)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>}
+                    {canWrite() && <button onClick={()=>onDelete(trade.id)} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>}
                     {trade.status!=='Active'&&<button onClick={()=>onResetStatus(trade.id)}
                         title="Reset to Active — barrier check will re-derive status from stored fixing prices"
                         className="px-2 py-1 rounded-lg bg-slate-700 border border-slate-600 text-slate-300 hover:bg-slate-600 text-xs">↺ Reset</button>}
@@ -3898,6 +3898,7 @@ const FCNFormModal = ({trade,onSave,onClose}) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // FCN PRICE LADDER
 // ═══════════════════════════════════════════════════════════════════════════════
+const FCN_API = '/api/sheet/fcn';  // FCN data routes through the auth + role-check proxy
 const FCNPriceLadder = ({config, prices}) => {
     const [rows, setRows]               = useState([]);
     const [loading, setLoading]         = useState(false);
@@ -3928,10 +3929,10 @@ const FCNPriceLadder = ({config, prices}) => {
     };
 
     const fetchLadder = async () => {
-        if (!config.scriptUrl) return;
+        if (!FCN_API) return;
         setLoading(true);
         try {
-            const res  = await fcnSheetsCall(config.scriptUrl, {action: 'readPriceLadder'});
+            const res  = await fcnSheetsCall(FCN_API, {action: 'readPriceLadder'});
             const data = (res.values || []).map(r => ({
                 date:        r[0]  || '',
                 type:        r[1]  || '',
@@ -3954,7 +3955,7 @@ const FCNPriceLadder = ({config, prices}) => {
         setLoading(false);
     };
 
-    useEffect(() => { fetchLadder(); }, [config.scriptUrl]);
+    useEffect(() => { fetchLadder(); }, [FCN_API]);
 
     // Download visible (non-hidden) filtered rows to Excel CSV
     const downloadExcel = () => {
@@ -4001,7 +4002,7 @@ const FCNPriceLadder = ({config, prices}) => {
     const dataDate = rows[0]?.date || '';
     const isStale  = dataDate && dataDate !== today;
 
-    if (!config.scriptUrl) {
+    if (!FCN_API) {
         return (
             <div className="card p-8 text-center">
                 <p className="text-slate-400 text-sm">Configure your FCN Apps Script URL in the Config tab to view price ladders.</p>
@@ -4176,7 +4177,7 @@ const FCNModule = ({prices}) => {
     useEffect(()=>{localStorage.setItem('cpb_fcn_trades',JSON.stringify(trades));},[trades]);
     useEffect(()=>{localStorage.setItem('cpb_fcn_config',JSON.stringify(config));},[config]);
     // Auto-sync from Sheets on load and every 30 seconds — picks up trades added by other users
-    useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
+    useEffect(()=>{ if(FCN_API){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[FCN_API]);
 
     // fixingPrices: map of "SYMBOL|YYYY-MM-DD" → price, for overdue dashboard display.
     const [fixingPrices,setFixingPrices]=useState({});
@@ -4336,18 +4337,19 @@ const FCNModule = ({prices}) => {
     // useEffect([prices]) removed — no live barrier updates.
 
     const pushTrade=async(trade,originalId=null)=>{
-        if(!config.scriptUrl) return;
+        if(!FCN_API) return;
         try {
             const fcnParams={action:'upsertFCNOrder',values:JSON.stringify(tradToRow(trade))};
             if(originalId&&originalId!==trade.id) fcnParams.originalId=originalId;
-            await fcnSheetsCall(config.scriptUrl,fcnParams);
+            await fcnSheetsCall(FCN_API,fcnParams);
         } catch(e){console.error('FCN push failed:',e.message);}
     };
 
-    const addTrade=async(t)=>{ const trade={...t,createdAt:new Date().toISOString()}; setTrades(p=>[...p,trade]); setShowAdd(false); await pushTrade(trade,null); };
-    const updateTrade=async(t,originalId=null)=>{ const matchId=originalId||t.id; setTrades(p=>p.map(x=>x.id===matchId?t:x)); setEditingTrade(null); await pushTrade(t,originalId); };
-    const deleteTrade=(id)=>{ if(confirm('Delete this FCN trade?')) setTrades(p=>p.filter(t=>t.id!==id)); };
+    const addTrade=async(t)=>{ if(!canWrite()){alert('Read-only access — you cannot create trades.');return;} const trade={...t,createdAt:new Date().toISOString()}; setTrades(p=>[...p,trade]); setShowAdd(false); await pushTrade(trade,null); };
+    const updateTrade=async(t,originalId=null)=>{ if(!canWrite()){alert('Read-only access — you cannot edit trades.');return;} const matchId=originalId||t.id; setTrades(p=>p.map(x=>x.id===matchId?t:x)); setEditingTrade(null); await pushTrade(t,originalId); };
+    const deleteTrade=(id)=>{ if(!canWrite())return; if(confirm('Delete this FCN trade?')) setTrades(p=>p.filter(t=>t.id!==id)); };
     const resetTradeStatus=(id)=>{
+        if(!canWrite())return;
         // Reset to Active so fcnBarrierCheck can re-derive status from stored fixing prices
         setTrades(prev=>prev.map(t=>{
             if(t.id!==id) return t;
@@ -4357,6 +4359,7 @@ const FCNModule = ({prices}) => {
         }));
     };
     const confirmPayment=async(tradeId,date)=>{
+        if(!canWrite()){alert('Read-only access — you cannot confirm settlements.');return;}
         // Compute everything from current trades state BEFORE calling setTrades —
         // same fix as Accumulator: setTrades updater runs asynchronously so
         // variables set inside it are not available in the code that follows.
@@ -4406,9 +4409,9 @@ const FCNModule = ({prices}) => {
         pushTrade(updatedTrade);
 
         // Log to FCN_Settlements sheet — guaranteed non-null now
-        if(config.scriptUrl){
+        if(FCN_API){
             try{
-                await fcnSheetsCall(config.scriptUrl,{
+                await fcnSheetsCall(FCN_API,{
                     action:'logFCNSettlement',
                     values:JSON.stringify([
                         logEntry.tradeId, logEntry.clientName,
@@ -4424,10 +4427,10 @@ const FCNModule = ({prices}) => {
     };
 
     const fetchFromSheets=async()=>{
-        if(!config.scriptUrl) return;
+        if(!FCN_API) return;
         setSheetsLoading(true);
         try {
-            const res=await fcnSheetsCall(config.scriptUrl,{action:'readFCNOrders'});
+            const res=await fcnSheetsCall(FCN_API,{action:'readFCNOrders'});
             // Always replace trades from sheet — even empty sheet clears stale localStorage data
             if(res.success!==false) setTrades((res.values||[]).filter(r=>r[0]&&r[1]).map(rowToTrade));
         } catch(e){alert('FCN sync error: '+e.message);}
@@ -4465,18 +4468,18 @@ const FCNModule = ({prices}) => {
                         <option value="all">All</option><option value="active">Active</option>
                         <option value="knocked-out">Knocked Out</option><option value="exercised">Exercised</option><option value="matured">Matured</option>
                     </Select>
-                    {config.scriptUrl&&<button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={sheetsLoading}/> Sync Sheets</button>}
+                    {FCN_API&&<button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={sheetsLoading}/> Sync Sheets</button>}
                     <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Config</button>
                 </div>
-                <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><Icon.Plus/> New FCN Trade</button>
+                {canWrite() && <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><Icon.Plus/> New FCN Trade</button>}
             </div>
             {showSettings&&(
                 <div className="card p-5 mb-5">
                     <h3 className="font-semibold mb-3 text-sm">Google Sheets Config — FCN</h3>
                     <p className="text-xs text-slate-500 mb-3">Separate spreadsheet from Loans and SSPS.</p>
-                    <Field label="FCN Apps Script URL"><Input value={config.scriptUrl||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/></Field>
+                    <Field label="FCN Apps Script URL"><Input value={FCN_API||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/></Field>
                     <div className="flex gap-2 mt-3">
-                        <button onClick={()=>{localStorage.setItem('cpb_fcn_config',JSON.stringify(config));setShowSettings(false);if(config.scriptUrl)fetchFromSheets();}} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
+                        <button onClick={()=>{localStorage.setItem('cpb_fcn_config',JSON.stringify(config));setShowSettings(false);if(FCN_API)fetchFromSheets();}} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
                         <button onClick={()=>setShowSettings(false)} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
                     </div>
                 </div>
