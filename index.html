@@ -153,6 +153,9 @@ window.CPB_USER = null; // {email, role} once known — used by the app for role
 </script>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
+// Role-based write gate. The SERVER enforces this too (the proxy blocks writes
+// for read-only); this keeps the UI honest so read-only users can't attempt writes.
+const canWrite = () => { const r = (window.CPB_USER || {}).role; return r === 'readwrite' || r === 'admin'; };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
 const fmt = (n, d=2) => (n||0).toLocaleString('en-US', {minimumFractionDigits:d, maximumFractionDigits:d});
@@ -1370,6 +1373,7 @@ const LoanModule = ({prices}) => {
     useEffect(()=>{ if(LOANS_API){fetchSheets();const t=setInterval(fetchSheets,30000);return()=>clearInterval(t);} },[LOANS_API]);
 
     const addLoan = async (d) => {
+        if (!canWrite()) { alert('Read-only access — you cannot add or edit loans.'); return; }
         const loan = {...d, id:d.loanId||`LOAN-${Date.now()}`, interestPaid:0, tenor:calcTenor(d.startDate,d.maturityDate), status:'Active', createdAt:new Date().toISOString()};
         setLoans(p=>[...p, loan]);
         setShowAdd(false);
@@ -1390,6 +1394,7 @@ const LoanModule = ({prices}) => {
         }
     };
     const updateLoan = async (loan) => {
+        if (!canWrite()) { alert('Read-only access — you cannot add or edit loans.'); return; }
         setLoans(p=>p.map(l=>l.id===loan.id?loan:l));
         setEditingLoan(null);
         // Push updated loan row to Google Sheets immediately
@@ -1416,6 +1421,7 @@ const LoanModule = ({prices}) => {
         }
     };
     const addTxn = async (loanId,type,amount)=>{
+        if (!canWrite()) { alert('Read-only access — you cannot record transactions.'); return; }
         const txn = {id:`TXN-${Date.now()}`,loanId,type,amount:+amount,timestamp:new Date().toISOString()};
         // Update local state immediately so UI reflects change at once
         setTransactions(p=>[...p,txn]);
@@ -1499,7 +1505,7 @@ const LoanModule = ({prices}) => {
                     <button onClick={exportCSV} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Download/> Export</button>
                     <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Config</button>
                 </div>
-                <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><Icon.Plus/> New Loan</button>
+                {canWrite() && <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><Icon.Plus/> New Loan</button>}
             </div>
             {showSettings&&(
                 <div className="card p-5 mb-5 space-y-5">
