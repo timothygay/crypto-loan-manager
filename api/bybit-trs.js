@@ -41,7 +41,11 @@ async function bybitGet(path, paramStr, apiKey, apiSecret, clockOffset) {
 const { sessionUser } = require('../lib/guard');
 module.exports = async function handler(req, res) {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-    if (!(await sessionUser(req))) return res.status(401).json({ error: 'Sign in required.' });
+    // Allow either the browser UI (valid login session) OR a server-side caller with the
+    // shared secret (the TRS Apps Script NAV capture calls this from Google's servers).
+    const okSession = await sessionUser(req);
+    const okSecret = req.query.cpb_secret && req.query.cpb_secret === process.env.GAS_SHARED_SECRET;
+    if (!okSession && !okSecret) return res.status(401).json({ error: 'Sign in required.' });
 
     const apiKey    = process.env.BYBIT_TRS_API_KEY;
     const apiSecret = process.env.BYBIT_TRS_API_SECRET;
