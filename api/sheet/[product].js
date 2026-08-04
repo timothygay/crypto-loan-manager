@@ -50,6 +50,8 @@ module.exports = async (req, res) => {
     const qs = new URLSearchParams(req.query);
     qs.delete('product');
     if (secret) qs.set('cpb_secret', secret);
+    // Record who is making the change (used by soft-delete to note the actor in-sheet).
+    if (me && me.email) qs.set('cpb_actor', me.email);
     const target = gasUrl + '?' + qs.toString();
 
     const opts = { method: req.method, redirect: 'follow' };

@@ -4340,7 +4340,17 @@ const FCNModule = ({prices}) => {
 
     const addTrade=async(t)=>{ if(!canWrite()){alert('Read-only access — you cannot create trades.');return;} const trade={...t,createdAt:new Date().toISOString()}; setTrades(p=>[...p,trade]); setShowAdd(false); await pushTrade(trade,null); };
     const updateTrade=async(t,originalId=null)=>{ if(!canWrite()){alert('Read-only access — you cannot edit trades.');return;} const matchId=originalId||t.id; setTrades(p=>p.map(x=>x.id===matchId?t:x)); setEditingTrade(null); await pushTrade(t,originalId); };
-    const deleteTrade=(id)=>{ if(!canWrite())return; if(confirm('Delete this FCN trade?')) setTrades(p=>p.filter(t=>t.id!==id)); };
+    const deleteTrade=async(id)=>{
+        if(!canWrite()){alert('Read-only access — you cannot delete trades.');return;}
+        if(!confirm('Delete this FCN trade?\n\nIt will be hidden from the app and marked "DELETED — hidden in UI" in the Google Sheet. The row is kept (not permanently removed) — you can delete it in the sheet directly if needed.')) return;
+        try {
+            await fcnSheetsCall(FCN_API,{action:'deleteFCNOrder',tradeId:id});
+            setTrades(p=>p.filter(t=>t.id!==id));
+        } catch(e){
+            console.error('FCN delete failed:',e.message);
+            alert('Delete failed — the trade is still in the sheet. Please try again.\n\n'+e.message);
+        }
+    };
     const resetTradeStatus=(id)=>{
         if(!canWrite())return;
         // Reset to Active so fcnBarrierCheck can re-derive status from stored fixing prices
