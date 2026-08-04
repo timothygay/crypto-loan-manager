@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in — Crypto Prime Broker</title>
+<style>
+  * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background: linear-gradient(135deg,#0f172a 0%,#1e293b 100%); color:#f8fafc; }
+  .wrap { width:100%; max-width:400px; padding:0 24px; }
+  .head { text-align:center; margin-bottom:28px; }
+  .head .lock { font-size:38px; margin-bottom:12px; }
+  .head h1 { font-size:22px; font-weight:600; margin:0 0 6px; }
+  .head p { color:#64748b; font-size:13px; margin:0; }
+  .card { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:26px; }
+  label { display:block; font-size:11px; color:#94a3b8; margin:14px 0 6px; letter-spacing:.06em; text-transform:uppercase; }
+  label:first-child { margin-top:0; }
+  input { width:100%; background:#0f172a; border:1px solid #475569; border-radius:8px; padding:11px 13px;
+          color:#f8fafc; font-size:15px; outline:none; }
+  input:focus { border-color:#0ea5e9; }
+  button.primary { width:100%; margin-top:18px; background:#0ea5e9; border:none; border-radius:8px; padding:12px;
+                   color:#fff; font-size:14px; font-weight:600; cursor:pointer; }
+  button.primary:disabled { opacity:.6; cursor:default; }
+  .msg { min-height:18px; font-size:12.5px; margin-top:12px; }
+  .err { color:#f87171; } .ok { color:#4ade80; }
+  .link { text-align:center; margin-top:16px; }
+  .link a { color:#38bdf8; font-size:12.5px; text-decoration:none; cursor:pointer; }
+  .qr { text-align:center; margin:14px 0; }
+  .qr img { width:180px; height:180px; background:#fff; border-radius:8px; padding:6px; }
+  .secret { font-family:monospace; font-size:12px; word-break:break-all; background:#0f172a; border:1px solid #334155;
+            border-radius:6px; padding:8px; color:#cbd5e1; text-align:center; }
+  .hide { display:none; }
+  .hint { color:#64748b; font-size:12px; margin-top:10px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div class="lock">🔒</div>
+    <h1>Crypto Prime Broker</h1>
+    <p>Internal Portfolio Management System</p>
+  </div>
+
+  <!-- SIGN IN -->
+  <div class="card" id="signin">
+    <label>Email</label>
+    <input id="li-email" type="email" autocomplete="username" placeholder="you@company.com">
+    <label>Password</label>
+    <input id="li-pw" type="password" autocomplete="current-password" placeholder="Your password">
+    <label>Authenticator code</label>
+    <input id="li-totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code">
+    <button class="primary" id="li-btn">Sign in</button>
+    <div class="msg err" id="li-msg"></div>
+    <div class="link"><a id="to-setup">First time here? Set up your account</a></div>
+  </div>
+
+  <!-- FIRST-TIME SETUP -->
+  <div class="card hide" id="setup">
+    <div id="setup-step1">
+      <label>Email</label>
+      <input id="su-email" type="email" placeholder="you@company.com">
+      <label>Setup token</label>
+      <input id="su-token" placeholder="One-time token from your admin">
+      <button class="primary" id="su-begin">Continue</button>
+    </div>
+    <div id="setup-step2" class="hide">
+      <p class="hint">Scan this with Google Authenticator (or enter the code manually), then set your password.</p>
+      <div class="qr"><img id="su-qr" alt="Authenticator QR"></div>
+      <div class="secret" id="su-secret"></div>
+      <label>New password (min 8 chars)</label>
+      <input id="su-pw" type="password" autocomplete="new-password" placeholder="Choose a password">
+      <label>Authenticator code</label>
+      <input id="su-totp" inputmode="numeric" placeholder="6-digit code from the app">
+      <button class="primary" id="su-complete">Finish setup</button>
+    </div>
+    <div class="msg" id="su-msg"></div>
+    <div class="link"><a id="to-signin">← Back to sign in</a></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const show = (id) => $(id).classList.remove('hide');
+const hide = (id) => $(id).classList.add('hide');
+let enrollSecret = null;
+
+async function postJSON(url, data) {
+  const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'},
+    credentials:'same-origin', body: JSON.stringify(data) });
+  let j = {}; try { j = await r.json(); } catch (e) {}
+  return { status: r.status, body: j };
+}
+
+// ---- sign in ----
+$('li-btn').addEventListener('click', async () => {
+  const msg = $('li-msg'); msg.className = 'msg err'; msg.textContent = '';
+  const email = $('li-email').value.trim(), pw = $('li-pw').value, totp = $('li-totp').value.trim();
+  if (!email || !pw || !totp) { msg.textContent = 'Enter email, password and authenticator code.'; return; }
+  $('li-btn').disabled = true; $('li-btn').textContent = 'Signing in…';
+  const { status, body } = await postJSON('/api/auth/login', { email, password: pw, totp });
+  if (status === 200) { window.location.replace('/'); return; }
+  if (body.needsSetup) { msg.textContent = 'Finish first-time setup first (link below).'; }
+  else { msg.textContent = body.error || 'Sign in failed.'; }
+  $('li-btn').disabled = false; $('li-btn').textContent = 'Sign in';
+});
+
+// ---- toggles ----
+$('to-setup').addEventListener('click', () => { hide('signin'); show('setup'); });
+$('to-signin').addEventListener('click', () => { hide('setup'); show('signin'); });
+
+// ---- setup step 1: begin ----
+$('su-begin').addEventListener('click', async () => {
+  const msg = $('su-msg'); msg.className = 'msg err'; msg.textContent = '';
+  const email = $('su-email').value.trim(), token = $('su-token').value.trim();
+  if (!email || !token) { msg.textContent = 'Enter your email and setup token.'; return; }
+  $('su-begin').disabled = true; $('su-begin').textContent = 'Checking…';
+  const { status, body } = await postJSON('/api/auth/enroll', { step:'begin', email, setupToken: token });
+  $('su-begin').disabled = false; $('su-begin').textContent = 'Continue';
+  if (status !== 200) { msg.textContent = body.error || 'Setup failed.'; return; }
+  enrollSecret = body.secret;
+  $('su-qr').src = body.qrDataUrl;
+  $('su-secret').textContent = body.secret;
+  hide('setup-step1'); show('setup-step2');
+});
+
+// ---- setup step 2: complete ----
+$('su-complete').addEventListener('click', async () => {
+  const msg = $('su-msg'); msg.className = 'msg err'; msg.textContent = '';
+  const email = $('su-email').value.trim(), token = $('su-token').value.trim();
+  const pw = $('su-pw').value, totp = $('su-totp').value.trim();
+  if (pw.length < 8) { msg.textContent = 'Password must be at least 8 characters.'; return; }
+  if (!totp) { msg.textContent = 'Enter the 6-digit code from your authenticator.'; return; }
+  $('su-complete').disabled = true; $('su-complete').textContent = 'Finishing…';
+  const { status, body } = await postJSON('/api/auth/enroll',
+    { step:'complete', email, setupToken: token, password: pw, totp, secret: enrollSecret });
+  $('su-complete').disabled = false; $('su-complete').textContent = 'Finish setup';
+  if (status !== 200) { msg.textContent = body.error || 'Setup failed.'; return; }
+  msg.className = 'msg ok'; msg.textContent = 'All set! You can sign in now.';
+  setTimeout(() => { hide('setup'); show('signin'); $('li-email').value = email; }, 1400);
+});
+
+// Enter-to-submit on the sign-in code field
+$('li-totp').addEventListener('keydown', e => { if (e.key === 'Enter') $('li-btn').click(); });
+</script>
+</body>
+</html>
