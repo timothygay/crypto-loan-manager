@@ -1079,6 +1079,7 @@ const TxnList = ({txns}) => {
 // Read-only mirror of the "Client Rates" tab in the Crypto Loans Database
 // Google Sheet. Purely a passthrough — values shown here are exactly what's
 // entered in the sheet, nothing is calculated.
+const LOANS_API = '/api/sheet/loans';  // Loans data routes through the auth + role-check proxy
 const ClientRatesTab = ({config}) => {
     const [rows, setRows]       = useState([]);
     const [headers, setHeaders] = useState([]);
@@ -1087,11 +1088,11 @@ const ClientRatesTab = ({config}) => {
     const [lastSync, setLastSync] = useState(null);
 
     const fetchRates = useCallback(async () => {
-        if (!config.scriptUrl) return;
+        if (!LOANS_API) return;
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${config.scriptUrl}?action=read&sheetName=Client Rates`).then(r=>r.json());
+            const res = await fetch(`${LOANS_API}?action=read&sheetName=Client Rates`).then(r=>r.json());
             if (!res.success) throw new Error(res.error || 'Failed to read Client Rates sheet');
             const values = res.values || [];
             if (values.length === 0) { setRows([]); setHeaders([]); setLoading(false); return; }
@@ -1107,11 +1108,11 @@ const ClientRatesTab = ({config}) => {
             setError(e.message || 'Failed to load Client Rates');
         }
         setLoading(false);
-    }, [config.scriptUrl]);
+    }, [LOANS_API]);
 
     useEffect(() => { fetchRates(); }, [fetchRates]);
 
-    if (!config.scriptUrl) {
+    if (!LOANS_API) {
         return (
             <div className="card p-6 text-center">
                 <p className="text-slate-400 text-sm">Configure your Loans Apps Script URL in Config to view Client Rates.</p>
@@ -1313,12 +1314,12 @@ const LoanModule = ({prices}) => {
     };
 
     const fetchSheets = async () => {
-        if (!config.scriptUrl) return;
+        if (!LOANS_API) return;
         setLoading(true);
         try {
             const [lr,tr] = await Promise.all([
-                fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json()),
-                fetch(`${config.scriptUrl}?action=read&sheetName=Transactions`).then(r=>r.json())
+                fetch(`${LOANS_API}?action=read&sheetName=Loans`).then(r=>r.json()),
+                fetch(`${LOANS_API}?action=read&sheetName=Transactions`).then(r=>r.json())
             ]);
             if (lr.success && lr.values) {
                 const today = new Date();
@@ -1349,7 +1350,7 @@ const LoanModule = ({prices}) => {
                         if (rowIdx >= 0) {
                             const sheetRow = rowIdx + 2;
                             const m = calcMetrics(loan);
-                            await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
+                            await fetch(`${LOANS_API}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
                                 loan.id, loan.counterparty, loan.loanAmount,
                                 loan.underlying, loan.collateralAmount, loan.collateralType,
                                 loan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), loan.interestPaid,
@@ -1366,17 +1367,17 @@ const LoanModule = ({prices}) => {
         } catch(e){alert('Sync error: '+e.message);}
         setLoading(false);
     };
-    useEffect(()=>{ if(config.scriptUrl){fetchSheets();const t=setInterval(fetchSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
+    useEffect(()=>{ if(LOANS_API){fetchSheets();const t=setInterval(fetchSheets,30000);return()=>clearInterval(t);} },[LOANS_API]);
 
     const addLoan = async (d) => {
         const loan = {...d, id:d.loanId||`LOAN-${Date.now()}`, interestPaid:0, tenor:calcTenor(d.startDate,d.maturityDate), status:'Active', createdAt:new Date().toISOString()};
         setLoans(p=>[...p, loan]);
         setShowAdd(false);
         // Append new loan row to Google Sheets
-        if (config.scriptUrl) {
+        if (LOANS_API) {
             try {
                 const m = calcMetrics(loan);
-                await fetch(`${config.scriptUrl}?action=append&sheetName=Loans&values=${encodeURIComponent(JSON.stringify([
+                await fetch(`${LOANS_API}?action=append&sheetName=Loans&values=${encodeURIComponent(JSON.stringify([
                     loan.id, loan.counterparty, loan.loanAmount,
                     loan.underlying, loan.collateralAmount, loan.collateralType,
                     loan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), loan.interestPaid,
@@ -1392,15 +1393,15 @@ const LoanModule = ({prices}) => {
         setLoans(p=>p.map(l=>l.id===loan.id?loan:l));
         setEditingLoan(null);
         // Push updated loan row to Google Sheets immediately
-        if (config.scriptUrl) {
+        if (LOANS_API) {
             try {
                 const m = calcMetrics(loan);
-                const lr = await fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json());
+                const lr = await fetch(`${LOANS_API}?action=read&sheetName=Loans`).then(r=>r.json());
                 if (lr.success && lr.values) {
                     const rowIdx = lr.values.findIndex(r=>String(r[0]).trim()===String(loan.id).trim());
                     if (rowIdx >= 0) {
                         const sheetRow = rowIdx + 2;
-                        await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
+                        await fetch(`${LOANS_API}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
                             loan.id, loan.counterparty, loan.loanAmount,
                             loan.underlying, loan.collateralAmount, loan.collateralType,
                             loan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), loan.interestPaid,
@@ -1431,10 +1432,10 @@ const LoanModule = ({prices}) => {
         setShowTxn(null);
         // Push transaction and updated loan to Google Sheets
         // Must happen AFTER state update so Sheets reflects the latest values
-        if (config.scriptUrl) {
+        if (LOANS_API) {
             try {
                 // 1. Append transaction row to Transactions sheet
-                await fetch(`${config.scriptUrl}?action=append&sheetName=Transactions&values=${encodeURIComponent(JSON.stringify([
+                await fetch(`${LOANS_API}?action=append&sheetName=Transactions&values=${encodeURIComponent(JSON.stringify([
                     txn.id, txn.loanId, txn.type, txn.amount, txn.timestamp
                 ]))}`);
                 // 2. Update the loan row in Loans sheet with new collateral/amount/status
@@ -1445,12 +1446,12 @@ const LoanModule = ({prices}) => {
                     // We append a fresh read then update — simpler: use append+dedup or find row
                     // The existing script uses rowIndex-based update, so we need to find the row.
                     // Fetch current loans sheet to find row number of this loan
-                    const lr = await fetch(`${config.scriptUrl}?action=read&sheetName=Loans`).then(r=>r.json());
+                    const lr = await fetch(`${LOANS_API}?action=read&sheetName=Loans`).then(r=>r.json());
                     if (lr.success && lr.values) {
                         const rowIdx = lr.values.findIndex(r=>r[0]===updatedLoan.id);
                         if (rowIdx >= 0) {
                             const sheetRow = rowIdx + 2; // +1 for header, +1 for 1-indexing
-                            await fetch(`${config.scriptUrl}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
+                            await fetch(`${LOANS_API}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
                                 updatedLoan.id, updatedLoan.counterparty, updatedLoan.loanAmount,
                                 updatedLoan.underlying, updatedLoan.collateralAmount, updatedLoan.collateralType,
                                 updatedLoan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), updatedLoan.interestPaid,
@@ -1494,7 +1495,7 @@ const LoanModule = ({prices}) => {
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
                     <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5"><option value="all">All</option><option value="active">Active</option><option value="at-risk">At Risk</option><option value="matured">Matured</option><option value="repaid">Repaid</option><option value="early-terminated">Early Terminated</option><option value="unsecured">Unsecured</option><option value="open-term">Open Term</option></Select>
-                    {config.scriptUrl&&<button onClick={fetchSheets} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={loading}/> Sync</button>}
+                    {LOANS_API&&<button onClick={fetchSheets} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={loading}/> Sync</button>}
                     <button onClick={exportCSV} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Download/> Export</button>
                     <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Config</button>
                 </div>
@@ -1504,7 +1505,7 @@ const LoanModule = ({prices}) => {
                 <div className="card p-5 mb-5 space-y-5">
                     <div>
                         <h3 className="font-semibold mb-3 text-sm">Google Sheets Config — Loans</h3>
-                        <Field label="Apps Script URL"><Input value={config.scriptUrl||''} onChange={e=>setConfig({...config,scriptUrl:e.target.value})} placeholder="https://script.google.com/macros/s/.../exec"/></Field>
+                        <Field label="Apps Script URL"><Input value={LOANS_API||''} onChange={e=>setConfig({...config,scriptUrl:e.target.value})} placeholder="https://script.google.com/macros/s/.../exec"/></Field>
                     </div>
                     <div className="border-t border-slate-700 pt-4">
                         <h3 className="font-semibold mb-1 text-sm flex items-center gap-2"><Icon.Alert/> Telegram Margin Call Alerts</h3>
