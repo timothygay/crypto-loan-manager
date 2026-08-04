@@ -2024,6 +2024,7 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // SSPS MODULE
 // ═══════════════════════════════════════════════════════════════════════════════
+const SSPS_API = '/api/sheet/ssps';  // SSPS data routes through the auth + role-check proxy
 const SSPSModule = ({prices: livePrices}) => {
     const [contracts, setContracts] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_ssps_contracts')||'[]');}catch{return[];} });
     const [priceHistory, setPriceHistory] = useState(()=>{ try{return JSON.parse(localStorage.getItem('cpb_ssps_prices')||'{}');}catch{return{};} });
@@ -2049,12 +2050,13 @@ const SSPSModule = ({prices: livePrices}) => {
     const r8 = (n) => n!==''&&n!=null ? parseFloat(Number(n).toFixed(8)) : '';
 
     const pushContract = async (c, latestLedger) => {
-        if (!config.scriptUrl) return;
+        if (!canWrite()) return;
+        if (!SSPS_API) return;
         try {
             setSyncStatus('syncing');
             const notionalRemaining = latestLedger ? latestLedger.notionalLeft  : c.notional;
             const underlyingBought  = latestLedger ? latestLedger.totalUnderlying : 0;
-            await sheetsCall(config.scriptUrl,{action:'upsertContract',values:[
+            await sheetsCall(SSPS_API,{action:'upsertContract',values:[
                 c.id, c.clientName,
                 c.tradeDate, c.participationStart, c.maturityDate,
                 c.tenor, c.fixingDays, c.underlying,
@@ -2070,10 +2072,11 @@ const SSPSModule = ({prices: livePrices}) => {
     // fullHistory: optional — pass the accumulated history object during backfill so
     // computeLedger sees all prior prices (not just the stale React state snapshot).
     const pushPriceRow = async (dateStr, entry, contract, fullHistory) => {
-        if (!config.scriptUrl) return;
+        if (!canWrite()) return;
+        if (!SSPS_API) return;
         try {
             setSyncStatus('syncing');
-            await sheetsCall(config.scriptUrl,{action:'upsertPrice',values:[dateStr,entry.BTC||'',entry.ETH||'',entry['BTC/USDC']||'',entry['ETH/USDC']||'',entry.fetchedAt||'',entry.manualOverride?'YES':'NO']});
+            await sheetsCall(SSPS_API,{action:'upsertPrice',values:[dateStr,entry.BTC||'',entry.ETH||'',entry['BTC/USDC']||'',entry['ETH/USDC']||'',entry.fetchedAt||'',entry.manualOverride?'YES':'NO']});
             // Use fullHistory if provided (backfill path), otherwise fall back to current state
             const histForCompute = fullHistory ? {...fullHistory,[dateStr]:entry} : {...priceHistory,[dateStr]:entry};
             const rows=computeLedger(contract, histForCompute);
@@ -2086,7 +2089,7 @@ const SSPSModule = ({prices: livePrices}) => {
                 const deskCostVal = row.partNotional>0 && contract.discountFactor>0
                     ? r2((contract.baseNotional * (row.triggerHit?contract.scalingFactor:1)) / (1-(contract.discountFactor||0)))
                     : '';
-                await sheetsCall(config.scriptUrl,{action:'upsertLedgerRow',contractId:contract.id,values:[
+                await sheetsCall(SSPS_API,{action:'upsertLedgerRow',contractId:contract.id,values:[
                     row.date, r2(row.fixingPrice)||'', r2(dp)||'',
                     dodStr, triggerStr, scaleStr,
                     r2(row.partNotional)||'', r8(row.underlyingBought)||'',
@@ -2100,11 +2103,11 @@ const SSPSModule = ({prices: livePrices}) => {
     };
 
     const fetchFromSheets = async () => {
-        if (!config.scriptUrl) return;
+        if (!SSPS_API) return;
         setSheetsLoading(true);
         try {
             setSyncStatus('syncing');
-            const [cr,pr]=await Promise.all([sheetsCall(config.scriptUrl,{action:'readContracts'}),sheetsCall(config.scriptUrl,{action:'readPrices'})]);
+            const [cr,pr]=await Promise.all([sheetsCall(SSPS_API,{action:'readContracts'}),sheetsCall(SSPS_API,{action:'readPrices'})]);
             if (cr.values?.length>0) {
                 const parsed = cr.values.map(r=>({
                     id:r[0], clientName:r[1],
@@ -2156,7 +2159,7 @@ const SSPSModule = ({prices: livePrices}) => {
         } catch(e){ console.error(e); setSyncStatus('error'); }
         setSheetsLoading(false);
     };
-    useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
+    useEffect(()=>{ if(SSPS_API){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[SSPS_API]);
 
     // Auto-fetch fixing prices at 16:00 SGT = 08:00 UTC
     useEffect(()=>{
@@ -2168,6 +2171,7 @@ const SSPSModule = ({prices: livePrices}) => {
     },[lastAutoFetch,contracts]);
 
     const fetchTodayPrices = async (dateStr) => {
+        if (!canWrite()) return;
         setFetchingDate(dateStr);
         let entry={ fetchedAt:new Date().toISOString() };
         try {
@@ -2227,6 +2231,7 @@ const SSPSModule = ({prices: livePrices}) => {
     };
 
     const addContract = async (c) => {
+        if (!canWrite()) { alert('Read-only access — you cannot create contracts.'); return; }
         setContracts(p=>[...p,c]);
         setShowAdd(false);
         await pushContract(c, null);
@@ -2277,6 +2282,7 @@ const SSPSModule = ({prices: livePrices}) => {
 
     // Clear ALL prices locally + from Sheets, then re-backfill every contract sequentially
     const clearAndRefetchAll = async () => {
+        if (!canWrite()) return;
         if (!confirm('This will:\n• Clear ALL locally cached prices\n• Clear the PriceHistory sheet and every contract ledger tab in Google Sheets\n• Re-fetch all prices from Bybit for every contract\n\nThis may take several minutes. Continue?')) return;
 
         // Step 1: clear local price cache immediately
@@ -2284,14 +2290,14 @@ const SSPSModule = ({prices: livePrices}) => {
         setPriceHistory(emptyHistory);
 
         // Step 2: clear Sheets — PriceHistory tab + every contract's ledger tab
-        if (config.scriptUrl) {
+        if (SSPS_API) {
             try {
                 setSyncStatus('syncing');
                 // Clear PriceHistory sheet data rows (keep header)
-                await sheetsCall(config.scriptUrl, {action:'clearSheet', sheetName:'PriceHistory'});
+                await sheetsCall(SSPS_API, {action:'clearSheet', sheetName:'PriceHistory'});
                 // Clear each contract's ledger tab
                 for (const c of contracts) {
-                    await sheetsCall(config.scriptUrl, {action:'clearSheet', sheetName:c.id});
+                    await sheetsCall(SSPS_API, {action:'clearSheet', sheetName:c.id});
                 }
             } catch(e) { console.error('Sheets clear error:', e); }
         }
@@ -2310,7 +2316,7 @@ const SSPSModule = ({prices: livePrices}) => {
             setPriceHistory({...runningHistory});
 
             // Push all filled rows to Sheets for this contract
-            if (config.scriptUrl) {
+            if (SSPS_API) {
                 const sched = buildSchedule(contract);
                 const todayStr = todayUTC();
                 for (const ds of sched) {
@@ -2331,6 +2337,7 @@ const SSPSModule = ({prices: livePrices}) => {
     };
 
     const deleteContract = (id) => {
+        if (!canWrite()) return;
         if (confirm('Delete contract locally? Remove the sheet tab manually if needed.'))
             setContracts(p=>p.filter(c=>c.id!==id));
     };
@@ -2357,9 +2364,10 @@ const SSPSModule = ({prices: livePrices}) => {
                 <div className="flex gap-2 flex-wrap items-center">
                     <button onClick={exportData} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Download/> Export</button>
                     <label className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer"><Icon.Upload/> Import<input type="file" accept=".json" onChange={importData} className="hidden"/></label>
-                    <button onClick={()=>fetchTodayPrices(today)} disabled={!!fetchingDate} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={!!fetchingDate}/> Fetch Today's Prices</button>
-                    <button onClick={clearAndRefetchAll} disabled={!!fetchingDate||backfillProgress!==null} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-yellow-400 border-yellow-500/30"><Icon.Refresh spin={backfillProgress!==null}/> Clear & Re-fetch All Prices</button>
+                    {canWrite() && <button onClick={()=>fetchTodayPrices(today)} disabled={!!fetchingDate} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={!!fetchingDate}/> Fetch Today's Prices</button>}
+                    {canWrite() && <button onClick={clearAndRefetchAll} disabled={!!fetchingDate||backfillProgress!==null} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-yellow-400 border-yellow-500/30"><Icon.Refresh spin={backfillProgress!==null}/> Clear & Re-fetch All Prices</button>}
                     <button onClick={async()=>{
+                        if (!canWrite()) return;
                         setBackfillProgress({done:0,total:0,label:'Backfilling USDC prices…'});
                         const {history, datesProcessed} = await runBackfillUSDC(
                             priceHistory,
@@ -2370,7 +2378,7 @@ const SSPSModule = ({prices: livePrices}) => {
                         // Use any contract as the vehicle for pushPriceRow — we just need
                         // the scriptUrl and the entry; the contract param is only used for
                         // the ledger row, which we skip by passing a dummy contract with no schedule match.
-                        if (config.scriptUrl && contracts.length > 0) {
+                        if (SSPS_API && contracts.length > 0) {
                             const anyContract = contracts[0];
                             const updatedDates = Object.keys(history).filter(ds => {
                                 const e = history[ds];
@@ -2383,7 +2391,7 @@ const SSPSModule = ({prices: livePrices}) => {
                                 // For the PriceHistory write we only need the first sheetsCall inside pushPriceRow.
                                 // Simplest: call sheetsCall directly for the price row.
                                 try {
-                                    await sheetsCall(config.scriptUrl, {
+                                    await sheetsCall(SSPS_API, {
                                         action: 'upsertPrice',
                                         values: [
                                             ds,
@@ -2403,8 +2411,8 @@ const SSPSModule = ({prices: livePrices}) => {
                         setBackfillProgress(null);
                         alert('USDC backfill complete: ' + datesProcessed + ' dates fetched and pushed to Sheets.');
                     }} disabled={!!fetchingDate||backfillProgress!==null} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-cyan-400 border-cyan-500/30"><Icon.Refresh spin={backfillProgress!==null}/> Backfill USDC Prices</button>
-                    {config.scriptUrl&&<button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={sheetsLoading}/> Sync Sheets</button>}
-                    {config.scriptUrl&&<button onClick={async()=>{
+                    {SSPS_API&&<button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={sheetsLoading}/> Sync Sheets</button>}
+                    {SSPS_API&&canWrite()&&<button onClick={async()=>{
                         if (!confirm('Re-push ALL ledger rows for ALL contracts to Google Sheets?\nThis overwrites existing rows with values computed from your current price history.\nNo prices will be re-fetched from Bybit.')) return;
                         setBackfillProgress({done:0, total:0, label:'Re-pushing ledger to Sheets…'});
                         const todayStr = todayUTC();
@@ -2445,7 +2453,7 @@ const SSPSModule = ({prices: livePrices}) => {
                     <button onClick={()=>setShowSettings(!showSettings)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Sheets Config</button>
                     <span className={`text-xs ${syncColor} flex items-center gap-1`}>{syncStatus==='ok'&&<Icon.Check/>}{syncLabel}</span>
                 </div>
-                <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><Icon.Plus/> New Contract</button>
+                {canWrite() && <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><Icon.Plus/> New Contract</button>}
             </div>
 
             {/* Settings */}
@@ -2454,7 +2462,7 @@ const SSPSModule = ({prices: livePrices}) => {
                     <h3 className="font-semibold mb-1 text-sm">Google Sheets Config — SSPS</h3>
                     <p className="text-xs text-slate-500 mb-4">Separate spreadsheet from Loans.</p>
                     <Field label="SSPS Apps Script URL" hint="Deploy as Web App → Execute as Me → Anyone can access">
-                        <Input value={config.scriptUrl||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/>
+                        <Input value={SSPS_API||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/>
                     </Field>
                     <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs text-slate-400 space-y-1 mt-3">
                         <p className="text-slate-300 font-medium">Setup:</p>
@@ -2464,7 +2472,7 @@ const SSPSModule = ({prices: livePrices}) => {
                         <p>④ Paste URL above → Save & Connect</p>
                     </div>
                     <div className="flex gap-2 mt-3">
-                        <button onClick={()=>{setShowSettings(false);if(config.scriptUrl)fetchFromSheets();}} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
+                        <button onClick={()=>{setShowSettings(false);if(SSPS_API)fetchFromSheets();}} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
                         <button onClick={()=>setShowSettings(false)} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
                     </div>
                 </div>
@@ -2563,7 +2571,7 @@ const SSPSContractCard = ({contract, priceHistory, prices, onDrill, onDelete, on
                 <div className="flex gap-2" onClick={e=>e.stopPropagation()}>
                     <button onClick={onDrill} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1">Ledger <Icon.ChevRight/></button>
                     {onBackfill&&<button onClick={onBackfill} title="Fetch missing historical prices" className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1 text-yellow-400"><Icon.Refresh/> Update Prices</button>}
-                    <button onClick={onDelete} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>
+                    {canWrite() && <button onClick={onDelete} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>}
                 </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 mb-3">

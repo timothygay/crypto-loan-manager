@@ -20,6 +20,8 @@ const URL_ENV = {
 const READ_ACTIONS = new Set([
     'read', 'list', 'ping', 'get', 'getprice', 'getprices',
     'getdaterange', 'gettodayprices', 'readsheet',
+    // SSPS
+    'readcontracts', 'readprices',
 ]);
 
 module.exports = async (req, res) => {
