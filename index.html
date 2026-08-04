@@ -81,6 +81,8 @@
         .light .sell-row { background: rgba(239,68,68,0.06); }
         .light .drill-back { color: #0891b2; }
         .light .drill-back:hover { color: #0e7490; }
+        /* Deeper header gradient for contrast on white (the light-cyan default is too pale) */
+        .light .gradient-text { background: linear-gradient(135deg, #0369a1, #0891b2, #047857); -webkit-background-clip: text; background-clip: text; }
         .light .bg-slate-900\/40 { background: rgba(248,250,252,0.95) !important; }
         .light .bg-slate-900\/60 { background: rgba(248,250,252,0.95) !important; }
         .light .bg-slate-800\/50 { background: rgba(226,232,240,0.6) !important; }
@@ -125,6 +127,17 @@
 <body class="bg-slate-950 text-white min-h-screen dark">
 <div id="auth-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);align-items:center;justify-content:center;"></div>
 <div id="root"></div>
+<script>
+// Apply the saved (or default-light) theme immediately, before React mounts,
+// so there is no dark flash on load. React's own effect keeps it in sync after.
+(function(){ try {
+    var t = localStorage.getItem('cpb_theme');
+    var light = (t===null) ? true : (t==='light');
+    document.body.classList.remove('dark','light');
+    document.body.classList.add(light ? 'light' : 'dark');
+    if (light) { document.body.style.backgroundColor='#f1f5f9'; document.body.style.color='#0f172a'; }
+} catch(e){} })();
+</script>
 <script>
 // ─── SESSION GATE (server-verified) ─────────────────────────────────────────
 // Real auth lives server-side (/api/auth/*). This just checks the session and
@@ -460,76 +473,56 @@ const runBackfillUSDC = async (existingHistory, onProgress) => {
 // ─── PRICE TICKER ─────────────────────────────────────────────────────────────
 // bybitPrices  → BTC/ETH (Loans + SSPS)
 // binancePrices → BTC/ETH/ADA/XRP (FCN + Accumulator)
-const PriceTicker = ({bybitPrices, binancePrices, bybitUpdate, binanceUpdate, deribitPrices, deribitUpdate}) => (
-    <div className="space-y-2 mb-6">
-        <div className="grid grid-cols-2 gap-3">
-            {[['BTC','₿','orange'],['ETH','Ξ','purple']].map(([sym,icon,c])=>(
-                <div key={sym} className={`card p-3 bg-gradient-to-br from-${c}-500/10 to-${c}-600/5 border-${c}-500/20`}>
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <p className="text-xs text-slate-400">{sym==='BTC'?'Bitcoin':'Ethereum'}</p>
-                            <div className="flex items-baseline gap-3 mt-0.5">
-                                <div>
-                                    <span className="text-[10px] text-slate-500">Bybit </span>
-                                    <span className="text-lg font-bold mono">${fmt(bybitPrices[sym],2)}</span>
-                                </div>
-                                <div>
-                                    <span className="text-[10px] text-slate-500">Binance·USDT </span>
-                                    <span className="text-lg font-bold mono text-cyan-400">${fmt(binancePrices[sym],2)}</span>
-                                </div>
-                                {binancePrices[sym+'/USDC']>0&&(
-                                    <div>
-                                        <span className="text-[10px] text-slate-500">Binance·USDC </span>
-                                        <span className="text-lg font-bold mono text-teal-400">${fmt(binancePrices[sym+'/USDC'],2)}</span>
-                                    </div>
-                                )}
-                                {deribitPrices&&deribitPrices[sym]>0&&(
-                                    <div>
-                                        <span className="text-[10px] text-slate-500">Deribit·Index </span>
-                                        <span className="text-lg font-bold mono text-violet-400">${fmt(deribitPrices[sym],2)}</span>
-                                    </div>
-                                )}
-                            </div>
-                            <p className="text-xs text-slate-600 mt-0.5">
-                                {bybitUpdate?bybitUpdate.toLocaleTimeString():'—'} SGT
-                                {deribitUpdate&&<span className="ml-2 text-violet-900/80">Deribit {deribitUpdate.toLocaleTimeString()}</span>}
-                            </p>
+const PriceTicker = ({bybitPrices, binancePrices, bybitUpdate, binanceUpdate, deribitPrices, deribitUpdate}) => {
+    // One card per asset: symbol + name, a clean aligned list of venue→price rows,
+    // and a single timestamp. "always" venues render even at $0 (feed down); the
+    // rest appear only when a price is present. All venue data preserved from before.
+    const assets = [
+        {sym:'BTC', name:'Bitcoin', stamp:bybitUpdate, venues:[
+            {label:'Bybit',        val:bybitPrices['BTC'],            always:true},
+            {label:'Binance·USDT', val:binancePrices['BTC'],         always:true},
+            {label:'Binance·USDC', val:binancePrices['BTC/USDC']},
+            {label:'Deribit·Index',val:deribitPrices&&deribitPrices['BTC']},
+        ]},
+        {sym:'ETH', name:'Ethereum', stamp:bybitUpdate, venues:[
+            {label:'Bybit',        val:bybitPrices['ETH'],            always:true},
+            {label:'Binance·USDT', val:binancePrices['ETH'],         always:true},
+            {label:'Binance·USDC', val:binancePrices['ETH/USDC']},
+            {label:'Deribit·Index',val:deribitPrices&&deribitPrices['ETH']},
+        ]},
+        {sym:'ADA', name:'Cardano', stamp:binanceUpdate, venues:[
+            {label:'Binance·USDT', val:binancePrices['ADA'],         always:true},
+            {label:'Binance·USDC', val:binancePrices['ADA/USDC']},
+        ]},
+        {sym:'XRP', name:'Ripple', stamp:binanceUpdate, venues:[
+            {label:'Binance·USDT', val:binancePrices['XRP'],         always:true},
+            {label:'Binance·USDC', val:binancePrices['XRP/USDC']},
+        ]},
+    ];
+    return (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+            {assets.map(a=>(
+                <div key={a.sym} className="card p-3">
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-baseline gap-1.5">
+                            <span className="text-sm font-bold">{a.sym}</span>
+                            <span className="text-[11px] text-slate-500">{a.name}</span>
                         </div>
-                        <div className={`text-3xl text-${c}-400 opacity-60`}>{icon}</div>
+                        <span className="text-[10px] text-slate-600">{a.stamp?a.stamp.toLocaleTimeString():'—'}</span>
+                    </div>
+                    <div className="space-y-1">
+                        {a.venues.filter(v=>v.always||v.val>0).map(v=>(
+                            <div key={v.label} className="flex items-baseline justify-between">
+                                <span className="text-[11px] text-slate-500">{v.label}</span>
+                                <span className="text-base font-bold mono">${fmt(v.val,2)}</span>
+                            </div>
+                        ))}
                     </div>
                 </div>
             ))}
         </div>
-        <div className="grid grid-cols-4 gap-3">
-            {[['ADA','◈','blue','Cardano'],['XRP','◆','teal','Ripple']].map(([sym,icon,c,name])=>(
-                <div key={sym} className={`card p-3 bg-gradient-to-br from-${c}-500/10 to-${c}-600/5 border-${c}-500/20`}>
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <p className="text-xs text-slate-400">{name} · Binance</p>
-                            <div className="flex items-baseline gap-2 mt-0.5">
-                                <div>
-                                    <span className="text-[10px] text-slate-500">USDT </span>
-                                    <span className="text-lg font-bold mono text-cyan-400">${fmt(binancePrices[sym],2)}</span>
-                                </div>
-                                {binancePrices[sym+'/USDC']>0&&(
-                                    <div>
-                                        <span className="text-[10px] text-slate-500">USDC </span>
-                                        <span className="text-lg font-bold mono text-teal-400">${fmt(binancePrices[sym+'/USDC'],2)}</span>
-                                    </div>
-                                )}
-                            </div>
-                            <p className="text-xs text-slate-600 mt-0.5">{binanceUpdate?binanceUpdate.toLocaleTimeString():'—'} SGT</p>
-                        </div>
-                        <div className={`text-2xl text-${c}-400 opacity-60`}>{icon}</div>
-                    </div>
-                </div>
-            ))}
-            {/* Spacer tiles to fill 4-col grid */}
-            <div className="card p-3 opacity-0 pointer-events-none"/>
-            <div className="card p-3 opacity-0 pointer-events-none"/>
-        </div>
-    </div>
-);
+    );
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOAN MODULE
@@ -7485,7 +7478,7 @@ const App = () => {
     const [tab,setTab]=useState('ssps');
     // Persist theme preference across sessions
     const [isLight, setIsLight] = useState(()=>{
-        try { return localStorage.getItem('cpb_theme')==='light'; } catch { return false; }
+        try { const t = localStorage.getItem('cpb_theme'); return t===null ? true : t==='light'; } catch { return true; }
     });
 
     // Apply theme class to <body> whenever it changes
