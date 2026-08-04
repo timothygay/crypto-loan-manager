@@ -52,19 +52,37 @@ module.exports = async (req, res) => {
     if (secret) qs.set('cpb_secret', secret);
     const target = gasUrl + '?' + qs.toString();
 
-    try {
-        const opts = { method: req.method, redirect: 'follow' };
-        if (req.method !== 'GET' && req.method !== 'HEAD') {
-            opts.headers = { 'Content-Type': 'application/json' };
-            opts.body = JSON.stringify(req.body || {});
-        }
-        const gasRes = await fetch(target, opts);
-        const text = await gasRes.text();
-        res.status(gasRes.status);
-        res.setHeader('Content-Type', gasRes.headers.get('content-type') || 'application/json');
-        if (isWrite) await audit(me.id, me.email, 'trade_write', { product, action }, ip);
-        return res.send(text);
-    } catch (e) {
-        return res.status(502).json({ error: 'Upstream error: ' + e.message });
+    const opts = { method: req.method, redirect: 'follow' };
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+        opts.headers = { 'Content-Type': 'application/json' };
+        opts.body = JSON.stringify(req.body || {});
     }
+
+    // Apps Script /exec endpoints intermittently return a transient HTML error page
+    // instead of JSON. Retry READS a few times (writes are NEVER retried — that could
+    // duplicate a trade). If it's still not JSON after retries, return a clean JSON
+    // error so the browser never chokes on "Unexpected token '<'".
+    const maxTries = isWrite ? 1 : 3;
+    let text = '', upstreamStatus = 502, ctype = 'application/json';
+    for (let attempt = 1; attempt <= maxTries; attempt++) {
+        try {
+            const gasRes = await fetch(target, opts);
+            upstreamStatus = gasRes.status;
+            ctype = gasRes.headers.get('content-type') || 'application/json';
+            text = await gasRes.text();
+        } catch (e) {
+            text = ''; upstreamStatus = 502;
+        }
+        const looksHtml = text.trim().charAt(0) === '<';
+        if (upstreamStatus >= 200 && upstreamStatus < 300 && text && !looksHtml) break;
+        if (attempt < maxTries) await new Promise(r => setTimeout(r, 300 * attempt));
+    }
+
+    if (!text || text.trim().charAt(0) === '<') {
+        return res.status(502).json({ success: false, error: 'Data service (Apps Script) returned a non-JSON response after retries — please try again in a moment.' });
+    }
+    res.status(upstreamStatus);
+    res.setHeader('Content-Type', ctype);
+    if (isWrite) await audit(me.id, me.email, 'trade_write', { product, action }, ip);
+    return res.send(text);
 };
