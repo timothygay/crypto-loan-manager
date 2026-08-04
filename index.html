@@ -7327,6 +7327,64 @@ const DCIModule = ({deribitPrices={}, bybitPrices={}}) => {
     );
 };
 
+// ── Config Backup: export/import all cpb_* localStorage (config + cached state) ──
+// The exported FILE contains your Apps Script URLs + Telegram token, so keep it
+// private (e.g. in your local _backup/ folder). No secret values live in this code.
+const ConfigBackup = () => {
+    const fileRef = React.useRef(null);
+    const exportConfig = () => {
+        try {
+            const keys = {};
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.indexOf('cpb_') === 0) keys[k] = localStorage.getItem(k);
+            }
+            const payload = { _cpb_backup: true, exportedAt: new Date().toISOString(), origin: location.origin, keys };
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'cpb-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            alert('Export failed: ' + err.message);
+        }
+    };
+    const importConfig = (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const parsed = JSON.parse(reader.result);
+                if (!parsed || !parsed._cpb_backup || !parsed.keys) {
+                    alert('That is not a valid CPB backup file.');
+                    return;
+                }
+                const names = Object.keys(parsed.keys).filter(k => k.indexOf('cpb_') === 0);
+                const ok = window.confirm('Import ' + names.length + ' settings from this backup? This overwrites the config and cached data on THIS URL, then reloads the page.');
+                if (!ok) return;
+                names.forEach(k => localStorage.setItem(k, parsed.keys[k]));
+                location.reload();
+            } catch (err) {
+                alert('Import failed: ' + err.message);
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    };
+    return (
+        <div className="flex items-center gap-2">
+            <input type="file" accept="application/json,.json" ref={fileRef} onChange={importConfig} style={{ display: 'none' }} />
+            <button onClick={exportConfig} className="btn-secondary px-3 py-2 rounded-lg text-xs" title="Download all settings (config + cached data) to a file">⬇ Export Config</button>
+            <button onClick={() => { if (fileRef.current) fileRef.current.click(); }} className="btn-secondary px-3 py-2 rounded-lg text-xs" title="Restore settings from a backup file">⬆ Import Config</button>
+        </div>
+    );
+};
+
 const App = () => {
     const [tab,setTab]=useState('ssps');
     // Persist theme preference across sessions
@@ -7435,6 +7493,7 @@ const App = () => {
                         <h1 className="text-3xl font-bold gradient-text mb-1">Crypto Prime Broker</h1>
                         <p className="text-slate-500 text-sm">Internal Portfolio Management System</p>
                     </div>
+                    <ConfigBackup/>
                 </div>
                 <PriceTicker bybitPrices={bybitPrices} binancePrices={binancePrices} bybitUpdate={bybitUpdate} binanceUpdate={binanceUpdate} deribitPrices={deribitPrices} deribitUpdate={deribitUpdate}/>
                 <div className="flex gap-1 mb-6 border-b border-slate-800">
