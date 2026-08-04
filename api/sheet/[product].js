@@ -24,6 +24,8 @@ const READ_ACTIONS = new Set([
     'readcontracts', 'readprices',
     // FCN
     'readfcnorders', 'readpriceladder',
+    // Accumulator
+    'readaccorders', 'readaccpriceladder',
 ]);
 
 module.exports = async (req, res) => {

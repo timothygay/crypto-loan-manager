@@ -5045,8 +5045,8 @@ const AccumulatorCard = ({trade, prices, onEdit, onDelete, onSaveFix, onConfirmF
                 </div>
                 <div className="flex gap-2">
                     <button onClick={()=>setExpanded(!expanded)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1">Schedule {expanded?'▲':'▼'}</button>
-                    <button onClick={()=>onEdit(trade)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>
-                    <button onClick={()=>onDelete(trade.id)} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>
+                    {canWrite() && <button onClick={()=>onEdit(trade)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>}
+                    {canWrite() && <button onClick={()=>onDelete(trade.id)} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>}
                 </div>
             </div>
 
@@ -5450,6 +5450,7 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ACC PRICE LADDER — Accumulator / Decumulator
 // ═══════════════════════════════════════════════════════════════════════════════
+const ACC_API = '/api/sheet/acc';  // Accumulator data routes through the auth + role-check proxy
 const ACCPriceLadder = ({config}) => {
     const [rows, setRows]               = useState([]);
     const [loading, setLoading]         = useState(false);
@@ -5478,10 +5479,10 @@ const ACCPriceLadder = ({config}) => {
     };
 
     const fetchLadder = async () => {
-        if (!config.scriptUrl) { console.warn('ACC ladder: no scriptUrl configured'); return; }
+        if (!ACC_API) { console.warn('ACC ladder: no scriptUrl configured'); return; }
         setLoading(true);
         try {
-            const rawRes = await fetch(`${config.scriptUrl}?action=readAccPriceLadder`);
+            const rawRes = await fetch(`${ACC_API}?action=readAccPriceLadder`);
             const res    = await rawRes.json();
             console.log('ACC ladder raw response:', JSON.stringify(res).slice(0, 300));
             const data = (res.values || []).map(r => ({
@@ -5510,7 +5511,7 @@ const ACCPriceLadder = ({config}) => {
         setLoading(false);
     };
 
-    useEffect(() => { fetchLadder(); }, [config.scriptUrl]);
+    useEffect(() => { fetchLadder(); }, [ACC_API]);
 
     const downloadExcel = () => {
         const visibleRows = filtered.filter(r => !hiddenRows.has(rowKey(r)));
@@ -5553,7 +5554,7 @@ const ACCPriceLadder = ({config}) => {
     const dataDate = rows[0]?.date || '';
     const isStale  = dataDate && dataDate !== today;
 
-    if (!config.scriptUrl) {
+    if (!ACC_API) {
         return (
             <div className="card p-8 text-center">
                 <p className="text-slate-400 text-sm">Configure your Accumulator Apps Script URL in Config to view price ladders.</p>
@@ -5705,7 +5706,7 @@ const AccumulatorModule = ({prices}) => {
     useEffect(()=>{ localStorage.setItem('cpb_acc_trades', JSON.stringify(trades)); }, [trades]);
     useEffect(()=>{ localStorage.setItem('cpb_acc_config', JSON.stringify(config)); }, [config]);
     // Auto-sync from Sheets on load and every 30 seconds — picks up trades added by other users
-    useEffect(()=>{ if(config.scriptUrl){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[config.scriptUrl]);
+    useEffect(()=>{ if(ACC_API){fetchFromSheets();const t=setInterval(fetchFromSheets,30000);return()=>clearInterval(t);} },[ACC_API]);
 
     // Auto-fetch missing Binance fixing prices for overdue settlement dates (up to 30 days back).
     // Includes today's settlements once 4pm SGT has passed (fixing window closed).
@@ -5759,18 +5760,20 @@ const AccumulatorModule = ({prices}) => {
     },[trades.length]); // also re-run when new trades load
 
     const pushTrade = async (trade, originalId=null) => {
-        if (!config.scriptUrl) return;
+        if (!ACC_API) return;
         try {
             const params = {action:'upsertAccOrder', values:JSON.stringify(accTradeToRow(trade))};
             if (originalId && originalId !== trade.id) params.originalId = originalId;
-            await accSheetsCall(config.scriptUrl, params);
+            await accSheetsCall(ACC_API, params);
         } catch(e) { console.error('Acc Sheets push failed:', e.message); }
     };
 
     const addTrade = async (t) => {
+        if(!canWrite()){alert('Read-only access — you cannot create trades.');return;}
         setTrades(p=>[...p, t]); setShowAdd(false); await pushTrade(t, null);
     };
     const updateTrade = async (t, originalId=null) => {
+        if(!canWrite()){alert('Read-only access — you cannot edit trades.');return;}
         // Match by originalId in state (in case Trade ID was changed)
         const matchId = originalId || t.id;
         setTrades(p=>p.map(x=>x.id===matchId?t:x));
@@ -5778,11 +5781,13 @@ const AccumulatorModule = ({prices}) => {
         await pushTrade(t, originalId);
     };
     const deleteTrade = (id) => {
+        if(!canWrite())return;
         if (confirm('Delete this Accumulator trade?')) setTrades(p=>p.filter(t=>t.id!==id));
     };
 
     // Save a fixing price for a date
     const saveFixing = async (tradeId, date, fixingPrice) => {
+        if(!canWrite())return;
         setTrades(prev => {
             const updated = prev.map(trade => {
                 if (trade.id !== tradeId) return trade;
@@ -5798,6 +5803,7 @@ const AccumulatorModule = ({prices}) => {
 
     // Confirm a fixing — update status if KO or final period, log settlement to Sheets
     const confirmFixing = async (tradeId, date) => {
+        if(!canWrite()){alert('Read-only access — you cannot confirm fixings.');return;}
         // Compute all settlement data BEFORE setTrades — setTrades updater runs
         // asynchronously so variables set inside it are not available afterwards.
         const currentTrades = trades;
@@ -5871,9 +5877,9 @@ const AccumulatorModule = ({prices}) => {
         pushTrade(updatedTrade);
 
         // Push settlement log to ACC_Settlements sheet
-        if (config.scriptUrl) {
+        if (ACC_API) {
             try {
-                await accSheetsCall(config.scriptUrl, {
+                await accSheetsCall(ACC_API, {
                     action: 'logSettlement',
                     values: JSON.stringify([
                         settlementLog.tradeId, settlementLog.clientName,
@@ -5892,10 +5898,10 @@ const AccumulatorModule = ({prices}) => {
     };
 
     const fetchFromSheets = async () => {
-        if (!config.scriptUrl) return;
+        if (!ACC_API) return;
         setSheetsLoading(true);
         try {
-            const res = await accSheetsCall(config.scriptUrl, {action:'readAccOrders'});
+            const res = await accSheetsCall(ACC_API, {action:'readAccOrders'});
             // Always replace trades from sheet — even empty sheet clears stale localStorage data
             if (res.success !== false) setTrades((res.values||[]).filter(r=>r[0]&&r[1]).map(accRowToTrade));
         } catch(e) { alert('Accumulator sync error: '+e.message); }
@@ -5941,7 +5947,7 @@ const AccumulatorModule = ({prices}) => {
                         <option value="knocked-out">Knocked Out</option>
                         <option value="matured">Matured</option>
                     </Select>
-                    {config.scriptUrl && (
+                    {ACC_API && (
                         <button onClick={fetchFromSheets} disabled={sheetsLoading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
                             <Icon.Refresh spin={sheetsLoading}/> Sync Sheets
                         </button>
@@ -5950,9 +5956,9 @@ const AccumulatorModule = ({prices}) => {
                         <Icon.Settings/> Config
                     </button>
                 </div>
-                <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
+                {canWrite() && <button onClick={()=>setShowAdd(true)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
                     <Icon.Plus/> New Accumulator
-                </button>
+                </button>}
             </div>
 
             {showSettings && (
@@ -5960,10 +5966,10 @@ const AccumulatorModule = ({prices}) => {
                     <h3 className="font-semibold mb-3 text-sm">Google Sheets Config — Accumulator</h3>
                     <p className="text-xs text-slate-500 mb-3">Separate spreadsheet from Loans, SSPS, and FCN.</p>
                     <Field label="Apps Script URL">
-                        <Input value={config.scriptUrl||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/>
+                        <Input value={ACC_API||''} onChange={e=>setConfig(p=>({...p,scriptUrl:e.target.value}))} placeholder="https://script.google.com/macros/s/.../exec"/>
                     </Field>
                     <div className="flex gap-2 mt-3">
-                        <button onClick={()=>{ localStorage.setItem('cpb_acc_config',JSON.stringify(config)); setShowSettings(false); if(config.scriptUrl) fetchFromSheets(); }} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
+                        <button onClick={()=>{ localStorage.setItem('cpb_acc_config',JSON.stringify(config)); setShowSettings(false); if(ACC_API) fetchFromSheets(); }} className="btn-primary px-4 py-2 rounded-lg text-sm">Save & Connect</button>
                         <button onClick={()=>setShowSettings(false)} className="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
                     </div>
                 </div>
