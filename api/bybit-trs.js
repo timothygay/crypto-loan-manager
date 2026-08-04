@@ -38,8 +38,10 @@ async function bybitGet(path, paramStr, apiKey, apiSecret, clockOffset) {
     return json.result;
 }
 
+const { sessionUser } = require('../lib/guard');
 module.exports = async function handler(req, res) {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+    if (!(await sessionUser(req))) return res.status(401).json({ error: 'Sign in required.' });
 
     const apiKey    = process.env.BYBIT_TRS_API_KEY;
     const apiSecret = process.env.BYBIT_TRS_API_SECRET;

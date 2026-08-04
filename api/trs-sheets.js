@@ -1,5 +1,6 @@
 // api/trs-sheets.js — Vercel proxy for TRS Google Apps Script
 
+const { sessionUser } = require('../lib/guard');
 const TRS_SCRIPT_URL = process.env.TRS_SCRIPT_URL;
 
 module.exports = async function handler(req, res) {
@@ -8,6 +9,7 @@ module.exports = async function handler(req, res) {
     res.setHeader('Content-Type', 'application/json');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
+    if (!(await sessionUser(req))) return res.status(401).json({ error: 'Sign in required.' });
 
     // Step 1: confirm function is running
     if (!TRS_SCRIPT_URL) {
