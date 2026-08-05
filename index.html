@@ -7510,6 +7510,110 @@ const Settings = () => {
     );
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MARKET FLOW MODULE — goldhorse "Top Traded (US)" + "Highlight Transactions".
+// Reads the Goldhorse sheet via the auth proxy. The Refresh button sets a flag the
+// local scraper/poller watches (a Vercel-hosted page can't launch a local process),
+// then polls until the scrape completes.
+// ═══════════════════════════════════════════════════════════════════════════════
+const GOLDHORSE_API = '/api/sheet/goldhorse';
+const MarketFlowModule = () => {
+    const [topTraded, setTopTraded]   = useState([]);
+    const [highlights, setHighlights] = useState([]);
+    const [status, setStatus]         = useState({lastScrapedAt:'', refreshRequestedAt:''});
+    const [refreshing, setRefreshing] = useState(false);
+    const [note, setNote]             = useState('');
+
+    const call = async (params) => {
+        const qs = Object.entries(params).map(([k,v])=>`${k}=${encodeURIComponent(v)}`).join('&');
+        const r = await fetch(`${GOLDHORSE_API}?${qs}`);
+        const d = await r.json();
+        if (!d.success) throw new Error(d.error||'Market Flow error');
+        return d;
+    };
+
+    const load = async () => {
+        try {
+            const [tt, hl, st] = await Promise.all([
+                call({action:'read', sheetName:'Top Traded'}),
+                call({action:'read', sheetName:'Highlight Transactions'}),
+                call({action:'getStatus'}),
+            ]);
+            setTopTraded((tt.values||[]).slice(1));   // drop header row
+            setHighlights((hl.values||[]).slice(1));
+            setStatus(st);
+        } catch(e){ setNote(e.message); }
+    };
+
+    useEffect(()=>{ load(); const t=setInterval(load,60000); return ()=>clearInterval(t); }, []);
+
+    const doRefresh = async () => {
+        if (refreshing) return;
+        setRefreshing(true);
+        setNote('Refresh requested — the scraper runs within ~1–2 min while your Mac is online…');
+        const before = status.lastScrapedAt || '';
+        try { await call({action:'requestRefresh'}); }
+        catch(e){ setNote(e.message); setRefreshing(false); return; }
+        const started = Date.now();
+        const poll = async () => {
+            try {
+                const st = await call({action:'getStatus'});
+                if ((st.lastScrapedAt||'') > before) { await load(); setNote('Updated just now.'); setRefreshing(false); return; }
+            } catch(e){ /* keep polling */ }
+            if (Date.now()-started > 180000) { setNote('Still waiting — is your Mac online? It will update automatically once the scraper runs.'); setRefreshing(false); return; }
+            setTimeout(poll, 8000);
+        };
+        setTimeout(poll, 8000);
+    };
+
+    const ago = (iso) => {
+        if (!iso) return 'never';
+        const s = Math.floor((Date.now()-new Date(iso).getTime())/1000);
+        if (s<60) return s+'s ago';
+        if (s<3600) return Math.floor(s/60)+'m ago';
+        if (s<86400) return Math.floor(s/3600)+'h ago';
+        return Math.floor(s/86400)+'d ago';
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="flex items-center gap-3 flex-wrap">
+                <h2 className="text-lg font-semibold">Market Flow <span className="text-xs text-slate-500 font-normal">· goldhorse</span></h2>
+                <span className="text-xs text-slate-500">Last scraped {ago(status.lastScrapedAt)}</span>
+                <span className="flex-1"/>
+                <button onClick={doRefresh} disabled={refreshing} className="btn-secondary px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5 disabled:opacity-50">
+                    <span className={refreshing?'spinning':''}>⟳</span> {refreshing?'Refreshing…':'Refresh'}
+                </button>
+            </div>
+            {note&&<p className="text-xs text-slate-500">{note}</p>}
+
+            <div className="card p-4">
+                <p className="text-sm font-semibold mb-3">Top Traded — US · last 24h</p>
+                {topTraded.length===0?<p className="text-sm text-slate-500">No data yet — run a scrape (Refresh) or wait for the scheduled run.</p>:(
+                <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <thead><tr className="text-slate-400 text-left border-b border-slate-800"><th className="py-1.5 pr-3">#</th><th className="py-1.5 pr-3">Ticker</th><th className="py-1.5">Name</th></tr></thead>
+                    <tbody>{topTraded.map((r,i)=>(
+                        <tr key={i} className="border-b border-slate-800/50 table-row-hover"><td className="py-1.5 pr-3 text-slate-500">{r[0]}</td><td className="py-1.5 pr-3 mono font-semibold">{r[1]}</td><td className="py-1.5 text-slate-300">{r[2]}</td></tr>
+                    ))}</tbody>
+                </table></div>
+                )}
+            </div>
+
+            <div className="card p-4">
+                <p className="text-sm font-semibold mb-3">Highlight Transactions — last 72h</p>
+                {highlights.length===0?<p className="text-sm text-slate-500">No data yet.</p>:(
+                <div className="overflow-x-auto"><table className="w-full text-sm">
+                    <thead><tr className="text-slate-400 text-left border-b border-slate-800"><th className="py-1.5 pr-3">Type</th><th className="py-1.5 pr-3">Underlyings</th><th className="py-1.5 pr-3 text-right">Strike</th><th className="py-1.5 pr-3 text-right">Coupon p.a.</th><th className="py-1.5 pr-3">Tenor</th><th className="py-1.5">Structure</th></tr></thead>
+                    <tbody>{highlights.map((r,i)=>(
+                        <tr key={i} className="border-b border-slate-800/50 table-row-hover"><td className="py-1.5 pr-3 font-semibold">{r[0]}</td><td className="py-1.5 pr-3 mono text-slate-300">{r[1]}</td><td className="py-1.5 pr-3 text-right mono">{r[2]}</td><td className="py-1.5 pr-3 text-right mono font-semibold">{r[3]}</td><td className="py-1.5 pr-3">{r[4]}</td><td className="py-1.5 text-slate-400 text-xs">{r[5]}</td></tr>
+                    ))}</tbody>
+                </table></div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const App = () => {
     const [tab,setTab]=useState('ssps');
     // Persist theme preference across sessions
@@ -7621,11 +7725,11 @@ const App = () => {
                 </div>
                 <PriceTicker bybitPrices={bybitPrices} binancePrices={binancePrices} bybitUpdate={bybitUpdate} binanceUpdate={binanceUpdate} deribitPrices={deribitPrices} deribitUpdate={deribitUpdate}/>
                 <div className="flex gap-1 mb-6 border-b border-slate-800">
-                    {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['fcn','Fixed Coupon Note'],['acc','Accumulator'],['trs','TRS'],['dci','DCI']].map(([id,label])=>(
+                    {[['loans','Securitised Loans'],['ssps','Smart Participation Swap'],['fcn','Fixed Coupon Note'],['acc','Accumulator'],['trs','TRS'],['dci','DCI'],['goldhorse','Market Flow']].map(([id,label])=>(
                         <button key={id} onClick={()=>setTab(id)} className={`px-4 py-2.5 text-sm font-medium transition-all ${tab===id?'tab-active':'tab-inactive'}`}>{label}</button>
                     ))}
                 </div>
-                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:tab==='trs'?<TRSModule bybitPrices={bybitPrices}/>:<DCIModule deribitPrices={deribitPrices} bybitPrices={bybitPrices}/>}
+                {tab==='loans'?<LoanModule prices={bybitPrices}/>:tab==='ssps'?<SSPSModule prices={bybitPrices}/>:tab==='fcn'?<FCNModule prices={binancePrices}/>:tab==='acc'?<AccumulatorModule prices={binancePrices}/>:tab==='trs'?<TRSModule bybitPrices={bybitPrices}/>:tab==='dci'?<DCIModule deribitPrices={deribitPrices} bybitPrices={bybitPrices}/>:<MarketFlowModule/>}
             </div>
             {/* Floating settings + theme toggle — fixed bottom-right */}
             <Settings/>

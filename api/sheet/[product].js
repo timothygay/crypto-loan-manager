@@ -13,6 +13,7 @@ const URL_ENV = {
     acc:   'ACC_GAS_URL',
     trs:   'TRS_GAS_URL',
     dci:   'DCI_GAS_URL',
+    goldhorse: 'GOLDHORSE_GAS_URL',
 };
 
 // Known READ actions per the .gs backends. Anything not listed is treated as a
@@ -26,6 +27,8 @@ const READ_ACTIONS = new Set([
     'readfcnorders', 'readpriceladder',
     // Accumulator
     'readaccorders', 'readaccpriceladder',
+    // Goldhorse Market Flow (read + benign refresh-flag/status; no trade mutation)
+    'getstatus', 'requestrefresh',
 ]);
 
 module.exports = async (req, res) => {
