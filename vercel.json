@@ -10,8 +10,17 @@
     },
     "api/trs-sheets.js": {
       "maxDuration": 15
+    },
+    "api/cron/dci-sync.js": {
+      "maxDuration": 30
     }
   },
+  "crons": [
+    {
+      "path": "/api/cron/dci-sync",
+      "schedule": "45 8 * * *"
+    }
+  ],
   "headers": [
     {
       "source": "/index.html",
