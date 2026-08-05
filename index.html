@@ -1918,7 +1918,7 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
                             </div>
                             <div className="card-inner p-3">
                                 <p className="text-xs text-slate-400 mb-1">{sym} Live Price</p>
-                                <p className="font-bold mono text-white text-sm">{livePrices[sym]?`$${fmt(livePrices[sym],2)}`:'—'}</p>
+                                <p className="font-bold mono text-white text-sm">{(livePrices[sym]||livePrices[sym.split('/')[0]])?`$${fmt(livePrices[sym]||livePrices[sym.split('/')[0]],2)}`:'—'}</p>
                                 <p className="text-xs text-slate-500">Bybit · 60s refresh</p>
                             </div>
                         </React.Fragment>
