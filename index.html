@@ -2329,10 +2329,16 @@ const SSPSModule = ({prices: livePrices}) => {
         setLastSync(new Date());
     };
 
-    const deleteContract = (id) => {
-        if (!canWrite()) return;
-        if (confirm('Delete contract locally? Remove the sheet tab manually if needed.'))
+    const deleteContract = async (id) => {
+        if(!canWrite()){alert('Read-only access — you cannot delete contracts.');return;}
+        if(!confirm('Delete this SSPS contract?\n\nIt will be hidden from the app and marked "DELETED — hidden in UI" in the Contracts sheet. The row and its ledger tab are kept (not permanently removed) — delete them in the sheet directly if needed.')) return;
+        try {
+            await sheetsCall(SSPS_API,{action:'deleteContract',contractId:id});
             setContracts(p=>p.filter(c=>c.id!==id));
+        } catch(e){
+            console.error('SSPS delete failed:',e.message);
+            alert('Delete failed — the contract is still in the sheet. Please try again.\n\n'+e.message);
+        }
     };
 
     const exportData = () => { const blob=new Blob([JSON.stringify({contracts,priceHistory},null,2)],{type:'application/json'}); const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`ssps-data-${todayUTC()}.json`;a.click(); };
@@ -5783,9 +5789,16 @@ const AccumulatorModule = ({prices}) => {
         setEditingTrade(null);
         await pushTrade(t, originalId);
     };
-    const deleteTrade = (id) => {
-        if(!canWrite())return;
-        if (confirm('Delete this Accumulator trade?')) setTrades(p=>p.filter(t=>t.id!==id));
+    const deleteTrade = async (id) => {
+        if(!canWrite()){alert('Read-only access — you cannot delete trades.');return;}
+        if(!confirm('Delete this Accumulator trade?\n\nIt will be hidden from the app and marked "DELETED — hidden in UI" in the Google Sheet. The row is kept (not permanently removed) — you can delete it in the sheet directly if needed.')) return;
+        try {
+            await accSheetsCall(ACC_API,{action:'deleteAccOrder',tradeId:id});
+            setTrades(p=>p.filter(t=>t.id!==id));
+        } catch(e){
+            console.error('Acc delete failed:',e.message);
+            alert('Delete failed — the trade is still in the sheet. Please try again.\n\n'+e.message);
+        }
     };
 
     // Save a fixing price for a date
