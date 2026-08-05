@@ -1386,6 +1386,18 @@ const LoanModule = ({prices}) => {
             } catch(e) { console.error('Sheets addLoan failed:', e.message); }
         }
     };
+    const deleteLoan = async (id) => {
+        if (!canWrite()) { alert('Read-only access — you cannot delete loans.'); return; }
+        if (!confirm('Delete this loan?\n\nIt will be hidden from the app and marked "DELETED — hidden in UI" in the Loans sheet, and margin-call alerts for it will stop. The row is kept (not permanently removed) — you can delete it in the sheet directly if needed.')) return;
+        try {
+            const res = await fetch(`${LOANS_API}?action=delete&sheetName=Loans&loanId=${encodeURIComponent(id)}`).then(r=>r.json());
+            if (!res.success) throw new Error(res.error||'Delete failed');
+            setLoans(p=>p.filter(l=>l.id!==id));
+        } catch(e) {
+            console.error('Loan delete failed:', e.message);
+            alert('Delete failed — the loan is still in the sheet. Please try again.\n\n'+e.message);
+        }
+    };
     const updateLoan = async (loan) => {
         if (!canWrite()) { alert('Read-only access — you cannot add or edit loans.'); return; }
         setLoans(p=>p.map(l=>l.id===loan.id?loan:l));
@@ -1560,6 +1572,7 @@ const LoanModule = ({prices}) => {
                                         </p>
                                     </div>
                                     {canWrite() && <button onClick={()=>setEditingLoan(loan)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>}
+                                    {canWrite() && <button onClick={()=>deleteLoan(loan.id)} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>}
                                 </div>
                                 {/* Metric tiles — hide collateral/ratio/MC for unsecured loans */}
                                 <div className={`grid grid-cols-2 gap-2 mb-4 ${m.isUnsecured?'md:grid-cols-3':'md:grid-cols-3 lg:grid-cols-6'}`}>
