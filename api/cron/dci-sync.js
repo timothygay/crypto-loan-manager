@@ -11,6 +11,7 @@
 //
 // Add ?dry=1 to preview (reads + maps, posts NOTHING).
 const { neon } = require('@neondatabase/serverless');
+const { sessionUser } = require('../../lib/guard');
 
 // Exact DCI Active column order (matches upload_dci.py SHEET_COLUMNS / the sheet).
 const COLS = ["Txn Id","Ref No","Asset Type","Trade Type","Product","Prod Description","Option CCY","Option Type","Strike Price","Client Name","Wallet Name","Wallet Currency","Form Status","Order Status","Simulated Status","Value Date","Maturity Date","Terminated On","Payout Type","Notional Amount Ccy","Notional Amount","Lapsed Amount CCY","Lapsed Amount","Exercised Amount CCY","Exercised Amount","Other Charges CCY","Other Charges","Redemption By","Redemption Date","Fixing","Redemption Ccy","Redemption Amount","Inception P&L Ccy","Inception P&L","Inception Premium Ccy","Inception Premium","Inception Bid Amt Ccy","Inception Bid Amt","Underlying Futures","Underlying Futures Rate","Inception Bid IV","Inception Mark IV","Treasury Rate APY","Customer Rate APY","Spot Index","Created By","Created Date","Uploaded At"];
@@ -62,11 +63,15 @@ async function alertFailure(text) {
 }
 
 module.exports = async (req, res) => {
-    // Only Vercel Cron (or someone with the secret) may trigger it. Re-runs are
-    // idempotent (append+dedup), so this is defence-in-depth, not critical.
+    // Callable two ways: (1) Vercel Cron, which sends Authorization: Bearer CRON_SECRET,
+    // or (2) a logged-in user clicking "Pull from Monitor" in the DCI tab (session cookie).
+    // Re-runs are idempotent (append+dedup), so this is a benign refresh.
     const secret = process.env.CRON_SECRET;
-    if (secret && req.headers.authorization !== `Bearer ${secret}`) {
-        return res.status(401).json({ ok: false, error: 'unauthorized' });
+    const cronOk = secret && req.headers.authorization === `Bearer ${secret}`;
+    let session = null;
+    if (!cronOk) {
+        try { session = await sessionUser(req); } catch (_) { session = null; }
+        if (!session) return res.status(401).json({ ok: false, error: 'Sign in required.' });
     }
 
     const dbUrl  = process.env.MONITOR_DB_URL;

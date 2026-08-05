@@ -6810,6 +6810,8 @@ const DCIModule = ({deribitPrices={}, bybitPrices={}}) => {
     const [loading,  setLoading]  = React.useState(false);
     const [error,    setError]    = React.useState('');
     const [lastSync, setLastSync] = React.useState('');
+    const [pulling,  setPulling]  = React.useState(false);
+    const [pullMsg,  setPullMsg]  = React.useState('');
 
     // ── Filters ───────────────────────────────────────────────────────────────
     const [fClient,     setFClient]     = React.useState('');
@@ -6879,6 +6881,22 @@ const DCIModule = ({deribitPrices={}, bybitPrices={}}) => {
 
     // Auto-fetch on load and when scriptUrl changes
     React.useEffect(() => { if (config.scriptUrl) fetchTrades(); }, [config.scriptUrl]);
+
+    // Manual pull: trigger the server-side monitor→sheet sync (same job as the
+    // 16:45 SGT cron), then re-read the sheet. Runs on Vercel, so no local machine.
+    const pullFromMonitor = async () => {
+        if (pulling) return;
+        setPulling(true); setPullMsg('');
+        try {
+            const r = await fetch('/api/cron/dci-sync', { credentials: 'same-origin' });
+            const d = await r.json();
+            if (!d.ok) throw new Error(d.error || 'Pull failed');
+            setPullMsg(`pulled ${d.activeRows} active · +${d.added} new, ${d.skipped} existing`);
+            await fetchTrades();
+        } catch(e) {
+            setPullMsg('pull failed: ' + e.message);
+        } finally { setPulling(false); }
+    };
 
     const openSettings = () => { setConfigDraft({...config}); setShowSettings(true); };
     const saveSettings = () => {
@@ -7083,9 +7101,15 @@ const DCIModule = ({deribitPrices={}, bybitPrices={}}) => {
                         {trades.length} trade{trades.length!==1?'s':''} loaded
                         {lastSync && <span> · synced {lastSync}</span>}
                         {filtered.length !== trades.length && <span className="text-cyan-400"> · {filtered.length} shown</span>}
+                        {pullMsg && <span className="text-cyan-400"> · {pullMsg}</span>}
                     </p>
                 </div>
                 <div className="flex gap-2">
+                    <button onClick={pullFromMonitor} disabled={pulling}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-700/40 hover:bg-cyan-700/60 border border-cyan-600/40 rounded text-xs text-cyan-200 transition-colors disabled:opacity-40"
+                        title="Pull the latest DCI orders from the treasury monitor now">
+                        {pulling ? '⟳ Pulling…' : '↓ Pull from Monitor'}
+                    </button>
                     <button onClick={openSettings}
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700/60 hover:bg-slate-700 border border-slate-600/40 rounded text-xs text-slate-300 transition-colors">
                         ⚙ Config
