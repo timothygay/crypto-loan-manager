@@ -6431,6 +6431,22 @@ const fetchDeribitOptionChain = async (currency) => {
     }));
 };
 
+// Fetch Penguin Securities' own DCI APRs (skew-adjusted), keyed by instrument_name
+// (identical format to Deribit, e.g. "BTC-14AUG26-63000-C"). The /api/dci-penguin
+// proxy injects the x-api-key server-side. Returns {} on any failure so the ladder
+// still renders (Penguin APR cells fall back to "—").
+const fetchPenguinDciApr = async () => {
+    try {
+        const res = await fetch('/api/dci-penguin');
+        if (!res.ok) return {};
+        const d = await res.json();
+        return (d && d.success && d.apr) ? d.apr : {};
+    } catch (e) {
+        console.error('Penguin DCI APR fetch error:', e);
+        return {};
+    }
+};
+
 // Parse Deribit instrument name, e.g. "BTC-3JUL26-112000-C" → {expiry, strike, type}
 const parseDeribitInstrument = (name) => {
     const parts = name.split('-');
@@ -6530,8 +6546,9 @@ const DCIPriceLadder = ({spotPrices={}}) => {
     const [bufferPct, setBufferPct] = useState('0');
 
     // Column visibility — all visible by default
-    const ALL_COLS = ['clientApr','callApr','opPrice','callIV','callBid','putBid','putIV','opPricePut','putApr','clientAprPut'];
+    const ALL_COLS = ['pengApr','clientApr','callApr','opPrice','callIV','callBid','putBid','putIV','opPricePut','putApr','clientAprPut','pengAprPut'];
     const COL_LABELS = {
+        pengApr:      'Penguin APR (Call)',
         clientApr:    'Client APR (Call)',
         callApr:      'Call APR',
         opPrice:      'Op Price (Call)',
@@ -6542,16 +6559,22 @@ const DCIPriceLadder = ({spotPrices={}}) => {
         opPricePut:   'Op Price (Put)',
         putApr:       'Put APR',
         clientAprPut: 'Client APR (Put)',
+        pengAprPut:   'Penguin APR (Put)',
     };
     const [visibleCols, setVisibleCols] = useState(() => {
-        const saved = localStorage.getItem('cpb_dci_ladder_cols');
-        return saved ? JSON.parse(saved) : Object.fromEntries(ALL_COLS.map(c => [c, true]));
+        const allTrue = Object.fromEntries(ALL_COLS.map(c => [c, true]));
+        try {
+            const saved = localStorage.getItem('cpb_dci_ladder_cols');
+            // Merge so any newly-added columns default to visible for existing users.
+            return saved ? {...allTrue, ...JSON.parse(saved)} : allTrue;
+        } catch { return allTrue; }
     });
     useEffect(() => { localStorage.setItem('cpb_dci_ladder_cols', JSON.stringify(visibleCols)); }, [visibleCols]);
     const toggleCol = (col) => setVisibleCols(prev => ({...prev, [col]: !prev[col]}));
     const [showColFilter, setShowColFilter] = useState(false);
 
     const [chains, setChains]   = useState({BTC: [], ETH: []});
+    const [pengMap, setPengMap] = useState({});   // instrument_name → {adj, raw} (Penguin's own APRs)
     const [loading, setLoading] = useState(false);
     const [lastFetch, setLastFetch] = useState(null);
     const [fetchError, setFetchError] = useState('');
@@ -6566,6 +6589,9 @@ const DCIPriceLadder = ({spotPrices={}}) => {
             const btcChain = await fetchDeribitOptionChain('BTC');
             const ethChain = await fetchDeribitOptionChain('ETH');
             setChains({BTC: btcChain, ETH: ethChain});
+            // Penguin's own DCI APRs (single call to our proxy) — independent of Deribit.
+            const peng = await fetchPenguinDciApr();
+            setPengMap(peng);
             setLastFetch(new Date());
         } catch (e) {
             console.error('DCI ladder fetch error:', e);
@@ -6621,6 +6647,9 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                     byStrike[parsed.strike][parsed.type + 'IV']    = bidIV;
                     byStrike[parsed.strike][parsed.type + 'BidIV'] = bidIV;
                 }
+                // Penguin's own skew-adjusted APR for this exact instrument (decimal, e.g. 1.7995).
+                const peng = pengMap[row.instrument_name];
+                byStrike[parsed.strike][parsed.type + 'Peng'] = (peng && typeof peng.adj === 'number') ? peng.adj : null;
             });
             // Sort strikes for each expiry
             Object.entries(byExpiry).forEach(([expiryKey, byStrike]) => {
@@ -6628,7 +6657,7 @@ const DCIPriceLadder = ({spotPrices={}}) => {
             });
         });
         return result;
-    }, [chains]);
+    }, [chains, pengMap]);
 
     const getRows = (asset, expiryKey) => allRows[asset + ':' + expiryKey] || [];
 
@@ -6662,21 +6691,22 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                 <table className="w-full text-xs">
                                     <thead>
                                         <tr className="border-b border-slate-700/50 text-xs font-bold">
-                                            {(visibleCols.clientApr||visibleCols.callApr||visibleCols.opPrice||visibleCols.callIV||visibleCols.callBid) && (
-                                                <th colSpan={[visibleCols.clientApr,visibleCols.callApr,visibleCols.opPrice,visibleCols.callIV,visibleCols.callBid].filter(Boolean).length}
+                                            {(visibleCols.pengApr||visibleCols.clientApr||visibleCols.callApr||visibleCols.opPrice||visibleCols.callIV||visibleCols.callBid) && (
+                                                <th colSpan={[visibleCols.pengApr,visibleCols.clientApr,visibleCols.callApr,visibleCols.opPrice,visibleCols.callIV,visibleCols.callBid].filter(Boolean).length}
                                                     className="text-center px-3 py-1.5 text-green-300 bg-green-900/20 tracking-widest uppercase">
                                                     Calls
                                                 </th>
                                             )}
                                             <th className="text-center px-3 py-1.5 bg-slate-800/40"></th>
-                                            {(visibleCols.putBid||visibleCols.putIV||visibleCols.opPricePut||visibleCols.putApr||visibleCols.clientAprPut) && (
-                                                <th colSpan={[visibleCols.putBid,visibleCols.putIV,visibleCols.opPricePut,visibleCols.putApr,visibleCols.clientAprPut].filter(Boolean).length}
+                                            {(visibleCols.putBid||visibleCols.putIV||visibleCols.opPricePut||visibleCols.putApr||visibleCols.clientAprPut||visibleCols.pengAprPut) && (
+                                                <th colSpan={[visibleCols.putBid,visibleCols.putIV,visibleCols.opPricePut,visibleCols.putApr,visibleCols.clientAprPut,visibleCols.pengAprPut].filter(Boolean).length}
                                                     className="text-center px-3 py-1.5 text-red-300 bg-red-900/20 tracking-widest uppercase">
                                                     Puts
                                                 </th>
                                             )}
                                         </tr>
                                         <tr className="border-b border-slate-800 bg-slate-900/40 text-slate-400 font-medium">
+                                            {visibleCols.pengApr      && <th className="text-right px-3 py-2 text-violet-300">Penguin APR</th>}
                                             {visibleCols.clientApr    && <th className="text-right px-3 py-2 text-cyan-300">Client APR</th>}
                                             {visibleCols.callApr      && <th className="text-right px-3 py-2 text-green-400">Call APR</th>}
                                             {visibleCols.opPrice      && <th className="text-right px-3 py-2">Op Price</th>}
@@ -6688,6 +6718,7 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                             {visibleCols.opPricePut   && <th className="text-left px-3 py-2">Op Price</th>}
                                             {visibleCols.putApr       && <th className="text-left px-3 py-2 text-green-400">Put APR</th>}
                                             {visibleCols.clientAprPut && <th className="text-left px-3 py-2 text-cyan-300">Client APR</th>}
+                                            {visibleCols.pengAprPut   && <th className="text-left px-3 py-2 text-violet-300">Penguin APR</th>}
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -6709,8 +6740,13 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                             const ivFmt = (v) => v
                                                 ? <span className="text-amber-400">{fmt(v*100,1)}%</span>
                                                 : na;
+                                            // Penguin's own skew-adjusted APR (decimal → %); independent of the skew slider.
+                                            const pengFmt = (v) => (v !== null && v !== undefined && Math.abs(v) > 1e-9)
+                                                ? <span className="text-violet-300">{fmt(v*100,2)}%</span>
+                                                : na;
                                             return (
                                                 <tr key={row.strike} className={`border-b border-slate-800/40 ${i%2===1?'bg-slate-900/20':''}`}>
+                                                    {visibleCols.pengApr      && <td className="text-right px-3 py-1.5 mono font-semibold">{pengFmt(row.callPeng)}</td>}
                                                     {visibleCols.clientApr    && <td className="text-right px-3 py-1.5 mono font-semibold">{pct(clientCallAPR,'text-cyan-300')}</td>}
                                                     {visibleCols.callApr      && <td className="text-right px-3 py-1.5 mono">{pct(callAPR,'text-green-400')}</td>}
                                                     {visibleCols.opPrice      && <td className="text-right px-3 py-1.5 mono text-slate-200">{callOpPrice?'$'+fmt(callOpPrice,2):na}</td>}
@@ -6722,6 +6758,7 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                                     {visibleCols.opPricePut   && <td className="text-left px-3 py-1.5 mono text-slate-200">{putOpPrice?'$'+fmt(putOpPrice,2):na}</td>}
                                                     {visibleCols.putApr       && <td className="text-left px-3 py-1.5 mono">{pct(putAPR,'text-green-400')}</td>}
                                                     {visibleCols.clientAprPut && <td className="text-left px-3 py-1.5 mono font-semibold">{pct(clientPutAPR,'text-cyan-300')}</td>}
+                                                    {visibleCols.pengAprPut   && <td className="text-left px-3 py-1.5 mono font-semibold">{pengFmt(row.putPeng)}</td>}
                                                 </tr>
                                             );
                                         })}
