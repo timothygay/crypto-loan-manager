@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "regions": ["cdg1"],
+  "regions": ["sin1"],
   "functions": {
     "api/prices.js": {
       "maxDuration": 10
