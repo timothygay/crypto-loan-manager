@@ -6536,20 +6536,19 @@ const daysToExpirySGT = (expiryDate) => {
 };
 
 const DCIPriceLadder = ({spotPrices={}}) => {
-    const STORAGE_KEY = 'cpb_dci_ladder_skew';
-    const [skewPct, setSkewPct] = useState(() => {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        return saved !== null ? saved : '30';
+    // Penguin APR buffer — additive %-point adjustment applied to the Penguin APR
+    // columns (e.g. buffer +5 shows an 80% Penguin APR as 85%). Persisted.
+    const PENG_BUFFER_KEY = 'cpb_dci_peng_buffer';
+    const [pengBufferPct, setPengBufferPct] = useState(() => {
+        const saved = localStorage.getItem(PENG_BUFFER_KEY);
+        return saved !== null ? saved : '0';
     });
-    useEffect(() => { localStorage.setItem(STORAGE_KEY, skewPct); }, [skewPct]);
-
-    const [bufferPct, setBufferPct] = useState('0');
+    useEffect(() => { localStorage.setItem(PENG_BUFFER_KEY, pengBufferPct); }, [pengBufferPct]);
 
     // Column visibility — all visible by default
-    const ALL_COLS = ['pengApr','clientApr','callApr','opPrice','callIV','callBid','putBid','putIV','opPricePut','putApr','clientAprPut','pengAprPut'];
+    const ALL_COLS = ['pengApr','callApr','opPrice','callIV','callBid','putBid','putIV','opPricePut','putApr','pengAprPut'];
     const COL_LABELS = {
         pengApr:      'Penguin APR (Call)',
-        clientApr:    'Client APR (Call)',
         callApr:      'Call APR',
         opPrice:      'Op Price (Call)',
         callIV:       'Call IV (Bid)',
@@ -6558,7 +6557,6 @@ const DCIPriceLadder = ({spotPrices={}}) => {
         putIV:        'Put IV (Bid)',
         opPricePut:   'Op Price (Put)',
         putApr:       'Put APR',
-        clientAprPut: 'Client APR (Put)',
         pengAprPut:   'Penguin APR (Put)',
     };
     const [visibleCols, setVisibleCols] = useState(() => {
@@ -6661,7 +6659,7 @@ const DCIPriceLadder = ({spotPrices={}}) => {
 
     const getRows = (asset, expiryKey) => allRows[asset + ':' + expiryKey] || [];
 
-    const skew = (parseFloat(skewPct) || 0) / 100;
+    const pengBuffer = parseFloat(pengBufferPct) || 0;
 
     const computeAPR = (bid, strike, expiryDate, iv, spot) => {
         if (!iv || !bid || !strike || !expiryDate || !spot) return null;
@@ -6691,15 +6689,15 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                 <table className="w-full text-xs">
                                     <thead>
                                         <tr className="border-b border-slate-700/50 text-xs font-bold">
-                                            {(visibleCols.pengApr||visibleCols.clientApr||visibleCols.callApr||visibleCols.opPrice||visibleCols.callIV||visibleCols.callBid) && (
-                                                <th colSpan={[visibleCols.pengApr,visibleCols.clientApr,visibleCols.callApr,visibleCols.opPrice,visibleCols.callIV,visibleCols.callBid].filter(Boolean).length}
+                                            {(visibleCols.pengApr||visibleCols.callApr||visibleCols.opPrice||visibleCols.callIV||visibleCols.callBid) && (
+                                                <th colSpan={[visibleCols.pengApr,visibleCols.callApr,visibleCols.opPrice,visibleCols.callIV,visibleCols.callBid].filter(Boolean).length}
                                                     className="text-center px-3 py-1.5 text-green-300 bg-green-900/20 tracking-widest uppercase">
                                                     Calls
                                                 </th>
                                             )}
                                             <th className="text-center px-3 py-1.5 bg-slate-800/40"></th>
-                                            {(visibleCols.putBid||visibleCols.putIV||visibleCols.opPricePut||visibleCols.putApr||visibleCols.clientAprPut||visibleCols.pengAprPut) && (
-                                                <th colSpan={[visibleCols.putBid,visibleCols.putIV,visibleCols.opPricePut,visibleCols.putApr,visibleCols.clientAprPut,visibleCols.pengAprPut].filter(Boolean).length}
+                                            {(visibleCols.putBid||visibleCols.putIV||visibleCols.opPricePut||visibleCols.putApr||visibleCols.pengAprPut) && (
+                                                <th colSpan={[visibleCols.putBid,visibleCols.putIV,visibleCols.opPricePut,visibleCols.putApr,visibleCols.pengAprPut].filter(Boolean).length}
                                                     className="text-center px-3 py-1.5 text-red-300 bg-red-900/20 tracking-widest uppercase">
                                                     Puts
                                                 </th>
@@ -6707,7 +6705,6 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                         </tr>
                                         <tr className="border-b border-slate-800 bg-slate-900/40 text-slate-400 font-medium">
                                             {visibleCols.pengApr      && <th className="text-right px-3 py-2 text-violet-300">Penguin APR</th>}
-                                            {visibleCols.clientApr    && <th className="text-right px-3 py-2 text-cyan-300">Client APR</th>}
                                             {visibleCols.callApr      && <th className="text-right px-3 py-2 text-green-400">Call APR</th>}
                                             {visibleCols.opPrice      && <th className="text-right px-3 py-2">Op Price</th>}
                                             {visibleCols.callIV       && <th className="text-right px-3 py-2 text-amber-400">Call IV (Bid)</th>}
@@ -6717,7 +6714,6 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                             {visibleCols.putIV        && <th className="text-left px-3 py-2 text-amber-400">Put IV (Bid)</th>}
                                             {visibleCols.opPricePut   && <th className="text-left px-3 py-2">Op Price</th>}
                                             {visibleCols.putApr       && <th className="text-left px-3 py-2 text-green-400">Put APR</th>}
-                                            {visibleCols.clientAprPut && <th className="text-left px-3 py-2 text-cyan-300">Client APR</th>}
                                             {visibleCols.pengAprPut   && <th className="text-left px-3 py-2 text-violet-300">Penguin APR</th>}
                                         </tr>
                                     </thead>
@@ -6727,9 +6723,6 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                             // APR gated on bid_iv — confirms live market bidder
                                             const callAPR       = computeAPR(row.call, row.strike, row.callExpiryDate, row.callIV, assetSpot);
                                             const putAPR        = computeAPR(row.put,  row.strike, row.putExpiryDate,  row.putIV,  assetSpot);
-                                            const buffer        = parseFloat(bufferPct) || 0;
-                                            const clientCallAPR = callAPR !== null ? callAPR * (1-skew) + buffer : null;
-                                            const clientPutAPR  = putAPR  !== null ? putAPR  * (1-skew) + buffer : null;
                                             // Op Price = bid (coin) × Bybit spot
                                             const callOpPrice   = (row.call && assetSpot) ? row.call * assetSpot : null;
                                             const putOpPrice    = (row.put  && assetSpot) ? row.put  * assetSpot : null;
@@ -6740,14 +6733,13 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                             const ivFmt = (v) => v
                                                 ? <span className="text-amber-400">{fmt(v*100,1)}%</span>
                                                 : na;
-                                            // Penguin's own skew-adjusted APR (decimal → %); independent of the skew slider.
+                                            // Penguin's own skew-adjusted APR (decimal → %), plus the additive Penguin APR buffer.
                                             const pengFmt = (v) => (v !== null && v !== undefined && Math.abs(v) > 1e-9)
-                                                ? <span className="text-violet-300">{fmt(v*100,2)}%</span>
+                                                ? <span className="text-violet-300">{fmt(v*100 + pengBuffer,2)}%</span>
                                                 : na;
                                             return (
                                                 <tr key={row.strike} className={`border-b border-slate-800/40 ${i%2===1?'bg-slate-900/20':''}`}>
                                                     {visibleCols.pengApr      && <td className="text-right px-3 py-1.5 mono font-semibold">{pengFmt(row.callPeng)}</td>}
-                                                    {visibleCols.clientApr    && <td className="text-right px-3 py-1.5 mono font-semibold">{pct(clientCallAPR,'text-cyan-300')}</td>}
                                                     {visibleCols.callApr      && <td className="text-right px-3 py-1.5 mono">{pct(callAPR,'text-green-400')}</td>}
                                                     {visibleCols.opPrice      && <td className="text-right px-3 py-1.5 mono text-slate-200">{callOpPrice?'$'+fmt(callOpPrice,2):na}</td>}
                                                     {visibleCols.callIV       && <td className="text-right px-3 py-1.5 mono">{ivFmt(row.callBidIV)}</td>}
@@ -6757,7 +6749,6 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                                                     {visibleCols.putIV        && <td className="text-left px-3 py-1.5 mono">{ivFmt(row.putBidIV)}</td>}
                                                     {visibleCols.opPricePut   && <td className="text-left px-3 py-1.5 mono text-slate-200">{putOpPrice?'$'+fmt(putOpPrice,2):na}</td>}
                                                     {visibleCols.putApr       && <td className="text-left px-3 py-1.5 mono">{pct(putAPR,'text-green-400')}</td>}
-                                                    {visibleCols.clientAprPut && <td className="text-left px-3 py-1.5 mono font-semibold">{pct(clientPutAPR,'text-cyan-300')}</td>}
                                                     {visibleCols.pengAprPut   && <td className="text-left px-3 py-1.5 mono font-semibold">{pengFmt(row.putPeng)}</td>}
                                                 </tr>
                                             );
@@ -6777,20 +6768,13 @@ const DCIPriceLadder = ({spotPrices={}}) => {
             <div className="flex items-center justify-between flex-wrap gap-3">
                 <div className="flex items-center gap-4 flex-wrap">
                     <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-slate-300 uppercase tracking-wide">Skew</span>
-                        <input type="number" value={skewPct} onChange={e=>setSkewPct(e.target.value)}
-                            min="0" max="100" step="1"
-                            className="w-16 px-2 py-1.5 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-cyan-300 mono focus:outline-none focus:border-cyan-500/50"/>
-                        <span className="text-xs text-slate-400">%</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-slate-300 uppercase tracking-wide">Client APR Buffer</span>
-                        <input type="number" value={bufferPct} onChange={e=>setBufferPct(e.target.value)}
+                        <span className="text-xs font-semibold text-slate-300 uppercase tracking-wide">Penguin APR Buffer</span>
+                        <input type="number" value={pengBufferPct} onChange={e=>setPengBufferPct(e.target.value)}
                             step="0.1"
-                            className="w-16 px-2 py-1.5 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-amber-300 mono focus:outline-none focus:border-amber-500/50"/>
+                            className="w-16 px-2 py-1.5 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-violet-300 mono focus:outline-none focus:border-violet-500/50"/>
                         <span className="text-xs text-slate-400">%</span>
                     </div>
-                    <span className="text-[10px] text-slate-500">Client APR = (1 − skew) × APR + buffer</span>
+                    <span className="text-[10px] text-slate-500">Penguin APR = Penguin adj. APR + buffer</span>
                 </div>
                 <div className="flex items-center gap-2">
                     {fetchError && <span className="text-xs text-red-400">{fetchError}</span>}
