@@ -6649,6 +6649,22 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                 const peng = pengMap[row.instrument_name];
                 byStrike[parsed.strike][parsed.type + 'Peng'] = (peng && typeof peng.adj === 'number') ? peng.adj : null;
             });
+            // UNION: also surface strikes that PENGUIN prices, even when Deribit has no
+            // bid for them (or is unavailable, e.g. maintenance). Penguin APR should show
+            // whenever Penguin has a quote — it must not be gated by the Deribit chain.
+            const targetExpiries = new Set(getDCIExpiryWindow().map(e => e.expiryKey));
+            Object.entries(pengMap).forEach(([instrument, val]) => {
+                if (!val || typeof val.adj !== 'number' || Math.abs(val.adj) < 1e-9) return; // real Penguin quote only
+                if (instrument.split('-')[0] !== asset) return;
+                const parsed = parseDeribitInstrument(instrument);
+                if (!parsed || !targetExpiries.has(parsed.expiryKey)) return;
+                if (!byExpiry[parsed.expiryKey]) byExpiry[parsed.expiryKey] = {};
+                const byStrike = byExpiry[parsed.expiryKey];
+                if (!byStrike[parsed.strike]) byStrike[parsed.strike] = {strike: parsed.strike};
+                if (byStrike[parsed.strike][parsed.type + 'Peng'] == null) {
+                    byStrike[parsed.strike][parsed.type + 'Peng'] = val.adj;
+                }
+            });
             // Sort strikes for each expiry
             Object.entries(byExpiry).forEach(([expiryKey, byStrike]) => {
                 result[asset + ':' + expiryKey] = Object.values(byStrike).sort((a,b) => a.strike - b.strike);
@@ -6680,10 +6696,10 @@ const DCIPriceLadder = ({spotPrices={}}) => {
                     <div key={expiryKey} className="card overflow-hidden">
                         <div className="px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
                             <p className="text-sm font-semibold text-slate-300">Expiry {label}</p>
-                            <p className="text-xs text-slate-500">{rows.length} strike{rows.length!==1?'s':''} with bids</p>
+                            <p className="text-xs text-slate-500">{rows.length} strike{rows.length!==1?'s':''}</p>
                         </div>
                         {rows.length === 0 ? (
-                            <p className="text-xs text-slate-500 text-center py-6">No bids available for this expiry</p>
+                            <p className="text-xs text-slate-500 text-center py-6">No quotes available for this expiry</p>
                         ) : (
                             <div className="overflow-x-auto scrollbar-hide">
                                 <table className="w-full text-xs">
