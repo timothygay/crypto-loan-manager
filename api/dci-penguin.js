@@ -13,7 +13,8 @@
 //
 // Set DCI_API_KEY in the environment (see .env.local + Vercel project env).
 
-const DCI_LIST_URL = 'https://prod-api.penguinsecurities.sg/pub/apigw/product/dci/list';
+const API_BASE  = 'https://prod-api.penguinsecurities.sg/pub/apigw';
+const DCI_LIST_URL = `${API_BASE}/product/dci/list`;
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -25,6 +26,25 @@ export default async function handler(req, res) {
         return res.status(500).json({ success: false, error: 'DCI_API_KEY not configured' });
     }
 
+    // Diagnostic: ?debug=1 probes both the DCI path (body {}) and treasury's
+    // known-good order/list path (body {type:"ALL"}) from THIS function's IP,
+    // surfacing upstream status + body so we can tell path-restriction vs IP-block.
+    if (req.query && req.query.debug) {
+        const probe = async (label, url, body) => {
+            try {
+                const r = await fetch(url, { method: 'POST', headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' }, body });
+                const text = await r.text().catch(() => '');
+                return { label, url, status: r.status, ok: r.ok, bodySnippet: text.slice(0, 200) };
+            } catch (e) { return { label, url, error: e.message }; }
+        };
+        const results = await Promise.all([
+            probe('dci', DCI_LIST_URL, '{}'),
+            probe('dci_typeALL', DCI_LIST_URL, JSON.stringify({ type: 'ALL' })),
+            probe('order_list', `${API_BASE}/order/list`, JSON.stringify({ type: 'ALL' })),
+        ]);
+        return res.status(200).json({ debug: true, results });
+    }
+
     try {
         const r = await fetch(DCI_LIST_URL, {
             method: 'POST',
@@ -32,7 +52,8 @@ export default async function handler(req, res) {
             body: '{}',
         });
         if (!r.ok) {
-            return res.status(502).json({ success: false, error: `DCI API ${r.status}` });
+            const text = await r.text().catch(() => '');
+            return res.status(502).json({ success: false, error: `DCI API ${r.status}`, upstream: text.slice(0, 300) });
         }
         const d = await r.json();
         const rows = Array.isArray(d?.rows) ? d.rows : [];
