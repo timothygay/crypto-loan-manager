@@ -1,77 +1,44 @@
-// CPB DCI PRODUCT PROXY — Vercel Serverless Function
+// CPB DCI APR PROXY — Vercel Serverless Function
 // Route: /api/dci-penguin
 //
-// Fetches Penguin Securities' own DCI product list server-side so that:
-//   1. the x-api-key is never shipped to the browser, and
-//   2. we sidestep any CORS restriction on prod-api.penguinsecurities.sg.
+// Penguin's DCI API (prod-api.penguinsecurities.sg) IP-allowlists callers, and
+// THIS app's Vercel egress IP is NOT on the list (403 Forbidden). The treasury
+// monitor's egress IP *is* allowlisted, so we relay through its read-only endpoint
+// /api/cron/dci-list (guarded by the shared CRON_SECRET). Nothing is stored on
+// either side — every call fetches live, so the ladder's Refresh button always
+// gets current rates.
 //
-// Returns a slim lookup keyed by Deribit-style instrument_name (identical to the
-// ladder's names, e.g. "BTC-14AUG26-63000-C"):
-//   { success, apr: { <instrument>: { adj, raw } }, count, fetchedAt }
-// where `adj` = calc_adj_apy (skew-adjusted, Penguin's own 30% skew) and
-//       `raw` = calc_apy (un-skewed). Both are decimals (1.7995 = 179.95% p.a.).
+// Returns { success, apr: { <instrument_name>: { adj, raw } }, count, fetchedAt }
+// where adj = calc_adj_apy (skew-adjusted), raw = calc_apy. Both decimals
+// (1.7995 = 179.95% p.a.). apr map keyed by Deribit-style instrument_name.
 //
-// Set DCI_API_KEY in the environment (see .env.local + Vercel project env).
+// Env: MONITOR_API_URL (treasury base URL), MONITOR_RELAY_SECRET (= treasury CRON_SECRET).
 
-const API_BASE  = 'https://prod-api.penguinsecurities.sg/pub/apigw';
-const DCI_LIST_URL = `${API_BASE}/product/dci/list`;
+const MONITOR_URL = process.env.MONITOR_API_URL || "https://penguin-treasury-monitor.vercel.app";
 
 export default async function handler(req, res) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    if (req.method === 'OPTIONS') return res.status(200).end();
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    if (req.method === "OPTIONS") return res.status(200).end();
 
-    const apiKey = process.env.DCI_API_KEY;
-    if (!apiKey) {
-        return res.status(500).json({ success: false, error: 'DCI_API_KEY not configured' });
-    }
-
-    // Diagnostic: ?debug=1 probes both the DCI path (body {}) and treasury's
-    // known-good order/list path (body {type:"ALL"}) from THIS function's IP,
-    // surfacing upstream status + body so we can tell path-restriction vs IP-block.
-    if (req.query && req.query.debug) {
-        const probe = async (label, url, body) => {
-            try {
-                const r = await fetch(url, { method: 'POST', headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' }, body });
-                const text = await r.text().catch(() => '');
-                return { label, url, status: r.status, ok: r.ok, bodySnippet: text.slice(0, 200) };
-            } catch (e) { return { label, url, error: e.message }; }
-        };
-        const results = await Promise.all([
-            probe('dci', DCI_LIST_URL, '{}'),
-            probe('dci_typeALL', DCI_LIST_URL, JSON.stringify({ type: 'ALL' })),
-            probe('order_list', `${API_BASE}/order/list`, JSON.stringify({ type: 'ALL' })),
-        ]);
-        return res.status(200).json({ debug: true, results });
+    const secret = process.env.MONITOR_RELAY_SECRET;
+    if (!secret) {
+        return res.status(500).json({ success: false, error: "MONITOR_RELAY_SECRET not configured" });
     }
 
     try {
-        const r = await fetch(DCI_LIST_URL, {
-            method: 'POST',
-            headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
-            body: '{}',
+        const r = await fetch(`${MONITOR_URL}/api/cron/dci-list`, {
+            headers: { Authorization: `Bearer ${secret}` },
         });
-        if (!r.ok) {
-            const text = await r.text().catch(() => '');
-            return res.status(502).json({ success: false, error: `DCI API ${r.status}`, upstream: text.slice(0, 300) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) {
+            return res.status(502).json({ success: false, error: `relay ${r.status}: ${d.error || "unknown"}` });
         }
-        const d = await r.json();
-        const rows = Array.isArray(d?.rows) ? d.rows : [];
-
-        const apr = {};
-        for (const p of rows) {
-            if (!p || !p.instrument_name) continue;
-            apr[p.instrument_name] = {
-                adj: (typeof p.calc_adj_apy === 'number') ? p.calc_adj_apy : null,
-                raw: (typeof p.calc_apy === 'number') ? p.calc_apy : null,
-            };
-        }
-
-        // Cache at the edge for 60s (SWR 120s) — the ladder refreshes every 5 min.
-        res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
-        return res.status(200).json({ success: true, apr, count: rows.length, fetchedAt: new Date().toISOString() });
+        // Always fresh — the ladder's Refresh button should reflect live rates.
+        res.setHeader("Cache-Control", "no-store");
+        return res.status(200).json({ success: true, apr: d.apr || {}, count: d.count ?? 0, fetchedAt: d.fetchedAt });
     } catch (err) {
-        console.error('DCI penguin proxy error:', err);
+        console.error("DCI penguin relay error:", err);
         return res.status(500).json({ success: false, error: err.message });
     }
 }

@@ -6437,7 +6437,7 @@ const fetchDeribitOptionChain = async (currency) => {
 // still renders (Penguin APR cells fall back to "—").
 const fetchPenguinDciApr = async () => {
     try {
-        const res = await fetch('/api/dci-penguin');
+        const res = await fetch('/api/dci-penguin', { cache: 'no-store' });
         if (!res.ok) return {};
         const d = await res.json();
         return (d && d.success && d.apr) ? d.apr : {};
