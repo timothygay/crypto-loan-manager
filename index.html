@@ -7984,7 +7984,7 @@ const MarketFlowModule = () => {
             const p = parseRow(r);
             const tickers = p.underlyings.map(u=>u.ticker).filter(Boolean).join(',');
             const months = p.tenorMonths || 6;
-            const res = await fetch(`/api/equity-history?tickers=${encodeURIComponent(tickers)}&months=${months}`, {credentials:'same-origin'});
+            const res = await fetch(`/api/dci-penguin?kind=equity&tickers=${encodeURIComponent(tickers)}&months=${months}`, {credentials:'same-origin'});
             const d = await res.json().catch(()=>({}));
             const html = buildTermSheetHTML(r, (d && d.series) || [], TS_CSS);
             const url = URL.createObjectURL(new Blob([html], {type:'text/html'}));
