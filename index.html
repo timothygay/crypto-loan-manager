@@ -7578,6 +7578,344 @@ const Settings = () => {
 // local scraper/poller watches (a Vercel-hosted page can't launch a local process),
 // then polls until the scrape completes.
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// FCN TERM-SHEET GENERATOR (Market Flow) — builds a self-contained, printable
+// pitch sheet from a Highlight-Transactions row + actual price history.
+// Server twin of the parser lives in lib/fcn-parse.js; keep in sync.
+// ═══════════════════════════════════════════════════════════════════════════════
+const TS_CSS=`
+  :root {
+    color-scheme: light;
+    --page:           #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;   /* NVDA */
+    --series-2:       #eb6834;   /* MSFT */
+    --series-3:       #1baf7a;   /* AAPL */
+    --fwd-wash:       rgba(42,120,214,0.05);
+    --status-good:    #0ca30c;
+    --status-critical:#d03b3b;
+    --critical-wash:  rgba(208,59,59,0.07);
+    --good-text:      #006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --series-3:       #199e70;
+      --fwd-wash:       rgba(57,135,229,0.08);
+      --status-good:    #0ca30c;
+      --status-critical:#d03b3b;
+      --critical-wash:  rgba(208,59,59,0.12);
+      --good-text:      #0ca30c;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page); color: var(--text-primary);
+    font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .sheet { max-width: 1080px; margin: 0 auto; padding: 32px 24px 56px; }
+
+  .masthead {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 2px solid var(--text-primary); padding-bottom: 14px; margin-bottom: 20px;
+  }
+  .masthead .bank { font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
+  .masthead .bank span { font-weight: 400; color: var(--text-secondary); }
+  .masthead .doc-tag { text-align: right; font-size: 11.5px; color: var(--text-muted); }
+  .masthead .doc-tag .kind {
+    display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 2px 10px; margin-bottom: 4px; background: var(--surface-1);
+  }
+  h1 { font-size: 21px; font-weight: 700; line-height: 1.3; margin-bottom: 4px; }
+  .subtitle { color: var(--text-secondary); font-size: 13px; margin-bottom: 18px; }
+
+  .headline-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 22px; }
+  .stat { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .stat .lbl { font-size: 11px; color: var(--text-muted); margin-bottom: 1px; }
+  .stat .val { font-size: 18px; font-weight: 600; }
+  .stat .sub { font-size: 11px; color: var(--text-secondary); }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  section { margin-bottom: 24px; }
+  h2 {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--text-secondary); margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--grid);
+  }
+
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+  .chart-title { font-size: 15.5px; font-weight: 700; }
+  .chart-sub { font-size: 12px; color: var(--text-muted); }
+  .legend { display: flex; gap: 16px; font-size: 12.5px; color: var(--text-secondary); margin: 8px 0 4px; flex-wrap: wrap; align-items: center; }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .perf { font-variant-numeric: tabular-nums; color: var(--text-muted); }
+  .key-line { display: inline-block; width: 20px; height: 0; border-top: 2.5px solid; border-radius: 2px; }
+  .diamond { display: inline-block; width: 9px; height: 9px; background: var(--surface-1); border: 2px solid var(--text-secondary); transform: rotate(45deg); }
+  .coin { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--surface-1); border: 2px solid var(--good-text); }
+
+  .chart-wrap { position: relative; }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .halo { stroke: var(--surface-1); stroke-width: 3.5px; paint-order: stroke; stroke-linejoin: round; }
+
+  .tt {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.14);
+    padding: 8px 11px; font-size: 12px; min-width: 196px; z-index: 5;
+  }
+  .tt .tt-x { font-weight: 700; margin-bottom: 3px; }
+  .tt .row { display: flex; justify-content: space-between; gap: 12px; color: var(--text-secondary); }
+  .tt .row b { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .tt .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  .tt .foot { margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+
+  .chart-note { font-size: 11.5px; color: var(--text-muted); margin-top: 10px; line-height: 1.55; }
+  .chart-note b { color: var(--text-secondary); }
+
+  .lv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .lv-table th {
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+    font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--baseline); text-align: right;
+  }
+  .lv-table th:first-child { text-align: left; }
+  .lv-table td { padding: 7px 10px; text-align: right; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--grid); }
+  .lv-table td:first-child { text-align: left; font-weight: 600; }
+  .lv-table tr:last-child td { border-bottom: none; }
+  .lv-table .pct { color: var(--text-muted); font-size: 11.5px; }
+
+  .disclaimer { margin-top: 26px; padding-top: 12px; border-top: 1px solid var(--baseline); font-size: 10.5px; color: var(--text-muted); line-height: 1.55; }
+
+  @media (max-width: 860px) { .headline-strip { grid-template-columns: repeat(2, 1fr); } }
+  @media print { body { background: #fff; } .sheet { padding: 0; } }
+
+  .toolbar{position:fixed;top:16px;right:16px;display:flex;gap:8px;z-index:20;}
+  .toolbar button{font:600 12px system-ui;padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--text-primary);color:var(--page);cursor:pointer;}
+  .toolbar button.ghost{background:var(--surface-1);color:var(--text-secondary);}
+  @media print{.toolbar{display:none!important;}}
+  .unavail{color:var(--status-critical);font-size:12px;margin:6px 0;}
+`;
+// Self-contained FCN term-sheet builder — runs in Node (tests) and the browser (UI).
+// buildTermSheetHTML(row, series) -> full standalone HTML string.
+//   row    = [Type, Underlyings, Strike, Coupon p.a., Tenor, Structure]
+//   series = [{ticker,name,currency,points:[[unixSec,adjClose]...],error?}, ...] (proxy output)
+
+const TS_PAL = ["#2a78d6","#eb6834","#1baf7a","#7c5cff","#d4a017","#c0397a"];
+
+// ---- parser (kept in sync with lib/fcn-parse.js) ----
+function tsNum(s){ const m=String(s==null?'':s).match(/-?[\d.]+/); return m?parseFloat(m[0]):null; }
+function tsTicker(name){
+  const s=String(name==null?'':name).trim(); if(!s) return '';
+  const SUF={HK:'HK',KS:'KS',T:'T',TW:'TW',L:'L',SI:'SI',AX:'AX',SS:'SS',SZ:'SZ',TO:'TO'};
+  const ex=s.match(/^(\S+)\s+([A-Za-z]{1,2})$/);
+  if(ex&&SUF[ex[2].toUpperCase()]) return ex[1]+'.'+SUF[ex[2].toUpperCase()];
+  return s.toUpperCase();
+}
+function tsStruct(str){
+  const t=String(str==null?'':str); const o={raw:t,koLevel:null,koFreq:null,memory:false,kiType:null,kiBarrier:null};
+  const ko=t.match(/KO\s*([\d.]+)\s*%\s*(Daily Memory|Period[\s-]?End|Daily)?/i);
+  if(ko){o.koLevel=parseFloat(ko[1]);const f=(ko[2]||'').trim();o.memory=/memory/i.test(f);o.koFreq=/period/i.test(f)?'Period End':/daily/i.test(f)?'Daily':(f||null);}
+  if(/NONE[\s-]?KI/i.test(t)){o.kiType='NONE';}
+  else{const ki=t.match(/\b(EKI|AKI|KI)\b/i);if(ki)o.kiType=ki[1].toUpperCase();const kb=t.match(/([\d.]+)\s*%\s*KI\s*Barrier/i);if(kb)o.kiBarrier=parseFloat(kb[1]);}
+  return o;
+}
+function parseRow(row){
+  const [type,unds,strike,coupon,tenor,structure]=row;
+  const underlyings=String(unds==null?'':unds).split(',').map(s=>s.trim()).filter(Boolean).map(u=>({raw:u,ticker:tsTicker(u)}));
+  const strikePct=tsNum(strike), couponPaPct=tsNum(coupon);
+  const tm=String(tenor==null?'':tenor).match(/(\d+)\s*m/i); const tenorMonths=tm?parseInt(tm[1],10):null;
+  return {type:type||'FCN',underlyings,strikePct,couponPaPct,tenorMonths,structure:tsStruct(structure)};
+}
+
+// ---- date helpers ----
+function addMonths(d,m){const x=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+m,1));const day=Math.min(d.getUTCDate(),new Date(Date.UTC(x.getUTCFullYear(),x.getUTCMonth()+1,0)).getUTCDate());return new Date(Date.UTC(x.getUTCFullYear(),x.getUTCMonth(),day));}
+function fmtD(d){return d.getUTCDate()+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function buildTermSheetHTML(row, series, CSS){
+  const p=parseRow(row);
+  const TM=p.tenorMonths||6, STRIKE=p.strikePct, KO=p.structure.koLevel, CPA=p.couponPaPct;
+  const FREQ=p.structure.koFreq||'Daily', MEM=p.structure.memory;
+  const hasKI=p.structure.kiType && p.structure.kiType!=='NONE' && p.structure.kiBarrier!=null;
+  const KIB=hasKI?p.structure.kiBarrier:null, KITYPE=p.structure.kiType;
+  const TOTC=(CPA!=null)?CPA*TM/12:null;
+  const BE=(STRIKE!=null&&TOTC!=null)?STRIKE*(1-TOTC/100):null;
+
+  // attach series to underlyings (by ticker), split available/unavailable
+  const byTk={}; (series||[]).forEach(s=>{byTk[s.ticker]=s;});
+  const unds=p.underlyings.map((u,i)=>({...u,color:TS_PAL[i%TS_PAL.length],data:byTk[u.ticker]}));
+  const avail=unds.filter(u=>u.data&&Array.isArray(u.data.points)&&u.data.points.length>1);
+
+  let chartHTML='', trade=new Date(), obsLast=addMonths(new Date(),TM), N=0, dates=[], reb=[], fixMap={};
+  if(avail.length){
+    // align on common timestamps
+    const maps=avail.map(u=>{const m={};u.data.points.forEach(([t,v])=>m[t]=v);return m;});
+    let common=Object.keys(maps[0]).map(Number);
+    for(let k=1;k<maps.length;k++){const set=new Set(Object.keys(maps[k]).map(Number));common=common.filter(t=>set.has(t));}
+    common.sort((a,b)=>a-b);
+    const last=new Date(common[common.length-1]*1000); const cutoff=addMonths(last,-TM).getTime()/1000;
+    common=common.filter(t=>t>=cutoff);
+    dates=common.map(t=>new Date(t*1000)); N=common.length;
+    reb=maps.map(m=>common.map(t=>m[t]/m[common[common.length-1]]*100));
+    avail.forEach((u,i)=>{fixMap[u.ticker]=u.data.points[u.data.points.length-1][1];});
+    trade=dates[N-1];
+  } else { trade=new Date(); }
+  const obs=[]; for(let k=1;k<=TM;k++) obs.push(addMonths(trade,k));
+
+  // geometry
+  const HX0=64,HX1=472,FX1=880,Y0=470,Y1=40;
+  let allv=[100]; if(STRIKE!=null)allv.push(STRIKE); if(KO!=null)allv.push(KO); if(BE!=null)allv.push(BE); if(KIB!=null)allv.push(KIB);
+  reb.forEach(s=>s.forEach(v=>allv.push(v)));
+  let ylo=Math.floor(Math.min(...allv)/10)*10, yhi=Math.ceil(Math.max(...allv)/10)*10;
+  if(yhi-ylo<40) yhi=ylo+40;
+  const py=v=>Y0-(v-ylo)/(yhi-ylo)*(Y0-Y1);
+  const hx=i=>HX0+i/(Math.max(1,N-1))*(HX1-HX0);
+  const pathd=vals=>'M '+vals.map((v,i)=>hx(i).toFixed(1)+' '+py(v).toFixed(1)).join(' L ');
+
+  // y grid/labels
+  let yl=[]; for(let v=yhi;v>=ylo-0.01;v-=10) yl.push([py(v),v.toFixed(0)+'%']);
+  // history month ticks (thinned)
+  let mt=[0]; for(let i=1;i<N;i++) if(dates[i].getUTCMonth()!==dates[i-1].getUTCMonth()) mt.push(i);
+  const stepH=Math.max(1,Math.ceil(mt.length/7)); mt=mt.filter((_,j)=>j%stepH===0);
+  const fwd_x=obs.map((o,k)=>HX1+(k+1)/TM*(FX1-HX1));
+  const stepF=Math.max(1,Math.ceil(TM/6)); const fwdShow=new Set(); for(let k=0;k<TM;k+=stepF)fwdShow.add(k); fwdShow.add(TM-1);
+
+  const S=[]; // svg parts
+  S.push(`<div class="chart-wrap" id="chartWrap"><svg id="ptChart" viewBox="0 0 1040 560" role="img">`);
+  S.push(`<rect x="472" y="40" width="408" height="${(py(STRIKE)-40).toFixed(1)}" fill="var(--fwd-wash)"/>`);
+  S.push(`<rect x="472" y="${py(STRIKE).toFixed(1)}" width="408" height="${(470-py(STRIKE)).toFixed(1)}" fill="var(--critical-wash)"/>`);
+  S.push(`<g stroke="var(--grid)" stroke-width="1">`); yl.forEach(([yy])=>S.push(`<line x1="64" y1="${yy.toFixed(1)}" x2="880" y2="${yy.toFixed(1)}"/>`)); S.push(`</g>`);
+  S.push(`<line x1="64" y1="${py(100).toFixed(1)}" x2="472" y2="${py(100).toFixed(1)}" stroke="var(--grid)" stroke-width="1"/>`);
+  S.push(`<g fill="var(--text-muted)" font-size="11" text-anchor="end">`); yl.forEach(([yy,lbl])=>S.push(`<text x="56" y="${(yy+4).toFixed(1)}">${lbl}</text>`)); S.push(`</g>`);
+  S.push(`<text x="20" y="255" fill="var(--text-muted)" font-size="11.5" text-anchor="middle" transform="rotate(-90 20 255)">Share price (% of initial fixing)</text>`);
+  S.push(`<g fill="var(--text-muted)" font-size="11" text-anchor="middle">`);
+  mt.forEach(i=>S.push(`<text x="${hx(i).toFixed(1)}" y="488">${fmtD(dates[i])}</text>`));
+  S.push(`<text x="472" y="488" font-weight="700" fill="var(--text-secondary)">${fmtD(trade)}</text>`);
+  fwd_x.forEach((xx,k)=>{ if(!fwdShow.has(k))return; const fw=k===TM-1?' font-weight="700" fill="var(--text-secondary)"':''; S.push(`<text x="${xx.toFixed(1)}" y="488"${fw}>${fmtD(obs[k])}</text>`);});
+  S.push(`</g>`);
+  S.push(`<text x="68" y="30" font-size="11" font-weight="700" letter-spacing="0.05em" fill="var(--text-muted)">${TM}-MONTH PRICE HISTORY (ACTUAL)</text>`);
+  S.push(`<text x="478" y="30" font-size="11" font-weight="700" letter-spacing="0.05em" fill="var(--text-muted)">PRODUCT TERM — ${TM} MONTHS</text>`);
+  S.push(`<line x1="472" y1="40" x2="472" y2="470" stroke="var(--baseline)" stroke-width="1.5"/>`);
+  S.push(`<line x1="880" y1="40" x2="880" y2="470" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="4 4"/>`);
+  // level lines
+  if(KO!=null) S.push(`<line x1="472" y1="${py(KO).toFixed(1)}" x2="880" y2="${py(KO).toFixed(1)}" stroke="var(--text-secondary)" stroke-width="1.75" stroke-dasharray="7 4"/>`);
+  S.push(`<line x1="472" y1="${py(100).toFixed(1)}" x2="880" y2="${py(100).toFixed(1)}" stroke="var(--grid)" stroke-width="1"/>`);
+  if(STRIKE!=null) S.push(`<line x1="472" y1="${py(STRIKE).toFixed(1)}" x2="880" y2="${py(STRIKE).toFixed(1)}" stroke="var(--text-muted)" stroke-width="1.5" stroke-dasharray="7 4"/>`);
+  if(BE!=null) S.push(`<line x1="472" y1="${py(BE).toFixed(1)}" x2="880" y2="${py(BE).toFixed(1)}" stroke="var(--text-muted)" stroke-width="1.25" stroke-dasharray="2 4"/>`);
+  if(KIB!=null) S.push(`<line x1="472" y1="${py(KIB).toFixed(1)}" x2="880" y2="${py(KIB).toFixed(1)}" stroke="var(--status-critical)" stroke-width="1.75" stroke-dasharray="7 4"/>`);
+  S.push(`<g font-size="11" font-weight="700">`);
+  if(KO!=null){S.push(`<text x="886" y="${(py(KO)-4).toFixed(1)}" fill="var(--text-secondary)">Knock-out ${KO}%</text>`);S.push(`<text x="886" y="${(py(KO)+9).toFixed(1)}" fill="var(--text-muted)" font-weight="400" font-size="10">observed ${FREQ.toLowerCase()}</text>`);}
+  S.push(`<text x="886" y="${(py(100)+4).toFixed(1)}" fill="var(--text-muted)" font-weight="400" font-size="10">initial 100%</text>`);
+  if(STRIKE!=null) S.push(`<text x="886" y="${(py(STRIKE)-3).toFixed(1)}" fill="var(--text-secondary)">Strike ${STRIKE}%</text>`);
+  if(BE!=null) S.push(`<text x="886" y="${(py(BE)+11).toFixed(1)}" fill="var(--text-muted)" font-size="10.5">Breakeven ${BE.toFixed(1)}%¹</text>`);
+  if(KIB!=null) S.push(`<text x="886" y="${(py(KIB)+(BE!=null&&Math.abs(py(KIB)-py(BE))<12?22:-4)).toFixed(1)}" fill="var(--status-critical)">Knock-in ${KIB}% (${KITYPE})</text>`);
+  S.push(`</g>`);
+  // paths
+  S.push(`<g fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">`);
+  avail.forEach((u,i)=>S.push(`<path stroke="${u.color}" d="${pathd(reb[i])}"/>`)); S.push(`</g>`);
+  S.push(`<circle cx="472" cy="${py(100).toFixed(1)}" r="5" fill="var(--text-primary)" stroke="var(--surface-1)" stroke-width="2"/>`);
+  S.push(`<text x="464" y="${(py(100)-16).toFixed(1)}" font-size="11" font-weight="700" text-anchor="end" class="halo" fill="var(--text-primary)">Initial fixing = 100%</text>`);
+  if(FREQ.toLowerCase().indexOf('period')===0 && KO!=null) fwd_x.forEach(xx=>S.push(`<rect x="${(xx-5.5).toFixed(1)}" y="${(py(KO)-5.5).toFixed(1)}" width="11" height="11" transform="rotate(45 ${xx.toFixed(1)} ${py(KO).toFixed(1)})" fill="var(--surface-1)" stroke="var(--text-secondary)" stroke-width="2"/>`));
+  // annotation bands (fixed, never touch axis)
+  S.push(`<g font-size="11" class="halo" fill="var(--text-secondary)">`);
+  S.push(`<text x="496" y="62" font-weight="700">Knock-out (early redemption):</text>`);
+  S.push(`<text x="496" y="77">worst-of closes ≥ ${KO}% on a ${FREQ.toLowerCase()} observation →</text>`);
+  S.push(`<text x="496" y="92">note redeems early at 100% + coupon then due.</text></g>`);
+  S.push(`<g font-size="11" class="halo" fill="var(--text-secondary)">`);
+  S.push(`<text x="496" y="300" font-weight="700">At final valuation (if never knocked out):</text>`);
+  S.push(`<text x="496" y="315">worst-of ≥ ${STRIKE}% → 100% cash + coupons (${TOTC!=null?TOTC.toFixed(1):'?'}%).</text></g>`);
+  S.push(`<g font-size="11" class="halo" fill="var(--status-critical)">`);
+  if(hasKI){
+    S.push(`<text x="496" y="335" font-weight="700">worst-of &lt; ${STRIKE}% AND ${KITYPE} knock-in (${KIB}%) breached →</text>`);
+    S.push(`<text x="496" y="350">shares of the worst performer delivered at the ${STRIKE}% strike.</text></g>`);
+  } else {
+    S.push(`<text x="496" y="335" font-weight="700">worst-of &lt; ${STRIKE}% → shares of the worst performer</text>`);
+    S.push(`<text x="496" y="350">delivered at the ${STRIKE}% strike (no KI barrier).</text></g>`);
+  }
+  S.push(`<line id="xhair" x1="0" y1="40" x2="0" y2="470" stroke="var(--baseline)" stroke-width="1" style="display:none"/>`);
+  avail.forEach((u,k)=>S.push(`<circle id="h${k}" r="4" fill="${u.color}" stroke="var(--surface-1)" stroke-width="2" style="display:none"/>`));
+  S.push(`<rect id="hitArea" x="64" y="40" width="816" height="430" fill="transparent"/></svg><div class="tt" id="tooltip"></div></div>`);
+  chartHTML=S.join('');
+
+  const legend=unds.map(u=>{
+    if(!u.data||u.data.error||!fixMap[u.ticker]) return `<span class="item"><span class="key-line" style="border-color:${u.color}"></span> ${esc(u.raw)} <span class="perf">price n/a</span></span>`;
+    const s=avail.indexOf(u); const ch=(reb[s]&&reb[s].length)?(reb[s][N-1]/reb[s][0]-1)*100:0;
+    return `<span class="item"><span class="key-line" style="border-color:${u.color}"></span> ${esc(u.data.name||u.raw)} <span class="perf">$${fixMap[u.ticker].toFixed(2)} · ${ch>=0?'+':''}${ch.toFixed(1)}% ${TM}M</span></span>`;
+  }).join('');
+
+  const levelsRows=unds.map(u=>{
+    const fx=fixMap[u.ticker];
+    const c=v=>fx!=null&&v!=null?'$'+(fx*v/100).toFixed(2):'n/a';
+    return `<tr><td>${esc(u.data&&u.data.name?u.data.name:u.raw)} (${esc(u.ticker)})</td><td>${fx!=null?'$'+fx.toFixed(2):'n/a'}</td><td>${c(KO)}</td><td>${c(STRIKE)}</td><td>${c(BE)}</td>${hasKI?`<td>${c(KIB)}</td>`:''}</tr>`;
+  }).join('');
+
+  const unavailNote = avail.length<unds.length ? `<div class="unavail">Price history unavailable for: ${unds.filter(u=>!fixMap[u.ticker]).map(u=>esc(u.raw)).join(', ')} — levels shown in % only.</div>`:'';
+  const memnote = MEM? ` Coupon shown with a <b>memory</b> feature — any missed conditional coupon is remembered and paid once the coupon condition is next met.`:'';
+
+  // hover data
+  const hoverJS = avail.length? `(function(){
+var wrap=document.getElementById('chartWrap'),svg=document.getElementById('ptChart'),hit=document.getElementById('hitArea'),xhair=document.getElementById('xhair'),tt=document.getElementById('tooltip');
+var dots=[${avail.map((_,k)=>`document.getElementById('h${k}')`).join(',')}];
+var HX0=${HX0},HX1=${HX1},FX1=${FX1},Y0=${Y0},Y1=${Y1},VLO=${ylo},VHI=${yhi};function py(v){return Y0-(v-VLO)/(VHI-VLO)*(Y0-Y1);}
+var NAMES=${JSON.stringify(avail.map(u=>u.data.name||u.raw))},COLORS=${JSON.stringify(avail.map(u=>u.color))},FIX=${JSON.stringify(avail.map(u=>+fixMap[u.ticker].toFixed(2)))};
+var S=${JSON.stringify(reb.map(s=>s.map(v=>+v.toFixed(2))))},N=S[0].length,DATES=${JSON.stringify(dates.map(d=>fmtD(d)+' '+d.getUTCFullYear()))};
+var KO=${KO},STRIKE=${STRIKE},BE=${BE!=null?BE.toFixed(1):'null'};
+function mv(e){var p=new DOMPoint(e.clientX,e.clientY).matrixTransform(svg.getScreenCTM().inverse());var x=Math.max(HX0,Math.min(FX1,p.x));xhair.style.display='';var top=py(100);
+if(x<=HX1){var i=Math.round((x-HX0)/(HX1-HX0)*(N-1)),cx=HX0+i/(N-1)*(HX1-HX0);xhair.setAttribute('x1',cx);xhair.setAttribute('x2',cx);var h="<div class='tt-x'>"+DATES[i]+"</div>";top=470;
+for(var k=0;k<S.length;k++){var v=S[k][i],yv=py(v);if(yv<top)top=yv;dots[k].style.display='';dots[k].setAttribute('cx',cx);dots[k].setAttribute('cy',yv);h+="<div class='row'><span><span class='dot' style='background:"+COLORS[k]+"'></span>"+NAMES[k]+"</span><b>"+v.toFixed(1)+"% · $"+(v/100*FIX[k]).toFixed(2)+"</b></div>";}
+var wo=Math.min.apply(null,S.map(function(s){return s[i];}));h+="<div class='foot'>Worst-of: "+wo.toFixed(1)+"% · KO if ≥ "+KO+"%</div>";tt.innerHTML=h;}
+else{dots.forEach(function(d){d.style.display='none';});xhair.setAttribute('x1',x);xhair.setAttribute('x2',x);tt.innerHTML="<div class='tt-x'>Product term</div><div class='row'><span>Knock-out</span><b>"+KO+"%</b></div><div class='row'><span>Strike</span><b>"+STRIKE+"%</b></div><div class='row'><span>Breakeven</span><b>"+BE+"%</b></div>";top=py(VHI)+60;}
+var wr=wrap.getBoundingClientRect(),sc=wr.width/1040;var l=x*sc+14;if(l+215>wr.width)l=x*sc-226;tt.style.display='block';tt.style.left=l+'px';tt.style.top=Math.max(0,top*sc-30)+'px';}
+hit.addEventListener('mousemove',mv);hit.addEventListener('mouseleave',function(){tt.style.display='none';xhair.style.display='none';dots.forEach(function(d){d.style.display='none';});});
+})();`:'';
+
+  const undNames = unds.map(u=>esc(u.data&&u.data.name?u.data.name:u.raw)).join(' &amp; ');
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${TM}-Month FCN — ${undNames}</title><style>${CSS}</style></head><body>
+<div class="toolbar"><button onclick="window.print()">⬇ Download PDF</button><button class="ghost" onclick="window.close()">Close</button></div>
+<div class="sheet">
+<div class="masthead"><div class="bank">Penguin Securities <span>| Structured Solutions</span></div><div class="doc-tag"><span class="kind">Indicative — For Discussion Only</span><br>${fmtD(trade)} ${trade.getUTCFullYear()}</div></div>
+<h1>${TM}-Month USD Fixed Coupon Note on the Worst-Of of ${undNames}</h1>
+<div class="subtitle">Trade date ${fmtD(trade)} ${trade.getUTCFullYear()} · Final valuation ${fmtD(obs[TM-1])} ${obs[TM-1].getUTCFullYear()} · ${CPA}% p.a. coupon${MEM?' (memory)':''} · ${STRIKE}% strike · ${KO}% knock-out (${FREQ.toLowerCase()}) · ${hasKI?`${KITYPE} knock-in ${KIB}%`:'no knock-in barrier'} — illustrative, not an offer.</div>
+<div class="headline-strip">
+<div class="stat"><div class="lbl">Coupon${MEM?' (memory)':''}</div><div class="val">${CPA}% p.a.</div><div class="sub">≈${TOTC!=null?TOTC.toFixed(2):'?'}% total over ${TM}m</div></div>
+<div class="stat"><div class="lbl">Knock-Out (KO)</div><div class="val">${KO}%</div><div class="sub">observed ${FREQ.toLowerCase()}</div></div>
+<div class="stat"><div class="lbl">Strike</div><div class="val">${STRIKE}%</div><div class="sub">conversion level</div></div>
+<div class="stat"><div class="lbl">Breakeven¹</div><div class="val">${BE!=null?BE.toFixed(1):'?'}%</div><div class="sub">strike × (1 − coupons)</div></div>
+<div class="stat"><div class="lbl">Knock-in</div><div class="val">${hasKI?KIB+'%':'None'}</div><div class="sub">${hasKI?KITYPE:'NONE-KI'}</div></div>
+</div>
+<section><h2>Underlying Prices &amp; Product Levels — Past ${TM} Months and Product Term</h2><div class="card">
+<div class="chart-head"><div><div class="chart-title">Share price vs. time, rebased to initial fixing = 100%</div><div class="chart-sub">Left of trade date: actual ${TM}-month history (Yahoo Finance adjusted closes) · right: the note term with KO/strike levels · hover for detail</div></div></div>
+<div class="legend">${legend}</div>${unavailNote}
+${avail.length?chartHTML:'<div class="unavail" style="padding:30px 0;text-align:center;">No price history available for these underlyings — showing product levels only.</div>'}
+<div class="chart-note">¹ <b>Breakeven ${BE!=null?BE.toFixed(1):'?'}%</b> = strike ${STRIKE}% × (1 − ${TOTC!=null?TOTC.toFixed(1):'?'}% coupons). Price history is <b>actual</b> Yahoo Finance ${TM}-month adjusted daily closes, rebased so each stock's latest close = initial fixing = 100%.${memnote} All product mechanics are indicative — confirm KO observation schedule &amp; settlement with the desk.</div>
+</div></section>
+<section><h2>Product Levels in Share-Price Terms</h2><div class="card"><table class="lv-table"><thead><tr><th>Underlying</th><th>Initial fixing (100%)</th><th>Knock-out (${KO}%)</th><th>Strike (${STRIKE}%)</th><th>Breakeven (${BE!=null?BE.toFixed(1):'?'}%)</th>${hasKI?`<th>Knock-in (${KIB}%)</th>`:''}</tr></thead><tbody>${levelsRows}</tbody></table>
+<div class="chart-note" style="margin-top:8px;">All conditions reference the <b>worst-performing</b> underlying. ${hasKI?`This note has a <b>${KITYPE} knock-in at ${KIB}%</b> — downside conversion applies only if that barrier is breached.`:'This structure has <b>no knock-in barrier (NONE-KI)</b> — at maturity the payoff converts to worst-of shares at the strike whenever the worst-of finishes below strike.'}</div></div></section>
+<div class="disclaimer"><b>Important notice.</b> Mock-up for illustration and investor education only. Not an offer or recommendation. Terms are indicative; actual terms are set at trade date in the binding documentation. Structured notes are complex; investors may lose substantially all of their investment and bear issuer credit risk. Accredited/professional investors only.</div>
+</div>
+<script>${hoverJS}<\/script>
+</body></html>`;
+}
+
+
 const GOLDHORSE_API = '/api/sheet/goldhorse';
 const MarketFlowModule = () => {
     const [topTraded, setTopTraded]   = useState([]);
@@ -7637,6 +7975,26 @@ const MarketFlowModule = () => {
         return Math.floor(s/86400)+'d ago';
     };
 
+    // Generate an indicative term sheet for a Highlight-Transactions row: parse it,
+    // pull actual price history for its underlyings, build the self-contained sheet,
+    // open it in a new tab. Lazy — nothing runs until a salesperson clicks the icon.
+    const openTermSheet = async (r) => {
+        const w = window.open('about:blank', '_blank');
+        try {
+            const p = parseRow(r);
+            const tickers = p.underlyings.map(u=>u.ticker).filter(Boolean).join(',');
+            const months = p.tenorMonths || 6;
+            const res = await fetch(`/api/equity-history?tickers=${encodeURIComponent(tickers)}&months=${months}`, {credentials:'same-origin'});
+            const d = await res.json().catch(()=>({}));
+            const html = buildTermSheetHTML(r, (d && d.series) || [], TS_CSS);
+            const url = URL.createObjectURL(new Blob([html], {type:'text/html'}));
+            if (w) w.location.href = url; else window.open(url, '_blank');
+        } catch (e) {
+            if (w) w.document.body.innerHTML = '<p style="font:14px system-ui;padding:24px;color:#c0392b">Term sheet error: '+e.message+'</p>';
+            else alert('Term sheet error: '+e.message);
+        }
+    };
+
     return (
         <div className="space-y-6">
             <div className="flex items-center gap-3 flex-wrap">
@@ -7665,9 +8023,9 @@ const MarketFlowModule = () => {
                 <p className="text-sm font-semibold mb-3">Highlight Transactions — last 72h</p>
                 {highlights.length===0?<p className="text-sm text-slate-500">No data yet.</p>:(
                 <div className="overflow-x-auto"><table className="w-full text-sm">
-                    <thead><tr className="text-slate-400 text-left border-b border-slate-800"><th className="py-1.5 pr-3">Type</th><th className="py-1.5 pr-3">Underlyings</th><th className="py-1.5 pr-3 text-right">Strike</th><th className="py-1.5 pr-3 text-right">Coupon p.a.</th><th className="py-1.5 pr-3">Tenor</th><th className="py-1.5">Structure</th></tr></thead>
+                    <thead><tr className="text-slate-400 text-left border-b border-slate-800"><th className="py-1.5 pr-3">Type</th><th className="py-1.5 pr-3">Underlyings</th><th className="py-1.5 pr-3 text-right">Strike</th><th className="py-1.5 pr-3 text-right">Coupon p.a.</th><th className="py-1.5 pr-3">Tenor</th><th className="py-1.5">Structure</th><th className="py-1.5 pr-3 text-center">TS</th></tr></thead>
                     <tbody>{highlights.map((r,i)=>(
-                        <tr key={i} className="border-b border-slate-800/50 table-row-hover"><td className="py-1.5 pr-3 font-semibold">{r[0]}</td><td className="py-1.5 pr-3 mono text-slate-300">{r[1]}</td><td className="py-1.5 pr-3 text-right mono">{r[2]}</td><td className="py-1.5 pr-3 text-right mono font-semibold">{r[3]}</td><td className="py-1.5 pr-3">{r[4]}</td><td className="py-1.5 text-slate-400 text-xs">{r[5]}</td></tr>
+                        <tr key={i} className="border-b border-slate-800/50 table-row-hover"><td className="py-1.5 pr-3 font-semibold">{r[0]}</td><td className="py-1.5 pr-3 mono text-slate-300">{r[1]}</td><td className="py-1.5 pr-3 text-right mono">{r[2]}</td><td className="py-1.5 pr-3 text-right mono font-semibold">{r[3]}</td><td className="py-1.5 pr-3">{r[4]}</td><td className="py-1.5 text-slate-400 text-xs">{r[5]}</td><td className="py-1.5 pr-3 text-center"><button onClick={()=>openTermSheet(r)} title="Generate indicative term sheet with price history" className="btn-secondary px-2 py-1 rounded text-xs">📄 TS</button></td></tr>
                     ))}</tbody>
                 </table></div>
                 )}
