@@ -6882,8 +6882,20 @@ const DCIModule = ({deribitPrices={}, bybitPrices={}}) => {
         setLoading(true); setError('');
         try {
             const url = config.scriptUrl + '?action=read&sheetName=' + encodeURIComponent(DCI_SHEET_NAME);
-            const res  = await fetch(url);
-            const data = await res.json();
+            // Google Apps Script's content host intermittently serves an HTML interstitial
+            // (<!DOCTYPE …>) instead of JSON → the "Unexpected token '<'" error. Retry a
+            // few times with backoff; only a clean JSON payload counts as done.
+            let data = null, lastErr = '';
+            for (let attempt = 0; attempt < 4; attempt++) {
+                try {
+                    const res  = await fetch(url, {cache:'no-store'});
+                    const text = await res.text();
+                    try { data = JSON.parse(text); } catch { data = null; lastErr = 'non-JSON response (HTTP '+res.status+')'; }
+                    if (data) break;
+                } catch(e) { lastErr = e.message; }
+                await new Promise(r => setTimeout(r, 1500*(attempt+1)));
+            }
+            if (!data) throw new Error('DCI backend returned no JSON after retries — Apps Script may be rate-limiting, or the configured URL is stale. Try again shortly; if it persists, re-check the Apps Script URL in ⚙ Config. ('+lastErr+')');
             if (!data.success) throw new Error(data.error || 'Failed to read DCI data');
             const [hdrs, ...rows] = data.values;
             const idx = k => hdrs.indexOf(k);
