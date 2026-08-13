@@ -642,9 +642,11 @@ const CPBreakdown = ({cpName, cpLoans, prices, onClose}) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOAN TRADING DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════════
-const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
+const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], onRecordPayment}) => {
     const [lastRefresh, setLastRefresh] = React.useState(new Date());
     const [showInterestModal, setShowInterestModal] = React.useState(null); // 'prev' | 'curr'
+    const [paidInputs, setPaidInputs] = React.useState({}); // {loanId: editable Interest-Paid value} for the prior-month Confirm workflow
+    const [confirming, setConfirming] = React.useState(false);
     const [showCPModal, setShowCPModal] = React.useState(null); // counterparty name or null
     const [showMCModal, setShowMCModal] = React.useState(false);
     // MC top-up state: { loanId → {checked, amount} }
@@ -711,6 +713,37 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
 
     const totalPrevInterest = prevInterestRows.reduce((s, r) => s + r.interest, 0);
     const totalCurrInterest = currInterestRows.reduce((s, r) => s + r.interest, 0);
+
+    // ── Prior-month interest-paid Confirm workflow ────────────────────────────
+    // A confirmation is an "Interest Payment" transaction tagged with the prior
+    // month (period). Net > 0 ⇒ confirmed (idempotent). Undo posts a reversal.
+    const prevPeriod = `${prevYear}-${String(prevMonth+1).padStart(2,'0')}`;   // e.g. "2026-07"
+    const confirmedPrev = (loanId) => transactions
+        .filter(t => t.loanId===loanId && t.type==='Interest Payment' && t.period===prevPeriod)
+        .reduce((s,t)=>s+(+t.amount||0), 0);
+    const paidValue = (loan, dflt) => { const v=paidInputs[loan.id]; return (v===undefined||v==='')?dflt:+v; };
+    const confirmPaid = async (loan, amount) => {
+        if (!canWrite() || !onRecordPayment) { alert('Read-only access — you cannot confirm payments.'); return; }
+        if (!(amount>0)) { alert('Enter an amount greater than 0.'); return; }
+        await onRecordPayment(loan.id, 'Interest Payment', amount, {period: prevPeriod});
+    };
+    const undoPaid = async (loan) => {
+        if (!canWrite() || !onRecordPayment) return;
+        const net = confirmedPrev(loan.id);
+        if (!(Math.abs(net)>1e-7)) return;
+        if (!confirm(`Undo confirmed ${prevMonthName} interest for ${loan.id}?\n\nReverses ${loanIsCrypto(loan)?net.toFixed(8)+' '+loan.underlying:'$'+fmt(net,2)} from Paid.`)) return;
+        await onRecordPayment(loan.id, 'Interest Payment', -net, {period: prevPeriod});
+    };
+    const confirmAllPrev = async () => {
+        if (!canWrite() || !onRecordPayment) { alert('Read-only access — you cannot confirm payments.'); return; }
+        const pending = prevInterestRows.filter(r => Math.abs(confirmedPrev(r.loan.id))<=0.005 && paidValue(r.loan,r.interest)>0);
+        if (!pending.length) { alert('Nothing to confirm — all loans already confirmed for '+prevMonthName+'.'); return; }
+        const lines = pending.map(r=>`• ${r.loan.id}: ${loanIsCrypto(r.loan)?paidValue(r.loan,r.interest).toFixed(8)+' '+r.loan.underlying:'$'+fmt(paidValue(r.loan,r.interest),2)}`).join('\n');
+        if (!confirm(`Confirm ${prevMonthName} interest paid for ${pending.length} loan(s)?\n\n${lines}\n\nEach posts an Interest Payment and adds to Paid.`)) return;
+        setConfirming(true);
+        for (const r of pending) { await confirmPaid(r.loan, paidValue(r.loan, r.interest)); }
+        setConfirming(false);
+    };
 
     // ── Collateral breakdown by type ─────────────────────────────────────────
     const collateralTypes = [...new Set(activeLoans.map(l => l.collateralType))].filter(Boolean);
@@ -1008,8 +1041,12 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                     <div className="flex justify-between items-center mb-3">
                         <p className="text-sm font-semibold text-yellow-400">
                             Interest Breakdown — {showInterestModal==='prev'?prevMonthName:currMonthName+' (MTD)'}
+                            {showInterestModal==='prev' && <span className="ml-2 text-xs font-normal text-slate-500">· confirm interest received</span>}
                         </p>
-                        <button onClick={()=>setShowInterestModal(null)} className="text-slate-500 hover:text-slate-300 text-lg">✕</button>
+                        <div className="flex items-center gap-2">
+                            {showInterestModal==='prev' && canWrite() && <button onClick={confirmAllPrev} disabled={confirming} className="px-3 py-1 rounded text-xs bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/50 disabled:opacity-50">{confirming?'Confirming…':'Confirm all'}</button>}
+                            <button onClick={()=>setShowInterestModal(null)} className="text-slate-500 hover:text-slate-300 text-lg">✕</button>
+                        </div>
                     </div>
                     <table className="w-full text-xs">
                         <thead>
@@ -1020,6 +1057,7 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                                 <th className="text-right pb-2">Rate</th>
                                 <th className="text-right pb-2">Days</th>
                                 <th className="text-right pb-2">Interest</th>
+                                {showInterestModal==='prev' && <th className="text-right pb-2">Interest Paid</th>}
                             </tr>
                         </thead>
                         <tbody>
@@ -1041,7 +1079,24 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                                         <td className="py-2 text-right mono text-slate-300">{loanIsCrypto(loan) ? (Math.floor(loan.loanAmount*1e8)/1e8).toFixed(8) : '$'+fmt(loan.loanAmount,0)} {loanIsCrypto(loan)?loan.underlying:''}</td>
                                         <td className="py-2 text-right mono text-slate-300">{loan.interestRate}%</td>
                                         <td className="py-2 text-right mono text-slate-400">{days}d</td>
-                                        <td className="py-2 text-right mono text-yellow-400 font-medium">${fmt(interest,2)}</td>
+                                        <td className="py-2 text-right mono text-yellow-400 font-medium">{loanIsCrypto(loan) ? (Math.floor(interest*1e8)/1e8).toFixed(8)+' '+loan.underlying : '$'+fmt(interest,2)}</td>
+                                        {(() => {
+                                            if (showInterestModal !== 'prev') return null;
+                                            const net = confirmedPrev(loan.id);
+                                            const dflt = loanIsCrypto(loan) ? +(Math.floor(interest*1e8)/1e8).toFixed(8) : +interest.toFixed(2);
+                                            if (net > 0.005) return (
+                                                <td className="py-2 text-right whitespace-nowrap">
+                                                    <span className="mono text-green-400">✓ {loanIsCrypto(loan) ? net.toFixed(8)+' '+loan.underlying : '$'+fmt(net,2)}</span>
+                                                    {canWrite() && <button onClick={()=>undoPaid(loan)} className="ml-2 text-xs text-slate-500 hover:text-red-400 underline">undo</button>}
+                                                </td>
+                                            );
+                                            return (
+                                                <td className="py-2 text-right whitespace-nowrap">
+                                                    <input type="number" value={paidInputs[loan.id]===undefined?dflt:paidInputs[loan.id]} onChange={e=>setPaidInputs(p=>({...p,[loan.id]:e.target.value}))} step={loanIsCrypto(loan)?'0.00000001':'0.01'} className="w-28 px-2 py-1 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-right mono text-slate-200 focus:outline-none focus:border-cyan-500/50"/>
+                                                    {canWrite() && <button onClick={()=>confirmPaid(loan, paidValue(loan,dflt))} disabled={confirming} className="ml-2 px-2 py-1 rounded text-xs bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/50 disabled:opacity-50">Confirm</button>}
+                                                </td>
+                                            );
+                                        })()}
                                     </tr>
                                 );
                             })}
@@ -1052,6 +1107,7 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp}) => {
                                 <td className="pt-2 text-right mono text-yellow-300 font-bold">
                                     ${fmt((showInterestModal==='prev'?prevInterestRows:currInterestRows).reduce((s,r)=>s+r.interest,0),2)}
                                 </td>
+                                {showInterestModal==='prev' && <td className="pt-2 text-right mono text-green-300 font-bold">${fmt(prevInterestRows.reduce((s,r)=>s+confirmedPrev(r.loan.id),0),2)}</td>}
                             </tr>
                         </tfoot>
                     </table>
@@ -1379,7 +1435,7 @@ const LoanModule = ({prices}) => {
                 }
                 setLoans(fetchedLoans);
             }
-            if (tr.success&&tr.values) setTransactions(tr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],loanId:r[1],type:r[2],amount:+r[3],timestamp:r[4]})));
+            if (tr.success&&tr.values) setTransactions(tr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],loanId:r[1],type:r[2],amount:+r[3],timestamp:r[4],period:r[5]||''})));
         } catch(e){alert('Sync error: '+e.message);}
         setLoading(false);
     };
@@ -1445,9 +1501,11 @@ const LoanModule = ({prices}) => {
             } catch(e) { console.error('Sheets updateLoan failed:', e.message); }
         }
     };
-    const addTxn = async (loanId,type,amount)=>{
+    const addTxn = async (loanId,type,amount,meta={})=>{
         if (!canWrite()) { alert('Read-only access — you cannot record transactions.'); return; }
-        const txn = {id:`TXN-${Date.now()}`,loanId,type,amount:+amount,timestamp:new Date().toISOString()};
+        // meta.period (e.g. "2026-07") tags an Interest Payment to the month it settles —
+        // used by the dashboard's month-end Confirm workflow for idempotency + audit.
+        const txn = {id:meta.id||`TXN-${Date.now()}`,loanId,type,amount:+amount,timestamp:new Date().toISOString(),period:meta.period||''};
         // Update local state immediately so UI reflects change at once
         setTransactions(p=>[...p,txn]);
         const loan=loans.find(l=>l.id===loanId);
@@ -1467,7 +1525,7 @@ const LoanModule = ({prices}) => {
             try {
                 // 1. Append transaction row to Transactions sheet
                 await ghfetch(`${LOANS_API}?action=append&sheetName=Transactions&values=${encodeURIComponent(JSON.stringify([
-                    txn.id, txn.loanId, txn.type, txn.amount, txn.timestamp
+                    txn.id, txn.loanId, txn.type, txn.amount, txn.timestamp, txn.period||''
                 ]))}`);
                 // 2. Update the loan row in Loans sheet with new collateral/amount/status
                 if (updatedLoan) {
@@ -1522,7 +1580,7 @@ const LoanModule = ({prices}) => {
             </div>
 
             {loanSubTab==='rates' ? <ClientRatesTab config={config}/> : (<>
-            <LoanDashboard loans={loans} prices={prices} calcMetrics={calcMetrics} onTopUp={addTxn}/>
+            <LoanDashboard loans={loans} prices={prices} calcMetrics={calcMetrics} onTopUp={addTxn} transactions={transactions} onRecordPayment={addTxn}/>
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
                     <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5"><option value="all">All</option><option value="active">Active</option><option value="at-risk">At Risk</option><option value="matured">Matured</option><option value="repaid">Repaid</option><option value="early-terminated">Early Terminated</option><option value="unsecured">Unsecured</option><option value="open-term">Open Term</option></Select>
