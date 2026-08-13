@@ -297,6 +297,25 @@ const fetchDeribitIndex = async (indexName) => {
     return null;
 };
 
+// ghfetch — drop-in fetch() for Google Apps Script endpoints. GAS's content host
+// intermittently serves an HTML interstitial (<!DOCTYPE …>) instead of JSON, which
+// makes res.json() throw "Unexpected token '<'". ghfetch retries (up to 4×, backoff)
+// until it gets valid JSON, then returns a Response-like {ok,status,text,json} so all
+// existing downstream .json()/.then(r=>r.json()) code works unchanged. If every retry
+// still returns HTML, .json() throws the same parse error as before (only later),
+// while fire-and-forget writes that never call .json() simply proceed.
+async function ghfetch(url, opts) {
+    let res = null, text = '';
+    for (let i = 0; i < 4; i++) {
+        try { res = await fetch(url, opts); text = await res.text(); }
+        catch (e) { text = ''; if (i < 3) await new Promise(r => setTimeout(r, 1200*(i+1))); continue; }
+        try { JSON.parse(text); break; }                 // valid JSON → done
+        catch { if (i < 3) await new Promise(r => setTimeout(r, 1200*(i+1))); }
+    }
+    return { ok: res ? res.ok : false, status: res ? res.status : 0,
+             text: async () => text, json: async () => JSON.parse(text) };
+}
+
 const fetchBybitLive = async (symbol) => {
     const r = await fetch(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${symbol}`);
     const d = await r.json();
@@ -1089,7 +1108,7 @@ const ClientRatesTab = ({config}) => {
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${LOANS_API}?action=read&sheetName=Client Rates`).then(r=>r.json());
+            const res = await ghfetch(`${LOANS_API}?action=read&sheetName=Client Rates`).then(r=>r.json());
             if (!res.success) throw new Error(res.error || 'Failed to read Client Rates sheet');
             const values = res.values || [];
             if (values.length === 0) { setRows([]); setHeaders([]); setLoading(false); return; }
@@ -1315,8 +1334,8 @@ const LoanModule = ({prices}) => {
         setLoading(true);
         try {
             const [lr,tr] = await Promise.all([
-                fetch(`${LOANS_API}?action=read&sheetName=Loans`).then(r=>r.json()),
-                fetch(`${LOANS_API}?action=read&sheetName=Transactions`).then(r=>r.json())
+                ghfetch(`${LOANS_API}?action=read&sheetName=Loans`).then(r=>r.json()),
+                ghfetch(`${LOANS_API}?action=read&sheetName=Transactions`).then(r=>r.json())
             ]);
             if (lr.success && lr.values) {
                 const today = new Date();
@@ -1347,7 +1366,7 @@ const LoanModule = ({prices}) => {
                         if (rowIdx >= 0) {
                             const sheetRow = rowIdx + 2;
                             const m = calcMetrics(loan);
-                            await fetch(`${LOANS_API}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
+                            await ghfetch(`${LOANS_API}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
                                 loan.id, loan.counterparty, loan.loanAmount,
                                 loan.underlying, loan.collateralAmount, loan.collateralType,
                                 loan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), loan.interestPaid,
@@ -1375,7 +1394,7 @@ const LoanModule = ({prices}) => {
         if (LOANS_API) {
             try {
                 const m = calcMetrics(loan);
-                await fetch(`${LOANS_API}?action=append&sheetName=Loans&values=${encodeURIComponent(JSON.stringify([
+                await ghfetch(`${LOANS_API}?action=append&sheetName=Loans&values=${encodeURIComponent(JSON.stringify([
                     loan.id, loan.counterparty, loan.loanAmount,
                     loan.underlying, loan.collateralAmount, loan.collateralType,
                     loan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), loan.interestPaid,
@@ -1391,7 +1410,7 @@ const LoanModule = ({prices}) => {
         if (!canWrite()) { alert('Read-only access — you cannot delete loans.'); return; }
         if (!confirm('Delete this loan?\n\nIt will be hidden from the app and marked "DELETED — hidden in UI" in the Loans sheet, and margin-call alerts for it will stop. The row is kept (not permanently removed) — you can delete it in the sheet directly if needed.')) return;
         try {
-            const res = await fetch(`${LOANS_API}?action=delete&sheetName=Loans&loanId=${encodeURIComponent(id)}`).then(r=>r.json());
+            const res = await ghfetch(`${LOANS_API}?action=delete&sheetName=Loans&loanId=${encodeURIComponent(id)}`).then(r=>r.json());
             if (!res.success) throw new Error(res.error||'Delete failed');
             setLoans(p=>p.filter(l=>l.id!==id));
         } catch(e) {
@@ -1407,12 +1426,12 @@ const LoanModule = ({prices}) => {
         if (LOANS_API) {
             try {
                 const m = calcMetrics(loan);
-                const lr = await fetch(`${LOANS_API}?action=read&sheetName=Loans`).then(r=>r.json());
+                const lr = await ghfetch(`${LOANS_API}?action=read&sheetName=Loans`).then(r=>r.json());
                 if (lr.success && lr.values) {
                     const rowIdx = lr.values.findIndex(r=>String(r[0]).trim()===String(loan.id).trim());
                     if (rowIdx >= 0) {
                         const sheetRow = rowIdx + 2;
-                        await fetch(`${LOANS_API}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
+                        await ghfetch(`${LOANS_API}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
                             loan.id, loan.counterparty, loan.loanAmount,
                             loan.underlying, loan.collateralAmount, loan.collateralType,
                             loan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), loan.interestPaid,
@@ -1447,7 +1466,7 @@ const LoanModule = ({prices}) => {
         if (LOANS_API) {
             try {
                 // 1. Append transaction row to Transactions sheet
-                await fetch(`${LOANS_API}?action=append&sheetName=Transactions&values=${encodeURIComponent(JSON.stringify([
+                await ghfetch(`${LOANS_API}?action=append&sheetName=Transactions&values=${encodeURIComponent(JSON.stringify([
                     txn.id, txn.loanId, txn.type, txn.amount, txn.timestamp
                 ]))}`);
                 // 2. Update the loan row in Loans sheet with new collateral/amount/status
@@ -1458,12 +1477,12 @@ const LoanModule = ({prices}) => {
                     // We append a fresh read then update — simpler: use append+dedup or find row
                     // The existing script uses rowIndex-based update, so we need to find the row.
                     // Fetch current loans sheet to find row number of this loan
-                    const lr = await fetch(`${LOANS_API}?action=read&sheetName=Loans`).then(r=>r.json());
+                    const lr = await ghfetch(`${LOANS_API}?action=read&sheetName=Loans`).then(r=>r.json());
                     if (lr.success && lr.values) {
                         const rowIdx = lr.values.findIndex(r=>r[0]===updatedLoan.id);
                         if (rowIdx >= 0) {
                             const sheetRow = rowIdx + 2; // +1 for header, +1 for 1-indexing
-                            await fetch(`${LOANS_API}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
+                            await ghfetch(`${LOANS_API}?action=update&sheetName=Loans&rowIndex=${sheetRow}&values=${encodeURIComponent(JSON.stringify([
                                 updatedLoan.id, updatedLoan.counterparty, updatedLoan.loanAmount,
                                 updatedLoan.underlying, updatedLoan.collateralAmount, updatedLoan.collateralType,
                                 updatedLoan.interestRate, (loanIsCrypto(loan) ? (Math.floor(m.interest*1e8)/1e8).toFixed(8) : m.interest.toFixed(2)), updatedLoan.interestPaid,
@@ -1773,7 +1792,7 @@ const computeLedger = (contract, priceHistory) => {
 // ─── SHEETS HELPER ────────────────────────────────────────────────────────────
 const sheetsCall = async (url, payload) => {
     const qs=Object.entries(payload).map(([k,v])=>`${k}=${encodeURIComponent(typeof v==='object'?JSON.stringify(v):v)}`).join('&');
-    const res=await fetch(`${url}?${qs}`);
+    const res=await ghfetch(`${url}?${qs}`);
     const data=await res.json();
     if (!data.success) throw new Error(data.error||'Sheets error');
     return data;
@@ -2996,7 +3015,7 @@ const checkBarriers = (trade, prices, todayStr, isSettlementToday, isMaturityTod
 // Sheets call
 const fcnSheetsCall = async (url, payload) => {
     const qs = Object.entries(payload).map(([k,v])=>`${k}=${encodeURIComponent(typeof v==='object'?JSON.stringify(v):v)}`).join('&');
-    const res = await fetch(`${url}?${qs}`);
+    const res = await ghfetch(`${url}?${qs}`);
     const data = await res.json();
     if (!data.success) throw new Error(data.error||'FCN Sheets error');
     return data;
@@ -3004,7 +3023,7 @@ const fcnSheetsCall = async (url, payload) => {
 
 const accSheetsCall = async (url, payload) => {
     const qs = Object.entries(payload).map(([k,v])=>`${k}=${encodeURIComponent(typeof v==='object'?JSON.stringify(v):v)}`).join('&');
-    const res = await fetch(`${url}?${qs}`);
+    const res = await ghfetch(`${url}?${qs}`);
     const data = await res.json();
     if (!data.success) throw new Error(data.error||'Accumulator Sheets error');
     return data;
@@ -5505,7 +5524,7 @@ const ACCPriceLadder = ({config}) => {
         if (!ACC_API) { console.warn('ACC ladder: no scriptUrl configured'); return; }
         setLoading(true);
         try {
-            const rawRes = await fetch(`${ACC_API}?action=readAccPriceLadder`);
+            const rawRes = await ghfetch(`${ACC_API}?action=readAccPriceLadder`);
             const res    = await rawRes.json();
             console.log('ACC ladder raw response:', JSON.stringify(res).slice(0, 300));
             const data = (res.values || []).map(r => ({
@@ -6077,7 +6096,7 @@ const TRSModule = ({bybitPrices}) => {
         // Called directly from browser — Apps Script GET requests support CORS from browsers
         if (!trsConfig.scriptUrl) return;
         try {
-            const res  = await fetch(`${trsConfig.scriptUrl}?action=readAll`);
+            const res  = await ghfetch(`${trsConfig.scriptUrl}?action=readAll`);
             const json = await res.json();
             if (json.error) { console.error('TRS Sheets error:', json.error); return; }
             const d    = json.data || json;
@@ -6106,7 +6125,7 @@ const TRSModule = ({bybitPrices}) => {
                 telegramToken: trsConfig.telegramToken  || '',
                 telegramChatId:trsConfig.telegramChatId || '',
             });
-            const res  = await fetch(`${trsConfig.scriptUrl}?${params}`);
+            const res  = await ghfetch(`${trsConfig.scriptUrl}?${params}`);
             const json = await res.json();
             if (json.error) throw new Error(json.error);
             alert('Alert config saved to Sheets.');
@@ -6124,7 +6143,7 @@ const TRSModule = ({bybitPrices}) => {
                 nav:        String(parseFloat(navVal)),
                 manual:     'true',
             });
-            const res  = await fetch(`${trsConfig.scriptUrl}?${params}`);
+            const res  = await ghfetch(`${trsConfig.scriptUrl}?${params}`);
             const json = await res.json();
             if (json.error) throw new Error(json.error);
             setMonthStart({yearMonth:ym, nav:parseFloat(navVal), manual:true});
@@ -7904,7 +7923,7 @@ const MarketFlowModule = () => {
 
     const call = async (params) => {
         const qs = Object.entries(params).map(([k,v])=>`${k}=${encodeURIComponent(v)}`).join('&');
-        const r = await fetch(`${GOLDHORSE_API}?${qs}`);
+        const r = await ghfetch(`${GOLDHORSE_API}?${qs}`);
         const d = await r.json();
         if (!d.success) throw new Error(d.error||'Market Flow error');
         return d;
