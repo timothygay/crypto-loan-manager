@@ -751,6 +751,14 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
         if (!confirm(`Undo confirmed ${prevMonthName} interest for ${loan.id}?\n\nReverses ${loanIsCrypto(loan)?net.toFixed(8)+' '+loan.underlying:'$'+fmt(net,2)} from Paid.`)) return;
         await onRecordPayment(loan.id, 'Interest Payment', -net, {period: prevPeriod});
     };
+    // Un-settle a month that Paid already covers (e.g. counterparty turned out to be late):
+    // reverse that month's interest slice from Paid so the row flips back to a Confirm input.
+    const undoMonth = async (loan, amount) => {
+        if (!canWrite() || !onRecordPayment) return;
+        if (!(amount>0)) return;
+        if (!confirm(`Mark ${prevMonthName} interest for ${loan.id} as NOT yet received?\n\nReverses ${loanIsCrypto(loan)?amount.toFixed(8)+' '+loan.underlying:'$'+fmt(amount,2)} from Paid — the row will show a Confirm box again.`)) return;
+        await onRecordPayment(loan.id, 'Interest Payment', -amount, {period: prevPeriod});
+    };
     const confirmAllPrev = async () => {
         if (!canWrite() || !onRecordPayment) { alert('Read-only access — you cannot confirm payments.'); return; }
         const pending = prevInterestRows.filter(r => confirmedPrev(r.loan.id)<=0.005 && outstandingPrev(r.loan)>0.005);
@@ -1110,7 +1118,10 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
                                                 </td>
                                             );
                                             if (outstanding <= 0.005) return (
-                                                <td className="py-2 text-right whitespace-nowrap"><span className="mono text-slate-500" title="Paid already covers this month (nothing outstanding)">✓ in Paid</span></td>
+                                                <td className="py-2 text-right whitespace-nowrap">
+                                                    <span className="mono text-slate-500" title="Paid already covers this month (nothing outstanding)">✓ in Paid</span>
+                                                    {canWrite() && interest>0.005 && <button onClick={()=>undoMonth(loan, crypto ? +(Math.floor(interest*1e8)/1e8).toFixed(8) : +interest.toFixed(2))} className="ml-2 text-xs text-slate-500 hover:text-red-400 underline">undo</button>}
+                                                </td>
                                             );
                                             const dflt = crypto ? +(Math.floor(outstanding*1e8)/1e8).toFixed(8) : +outstanding.toFixed(2);
                                             return (
