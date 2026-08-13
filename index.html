@@ -1591,8 +1591,10 @@ const LoanModule = ({prices}) => {
                                             } {loan.tenor&&!loan.endDate?`(${loan.tenor}d)`:''}
                                         </p>
                                     </div>
-                                    {canWrite() && <button onClick={()=>setEditingLoan(loan)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>}
-                                    {canWrite() && <button onClick={()=>deleteLoan(loan.id)} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>}
+                                    {canWrite() && <div className="flex items-center gap-2 shrink-0">
+                                        <button onClick={()=>setEditingLoan(loan)} className="btn-secondary p-2 rounded-lg"><Icon.Edit/></button>
+                                        <button onClick={()=>deleteLoan(loan.id)} className="p-2 rounded-lg bg-red-900/20 border border-red-500/20 text-red-400 hover:bg-red-900/40"><Icon.Trash/></button>
+                                    </div>}
                                 </div>
                                 {/* Metric tiles — hide collateral/ratio/MC for unsecured loans */}
                                 <div className={`grid grid-cols-2 gap-2 mb-4 ${m.isUnsecured?'md:grid-cols-3':'md:grid-cols-3 lg:grid-cols-6'}`}>
