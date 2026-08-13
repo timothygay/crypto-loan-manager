@@ -718,6 +718,20 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
     // A confirmation is an "Interest Payment" transaction tagged with the prior
     // month (period). Net > 0 ⇒ confirmed (idempotent). Undo posts a reversal.
     const prevPeriod = `${prevYear}-${String(prevMonth+1).padStart(2,'0')}`;   // e.g. "2026-07"
+    // Interest accrued from a loan's start through the END of the prior month
+    // (Actual/360, capped at the loan's own end) — same basis as `interestPaid`.
+    const prevEndExcl = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)); // 1st of CURRENT month = end of prior month (exclusive)
+    const accruedThrough = (loan, endEx) => {
+        if (!loan.startDate) return 0;
+        const start = new Date(loan.startDate+'T00:00:00Z');
+        const hardEnd = loan.endDate ? new Date(loan.endDate+'T00:00:00Z') : (loan.maturityDate ? new Date(loan.maturityDate+'T00:00:00Z') : null);
+        let end = endEx; if (hardEnd && hardEnd < end) end = hardEnd;
+        const days = Math.floor((end - start)/86400000);
+        return Math.max(0, loan.loanAmount * loan.interestRate/100 * days/360);
+    };
+    // What's still unpaid for the prior-month-and-earlier: expected-through-prior-month − already-paid.
+    // 0 ⇒ Paid already covers it (e.g. the restore), so NO Confirm is offered → cannot double-count.
+    const outstandingPrev = (loan) => Math.max(0, accruedThrough(loan, prevEndExcl) - (loan.interestPaid||0));
     const confirmedPrev = (loanId) => transactions
         .filter(t => t.loanId===loanId && t.type==='Interest Payment' && t.period===prevPeriod)
         .reduce((s,t)=>s+(+t.amount||0), 0);
@@ -736,12 +750,12 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
     };
     const confirmAllPrev = async () => {
         if (!canWrite() || !onRecordPayment) { alert('Read-only access — you cannot confirm payments.'); return; }
-        const pending = prevInterestRows.filter(r => Math.abs(confirmedPrev(r.loan.id))<=0.005 && paidValue(r.loan,r.interest)>0);
-        if (!pending.length) { alert('Nothing to confirm — all loans already confirmed for '+prevMonthName+'.'); return; }
-        const lines = pending.map(r=>`• ${r.loan.id}: ${loanIsCrypto(r.loan)?paidValue(r.loan,r.interest).toFixed(8)+' '+r.loan.underlying:'$'+fmt(paidValue(r.loan,r.interest),2)}`).join('\n');
+        const pending = prevInterestRows.filter(r => confirmedPrev(r.loan.id)<=0.005 && outstandingPrev(r.loan)>0.005);
+        if (!pending.length) { alert('Nothing to confirm — every loan is already settled through '+prevMonthName+' (Paid already covers it).'); return; }
+        const lines = pending.map(r=>`• ${r.loan.id}: ${loanIsCrypto(r.loan)?paidValue(r.loan,outstandingPrev(r.loan)).toFixed(8)+' '+r.loan.underlying:'$'+fmt(paidValue(r.loan,outstandingPrev(r.loan)),2)}`).join('\n');
         if (!confirm(`Confirm ${prevMonthName} interest paid for ${pending.length} loan(s)?\n\n${lines}\n\nEach posts an Interest Payment and adds to Paid.`)) return;
         setConfirming(true);
-        for (const r of pending) { await confirmPaid(r.loan, paidValue(r.loan, r.interest)); }
+        for (const r of pending) { await confirmPaid(r.loan, paidValue(r.loan, outstandingPrev(r.loan))); }
         setConfirming(false);
     };
 
@@ -1082,17 +1096,23 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
                                         <td className="py-2 text-right mono text-yellow-400 font-medium">{loanIsCrypto(loan) ? (Math.floor(interest*1e8)/1e8).toFixed(8)+' '+loan.underlying : '$'+fmt(interest,2)}</td>
                                         {(() => {
                                             if (showInterestModal !== 'prev') return null;
-                                            const net = confirmedPrev(loan.id);
-                                            const dflt = loanIsCrypto(loan) ? +(Math.floor(interest*1e8)/1e8).toFixed(8) : +interest.toFixed(2);
+                                            const net = confirmedPrev(loan.id);          // confirmed via this workflow
+                                            const outstanding = outstandingPrev(loan);    // still unpaid through prior month end
+                                            const crypto = loanIsCrypto(loan);
+                                            const money = v => crypto ? (Math.floor(v*1e8)/1e8).toFixed(8)+' '+loan.underlying : '$'+fmt(v,2);
                                             if (net > 0.005) return (
                                                 <td className="py-2 text-right whitespace-nowrap">
-                                                    <span className="mono text-green-400">✓ {loanIsCrypto(loan) ? net.toFixed(8)+' '+loan.underlying : '$'+fmt(net,2)}</span>
+                                                    <span className="mono text-green-400">✓ {money(net)}</span>
                                                     {canWrite() && <button onClick={()=>undoPaid(loan)} className="ml-2 text-xs text-slate-500 hover:text-red-400 underline">undo</button>}
                                                 </td>
                                             );
+                                            if (outstanding <= 0.005) return (
+                                                <td className="py-2 text-right whitespace-nowrap"><span className="mono text-slate-500" title="Paid already covers this month (nothing outstanding)">✓ in Paid</span></td>
+                                            );
+                                            const dflt = crypto ? +(Math.floor(outstanding*1e8)/1e8).toFixed(8) : +outstanding.toFixed(2);
                                             return (
                                                 <td className="py-2 text-right whitespace-nowrap">
-                                                    <input type="number" value={paidInputs[loan.id]===undefined?dflt:paidInputs[loan.id]} onChange={e=>setPaidInputs(p=>({...p,[loan.id]:e.target.value}))} step={loanIsCrypto(loan)?'0.00000001':'0.01'} className="w-28 px-2 py-1 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-right mono text-slate-200 focus:outline-none focus:border-cyan-500/50"/>
+                                                    <input type="number" value={paidInputs[loan.id]===undefined?dflt:paidInputs[loan.id]} onChange={e=>setPaidInputs(p=>({...p,[loan.id]:e.target.value}))} step={crypto?'0.00000001':'0.01'} className="w-28 px-2 py-1 bg-slate-900/60 border border-slate-600/40 rounded text-xs text-right mono text-slate-200 focus:outline-none focus:border-cyan-500/50"/>
                                                     {canWrite() && <button onClick={()=>confirmPaid(loan, paidValue(loan,dflt))} disabled={confirming} className="ml-2 px-2 py-1 rounded text-xs bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/50 disabled:opacity-50">Confirm</button>}
                                                 </td>
                                             );
