@@ -735,6 +735,9 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
     const confirmedPrev = (loanId) => transactions
         .filter(t => t.loanId===loanId && t.type==='Interest Payment' && t.period===prevPeriod)
         .reduce((s,t)=>s+(+t.amount||0), 0);
+    // Prior month fully settled ⇒ every accruing loan has 0 outstanding (Paid covers it,
+    // whether via the restore, a manual entry, or a workflow confirmation).
+    const prevAllSettled = prevInterestRows.length===0 || prevInterestRows.every(r => outstandingPrev(r.loan) <= 0.005);
     const paidValue = (loan, dflt) => { const v=paidInputs[loan.id]; return (v===undefined||v==='')?dflt:+v; };
     const confirmPaid = async (loan, amount) => {
         if (!canWrite() || !onRecordPayment) { alert('Read-only access — you cannot confirm payments.'); return; }
@@ -946,9 +949,9 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
                     <div className="space-y-3">
                         {/* Previous month */}
                         <button onClick={()=>setShowInterestModal(showInterestModal==='prev'?null:'prev')}
-                            className="w-full text-left group">
+                            className={`w-full text-left group rounded-lg p-2 -mx-1 border ${prevAllSettled?'bg-green-500/10 border-green-500/30':'bg-red-500/10 border-red-500/30'}`}>
                             <div className="flex justify-between items-center">
-                                <span className="text-xs text-slate-500">{prevMonthName}</span>
+                                <span className="text-xs text-slate-500">{prevMonthName} <span className={prevAllSettled?'text-green-400':'text-red-400'}>· {prevAllSettled?'confirmed':'awaiting confirmation'}</span></span>
                                 <Icon.ChevRight/>
                             </div>
                             <p className="text-xl font-bold mono text-yellow-400">${fmt(totalPrevInterest,2)}</p>
