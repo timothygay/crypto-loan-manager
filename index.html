@@ -1111,15 +1111,15 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
                                             const outstanding = outstandingPrev(loan);    // still unpaid through prior month end
                                             const crypto = loanIsCrypto(loan);
                                             const money = v => crypto ? (Math.floor(v*1e8)/1e8).toFixed(8)+' '+loan.underlying : '$'+fmt(v,2);
-                                            if (net > 0.005) return (
+                                            if (net > 0.005) return (   // paid via a workflow confirmation → undo reverses that exact amount
                                                 <td className="py-2 text-right whitespace-nowrap">
-                                                    <span className="mono text-green-400">✓ {money(net)}</span>
+                                                    <span className="mono text-green-400">{money(net)} <span className="text-slate-500 font-normal">paid</span></span>
                                                     {canWrite() && <button onClick={()=>undoPaid(loan)} className="ml-2 text-xs text-slate-500 hover:text-red-400 underline">undo</button>}
                                                 </td>
                                             );
-                                            if (outstanding <= 0.005) return (
+                                            if (outstanding <= 0.005) return (   // covered by Paid (e.g. restore) → show the month's slice; undo reverses it
                                                 <td className="py-2 text-right whitespace-nowrap">
-                                                    <span className="mono text-slate-500" title="Paid already covers this month (nothing outstanding)">✓ in Paid</span>
+                                                    <span className="mono text-green-400">{money(interest)} <span className="text-slate-500 font-normal">paid</span></span>
                                                     {canWrite() && interest>0.005 && <button onClick={()=>undoMonth(loan, crypto ? +(Math.floor(interest*1e8)/1e8).toFixed(8) : +interest.toFixed(2))} className="ml-2 text-xs text-slate-500 hover:text-red-400 underline">undo</button>}
                                                 </td>
                                             );
@@ -1141,7 +1141,7 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
                                 <td className="pt-2 text-right mono text-yellow-300 font-bold">
                                     ${fmt((showInterestModal==='prev'?prevInterestRows:currInterestRows).reduce((s,r)=>s+r.interest,0),2)}
                                 </td>
-                                {showInterestModal==='prev' && <td className="pt-2 text-right mono text-green-300 font-bold">${fmt(prevInterestRows.reduce((s,r)=>s+confirmedPrev(r.loan.id),0),2)}</td>}
+                                {showInterestModal==='prev' && <td className="pt-2 text-right mono text-green-300 font-bold">${fmt(prevInterestRows.reduce((s,r)=>{const net=confirmedPrev(r.loan.id);return s+(net>0.005?net:(outstandingPrev(r.loan)<=0.005?r.interest:0));},0),2)}</td>}
                             </tr>
                         </tfoot>
                     </table>
