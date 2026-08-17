@@ -66,6 +66,25 @@ module.exports = async (req, res) => {
             return res.status(200).json({ ok: true, setupToken: token });
         }
 
+        if (action === 'delete') {
+            // Hard-delete a user completely (removes the row, not just disables it).
+            if (!b.id) return res.status(400).json({ error: 'id is required.' });
+            if (b.id === me.id) return res.status(400).json({ error: 'You cannot delete your own account.' });
+            const target = (await sql`SELECT id, email, role FROM users WHERE id = ${b.id} LIMIT 1`)[0];
+            if (!target) return res.status(404).json({ error: 'User not found.' });
+            if (target.role === 'admin') {
+                const others = (await sql`SELECT count(*)::int AS n FROM users WHERE role = 'admin' AND is_active = true AND id <> ${b.id}`)[0].n;
+                if (others < 1) return res.status(400).json({ error: 'Cannot delete the last active admin.' });
+            }
+            // Detach FK references (both RESTRICT) so the delete succeeds; audit history is
+            // preserved because audit_log keeps actor_email independently of user_id.
+            await sql`UPDATE audit_log SET user_id = NULL WHERE user_id = ${b.id}`;
+            await sql`UPDATE users SET created_by = NULL WHERE created_by = ${b.id}`;
+            await sql`DELETE FROM users WHERE id = ${b.id}`;
+            await audit(me.id, me.email, 'user_delete', { id: b.id, email: target.email, role: target.role }, ip);
+            return res.status(200).json({ ok: true });
+        }
+
         return res.status(400).json({ error: 'Unknown action.' });
     }
 

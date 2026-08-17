@@ -7566,13 +7566,14 @@ const UserManagement = () => {
     const [role, setRole] = useState('readonly');
     const [created, setCreated] = useState(null);
     const [busy, setBusy] = useState(false);
+    const [me, setMe] = useState(null);
 
     const load = async () => {
         setErr('');
         try {
             const r = await fetch('/api/users', { credentials:'same-origin' });
             const j = await r.json();
-            if (j.users) setUsers(j.users); else setErr(j.error || 'Failed to load users.');
+            if (j.users) { setUsers(j.users); setMe(j.me||null); } else setErr(j.error || 'Failed to load users.');
         } catch (e) { setErr('Failed to load users.'); }
     };
     useEffect(() => { load(); }, []);
@@ -7593,6 +7594,13 @@ const UserManagement = () => {
     const changeRole  = async (id, r) => { const { body } = await post({ action:'setRole', id, role:r }); if (body.error) setErr(body.error); load(); };
     const toggleActive = async (id, active) => { const { body } = await post({ action:'setActive', id, active }); if (body.error) setErr(body.error); load(); };
     const resetUser   = async (id) => { const { body } = await post({ action:'resetSetup', id }); if (body.setupToken) setCreated({ email:'(re-enrolment)', token: body.setupToken }); load(); };
+    const deleteUser  = async (u) => {
+        if (!confirm(`Permanently delete ${u.email}?\n\nThis removes the account completely (not just disables it) so it no longer clutters the list. Their audit-log history is kept. This cannot be undone.`)) return;
+        setErr('');
+        const { body } = await post({ action:'delete', id: u.id });
+        if (body.error) setErr(body.error);
+        load();
+    };
 
     return (
         <div>
@@ -7637,6 +7645,7 @@ const UserManagement = () => {
                                     <td className="py-1.5 text-right whitespace-nowrap">
                                         <button onClick={()=>toggleActive(u.id, !u.is_active)} className="text-[11px] px-2 py-0.5 rounded border border-slate-600/40 text-slate-300 hover:bg-slate-700/40 mr-1">{u.is_active?'Disable':'Enable'}</button>
                                         <button onClick={()=>resetUser(u.id)} className="text-[11px] px-2 py-0.5 rounded border border-slate-600/40 text-slate-300 hover:bg-slate-700/40">Reset</button>
+                                        {(!me || u.id!==me.id) && <button onClick={()=>deleteUser(u)} className="text-[11px] px-2 py-0.5 rounded border border-red-500/30 text-red-400 hover:bg-red-900/30 ml-1">Delete</button>}
                                     </td>
                                 </tr>
                             ))}
