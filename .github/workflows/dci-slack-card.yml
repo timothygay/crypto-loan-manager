@@ -1,0 +1,42 @@
+name: DCI Slack Card
+
+# Posts the "DCI Price Ladder — Client Rates" card to Slack.
+# Data is fetched LIVE at run time (public relay for APR + Deribit index for spot),
+# rendered to a PNG, and uploaded to #trading-rates. No Penguin API key needed here.
+#
+# Schedule is in UTC. SGT = UTC+8 (no DST):
+#   01:00 UTC = 09:00 SGT   |   08:05 UTC = 16:05 SGT   |   Mon–Fri.
+# NOTE: GitHub-hosted cron is best-effort — runs can be delayed a few minutes
+# (occasionally longer under load). Fine for an indicative card; not to-the-second.
+on:
+  schedule:
+    - cron: "0 1 * * 1-5"    # 09:00 SGT, weekdays
+    - cron: "5 8 * * 1-5"    # 16:05 SGT, weekdays
+  workflow_dispatch:          # manual "Run workflow" button for on-demand / testing
+
+concurrency:
+  group: dci-slack-card
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install --quiet matplotlib
+
+      - name: Render & post DCI card
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          # optional overrides:
+          # RELAY_URL: https://crypto-loan-manager.vercel.app/api/dci-penguin
+          # STRIKE_WINDOW: "6"
+        run: python scripts/dci_slack_card.py
