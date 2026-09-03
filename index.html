@@ -316,6 +316,21 @@ async function ghfetch(url, opts) {
              text: async () => text, json: async () => JSON.parse(text) };
 }
 
+// Normalize a transaction period tag to "YYYY-MM". Older rows were stored as a real date
+// (Google Sheets coerced the string "2026-08" into 2026-08-01), which reads back as an ISO
+// datetime like "2026-07-31T16:00:00.000Z" (Aug 1 in SGT) and never equals "2026-08" — which
+// silently zeroed confirmedPrev and broke the month-end Confirm/undo display. Nudge +12h
+// before taking the UTC month so any spreadsheet-timezone offset still lands on the right month.
+function normPeriod(p){
+    p = String(p==null?'':p);
+    if (/^\d{4}-\d{2}$/.test(p)) return p;
+    if (!p) return '';
+    const d = new Date(p);
+    if (isNaN(d.getTime())) return p.slice(0,7);
+    d.setUTCHours(d.getUTCHours()+12);
+    return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0');
+}
+
 const fetchBybitLive = async (symbol) => {
     const r = await fetch(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${symbol}`);
     const d = await r.json();
@@ -1478,7 +1493,7 @@ const LoanModule = ({prices}) => {
                 }
                 setLoans(fetchedLoans);
             }
-            if (tr.success&&tr.values) setTransactions(tr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],loanId:r[1],type:r[2],amount:+r[3],timestamp:r[4],period:r[5]||''})));
+            if (tr.success&&tr.values) setTransactions(tr.values.filter(r=>r[0]&&r[1]).map(r=>({id:r[0],loanId:r[1],type:r[2],amount:+r[3],timestamp:r[4],period:normPeriod(r[5])})));
         } catch(e){alert('Sync error: '+e.message);}
         setLoading(false);
     };
