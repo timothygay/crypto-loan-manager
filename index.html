@@ -642,7 +642,7 @@ const CPBreakdown = ({cpName, cpLoans, prices, onClose}) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // LOAN TRADING DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════════
-const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], onRecordPayment}) => {
+const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], onRecordPayment, onRefresh}) => {
     const [lastRefresh, setLastRefresh] = React.useState(new Date());
     const [showInterestModal, setShowInterestModal] = React.useState(null); // 'prev' | 'curr'
     const [paidInputs, setPaidInputs] = React.useState({}); // {loanId: editable Interest-Paid value} for the prior-month Confirm workflow
@@ -672,11 +672,17 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
         if (!loan.startDate) return 0;
         const loanStart = new Date(loan.startDate+'T00:00:00Z');
         const isOpenTerm = !loan.maturityDate || loan.maturityDate === '';
-        // For open-term Active loans: no maturity cap — accrue to end of period
-        // For matured/repaid open-term: use today as the cap (best approximation)
-        const loanEnd = isOpenTerm
-            ? (loan.status === 'Active' ? new Date(9999,0,1) : new Date())
-            : new Date(loan.maturityDate+'T00:00:00Z');
+        // Cap accrual at the loan's true end so matured / early-terminated loans still
+        // compute their partial-month interest correctly:
+        //  • endDate (early-terminated, or a repaid open-term) always wins when set;
+        //  • else open-term Active accrues to period end (far-future cap), open-term ended → today;
+        //  • else fixed-term caps at its maturity date (this is what makes a Matured loan
+        //    still show the days it accrued in the prior month).
+        const loanEnd = loan.endDate
+            ? new Date(loan.endDate+'T00:00:00Z')
+            : (isOpenTerm
+                ? (loan.status === 'Active' ? new Date(9999,0,1) : new Date())
+                : new Date(loan.maturityDate+'T00:00:00Z'));
         // Period: 1st of month to last day of month (or today if current month)
         const periodStart = new Date(year, month, 1);
         const isCurrentMonth = (year === today.getFullYear() && month === today.getMonth());
@@ -700,13 +706,18 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
     const prevMonthName = new Date(prevYear, prevMonth, 1).toLocaleString('en-SG', {month:'long', year:'numeric'});
     const currMonthName = today.toLocaleString('en-SG', {month:'long', year:'numeric'});
 
-    // Interest breakdowns — only loans that accrued something
-    const prevInterestRows = activeLoans.map(l => ({
+    // Interest breakdowns — map over ALL loans (not just Active), because a loan that
+    // matured / was repaid / early-terminated mid-month still accrued interest for the
+    // days it was live that month and must appear in the breakdown. calcMonthInterest
+    // caps each loan at its true end date and the filter drops anything that accrued
+    // nothing in the month, so status is irrelevant here. (Soft-deleted loans are already
+    // excluded upstream in readData, so they never reach this list.)
+    const prevInterestRows = loans.map(l => ({
         loan: l,
         interest: calcMonthInterest(l, prevYear, prevMonth)
     })).filter(r => r.interest > 0.005);
 
-    const currInterestRows = activeLoans.map(l => ({
+    const currInterestRows = loans.map(l => ({
         loan: l,
         interest: calcMonthInterest(l, today.getFullYear(), today.getMonth())
     })).filter(r => r.interest > 0.005);
@@ -739,25 +750,21 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
     // whether via the restore, a manual entry, or a workflow confirmation).
     const prevAllSettled = prevInterestRows.length===0 || prevInterestRows.every(r => outstandingPrev(r.loan) <= 0.005);
     const paidValue = (loan, dflt) => { const v=paidInputs[loan.id]; return (v===undefined||v==='')?dflt:+v; };
-    const confirmPaid = async (loan, amount) => {
+    const confirmPaid = async (loan, amount, opts={}) => {
         if (!canWrite() || !onRecordPayment) { alert('Read-only access — you cannot confirm payments.'); return; }
         if (!(amount>0)) { alert('Enter an amount greater than 0.'); return; }
         await onRecordPayment(loan.id, 'Interest Payment', amount, {period: prevPeriod});
+        if (!opts.skipRefresh && onRefresh) await onRefresh();   // re-read the sheet so the "paid" cell reflects the saved value, never a stale one
     };
-    const undoPaid = async (loan) => {
-        if (!canWrite() || !onRecordPayment) return;
-        const net = confirmedPrev(loan.id);
-        if (!(Math.abs(net)>1e-7)) return;
-        if (!confirm(`Undo confirmed ${prevMonthName} interest for ${loan.id}?\n\nReverses ${loanIsCrypto(loan)?net.toFixed(8)+' '+loan.underlying:'$'+fmt(net,2)} from Paid.`)) return;
-        await onRecordPayment(loan.id, 'Interest Payment', -net, {period: prevPeriod});
-    };
-    // Un-settle a month that Paid already covers (e.g. counterparty turned out to be late):
-    // reverse that month's interest slice from Paid so the row flips back to a Confirm input.
+    // Un-settle a month (undo): reverses the exact displayed paid amount from Paid so the
+    // row flips back to a Confirm input. Used for every settled row — whether it was covered
+    // by the one-off restore or confirmed through this workflow.
     const undoMonth = async (loan, amount) => {
         if (!canWrite() || !onRecordPayment) return;
         if (!(amount>0)) return;
         if (!confirm(`Mark ${prevMonthName} interest for ${loan.id} as NOT yet received?\n\nReverses ${loanIsCrypto(loan)?amount.toFixed(8)+' '+loan.underlying:'$'+fmt(amount,2)} from Paid — the row will show a Confirm box again.`)) return;
         await onRecordPayment(loan.id, 'Interest Payment', -amount, {period: prevPeriod});
+        if (onRefresh) await onRefresh();
     };
     const confirmAllPrev = async () => {
         if (!canWrite() || !onRecordPayment) { alert('Read-only access — you cannot confirm payments.'); return; }
@@ -766,7 +773,8 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
         const lines = pending.map(r=>`• ${r.loan.id}: ${loanIsCrypto(r.loan)?paidValue(r.loan,outstandingPrev(r.loan)).toFixed(8)+' '+r.loan.underlying:'$'+fmt(paidValue(r.loan,outstandingPrev(r.loan)),2)}`).join('\n');
         if (!confirm(`Confirm ${prevMonthName} interest paid for ${pending.length} loan(s)?\n\n${lines}\n\nEach posts an Interest Payment and adds to Paid.`)) return;
         setConfirming(true);
-        for (const r of pending) { await confirmPaid(r.loan, paidValue(r.loan, outstandingPrev(r.loan))); }
+        for (const r of pending) { await confirmPaid(r.loan, paidValue(r.loan, outstandingPrev(r.loan)), {skipRefresh:true}); }
+        if (onRefresh) await onRefresh();   // one reconcile after the whole batch, not per loan
         setConfirming(false);
     };
 
@@ -1107,22 +1115,23 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
                                         <td className="py-2 text-right mono text-yellow-400 font-medium">{loanIsCrypto(loan) ? (Math.floor(interest*1e8)/1e8).toFixed(8)+' '+loan.underlying : '$'+fmt(interest,2)}</td>
                                         {(() => {
                                             if (showInterestModal !== 'prev') return null;
-                                            const net = confirmedPrev(loan.id);          // confirmed via this workflow
-                                            const outstanding = outstandingPrev(loan);    // still unpaid through prior month end
+                                            const net = confirmedPrev(loan.id);           // net of this loan's period-tagged Interest Payment txns
                                             const crypto = loanIsCrypto(loan);
                                             const money = v => crypto ? (Math.floor(v*1e8)/1e8).toFixed(8)+' '+loan.underlying : '$'+fmt(v,2);
-                                            if (net > 0.005) return (   // paid via a workflow confirmation → undo reverses that exact amount
+                                            // Was the prior month already covered by Paid BEFORE any workflow txns?
+                                            // (col I minus this period's workflow net = the pre-workflow Paid, e.g. the one-off restore.)
+                                            const preCovered = (accruedThrough(loan, prevEndExcl) - ((loan.interestPaid||0) - net)) <= 0.005;
+                                            // Actual amount paid for the month = the restore/expected base (only when it was
+                                            // pre-covered) PLUS any workflow adjustment. So an undo-then-reconfirm to 426.34
+                                            // shows 426.34 — the real figure — not the computed accrual or the raw delta.
+                                            const paid = Math.max(0, (preCovered ? interest : 0) + net);
+                                            if (paid > 0.005) return (   // settled → show the real paid amount; undo reverses exactly that
                                                 <td className="py-2 text-right whitespace-nowrap">
-                                                    <span className="mono text-green-400">{money(net)} <span className="text-slate-500 font-normal">paid</span></span>
-                                                    {canWrite() && <button onClick={()=>undoPaid(loan)} className="ml-2 text-xs text-slate-500 hover:text-red-400 underline">undo</button>}
+                                                    <span className="mono text-green-400">{money(paid)} <span className="text-slate-500 font-normal">paid</span></span>
+                                                    {canWrite() && <button onClick={()=>undoMonth(loan, crypto ? +(Math.floor(paid*1e8)/1e8).toFixed(8) : +paid.toFixed(2))} className="ml-2 text-xs text-slate-500 hover:text-red-400 underline">undo</button>}
                                                 </td>
                                             );
-                                            if (outstanding <= 0.005) return (   // covered by Paid (e.g. restore) → show the month's slice; undo reverses it
-                                                <td className="py-2 text-right whitespace-nowrap">
-                                                    <span className="mono text-green-400">{money(interest)} <span className="text-slate-500 font-normal">paid</span></span>
-                                                    {canWrite() && interest>0.005 && <button onClick={()=>undoMonth(loan, crypto ? +(Math.floor(interest*1e8)/1e8).toFixed(8) : +interest.toFixed(2))} className="ml-2 text-xs text-slate-500 hover:text-red-400 underline">undo</button>}
-                                                </td>
-                                            );
+                                            const outstanding = outstandingPrev(loan);
                                             const dflt = crypto ? +(Math.floor(outstanding*1e8)/1e8).toFixed(8) : +outstanding.toFixed(2);
                                             return (
                                                 <td className="py-2 text-right whitespace-nowrap">
@@ -1141,7 +1150,7 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
                                 <td className="pt-2 text-right mono text-yellow-300 font-bold">
                                     ${fmt((showInterestModal==='prev'?prevInterestRows:currInterestRows).reduce((s,r)=>s+r.interest,0),2)}
                                 </td>
-                                {showInterestModal==='prev' && <td className="pt-2 text-right mono text-green-300 font-bold">${fmt(prevInterestRows.reduce((s,r)=>{const net=confirmedPrev(r.loan.id);return s+(net>0.005?net:(outstandingPrev(r.loan)<=0.005?r.interest:0));},0),2)}</td>}
+                                {showInterestModal==='prev' && <td className="pt-2 text-right mono text-green-300 font-bold">${fmt(prevInterestRows.reduce((s,r)=>{const net=confirmedPrev(r.loan.id);const preCovered=(accruedThrough(r.loan, prevEndExcl) - ((r.loan.interestPaid||0) - net))<=0.005;return s+Math.max(0,(preCovered?r.interest:0)+net);},0),2)}</td>}
                             </tr>
                         </tfoot>
                     </table>
@@ -1592,7 +1601,7 @@ const LoanModule = ({prices}) => {
             </div>
 
             {loanSubTab==='rates' ? <ClientRatesTab config={config}/> : (<>
-            <LoanDashboard loans={loans} prices={prices} calcMetrics={calcMetrics} onTopUp={addTxn} transactions={transactions} onRecordPayment={addTxn}/>
+            <LoanDashboard loans={loans} prices={prices} calcMetrics={calcMetrics} onTopUp={addTxn} transactions={transactions} onRecordPayment={addTxn} onRefresh={fetchSheets}/>
             <div className="flex flex-wrap gap-2 mb-5 justify-between items-center">
                 <div className="flex gap-2 flex-wrap">
                     <Select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="w-auto text-xs px-2 py-1.5"><option value="all">All</option><option value="active">Active</option><option value="at-risk">At Risk</option><option value="matured">Matured</option><option value="repaid">Repaid</option><option value="early-terminated">Early Terminated</option><option value="unsecured">Unsecured</option><option value="open-term">Open Term</option></Select>
