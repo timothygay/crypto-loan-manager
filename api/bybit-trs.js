@@ -58,33 +58,38 @@ module.exports = async function handler(req, res) {
         const serverMs    = await getServerTime();
         const clockOffset = serverMs - Date.now();
 
-        // Query SMA01 subaccount using master key + memberId
-        const paramStr = `memberId=${SMA01_UID}`;
-        const result   = await bybitGet('/v5/asset/asset-overview', paramStr, apiKey, apiSecret, clockOffset);
-
-        // Parse response — result.list is array of account types (UNIFIED, FUND, etc.)
-        const totalNav = parseFloat(result.totalEquity || 0);
-        const accounts = result.list || [];
-
-        // Collect all coin holdings across all account types
-        const coinMap = {};
-        for (const acct of accounts) {
-            const coinDetails = acct.coinDetail || [];
-            for (const cd of coinDetails) {
-                const equity = parseFloat(cd.equity || 0);
-                if (Math.abs(equity) < 0.000001) continue;
-                const coin = cd.coin;
-                if (!coinMap[coin]) coinMap[coin] = { coin, walletBalance: 0, usdValue: 0, unrealisedPnl: 0, availableToWithdraw: 0 };
-                coinMap[coin].walletBalance       += equity;
-                coinMap[coin].usdValue            += parseFloat(cd.equityValue || cd.usdValue || 0);
-                coinMap[coin].unrealisedPnl       += parseFloat(cd.unrealisedPnl || 0);
-                coinMap[coin].availableToWithdraw += parseFloat(cd.availableBalance || 0);
+        // Optional raw dump (auth-gated) to inspect Bybit's real response shapes when debugging.
+        if (req.query.raw === '1') {
+            const out = {};
+            for (const [k, path, ps] of [
+                ['assetOverview', '/v5/asset/asset-overview', `memberId=${SMA01_UID}`],
+                ['coinsBalance',  '/v5/asset/transfer/query-account-coins-balance', `accountType=UNIFIED&memberId=${SMA01_UID}`],
+                ['walletBalance', '/v5/account/wallet-balance', `accountType=UNIFIED`],
+            ]) {
+                try { out[k] = await bybitGet(path, ps, apiKey, apiSecret, clockOffset); }
+                catch (e) { out[k + 'Error'] = e.message; }
             }
+            return res.status(200).json(out);
         }
 
-        const assets = Object.values(coinMap)
-            .filter(c => Math.abs(c.walletBalance) > 0.000001 || c.usdValue > 0.01)
-            .sort((a, b) => b.usdValue - a.usdValue);
+        // NAV — asset-overview's totalEquity is the true sub-account NAV (includes position MTM).
+        const result   = await bybitGet('/v5/asset/asset-overview', `memberId=${SMA01_UID}`, apiKey, apiSecret, clockOffset);
+        const totalNav = parseFloat(result.totalEquity || 0);
+
+        // Per-coin breakdown — asset-overview doesn't return per-coin detail for this sub-account,
+        // so pull the sub-account's coin wallet balances directly. The UI values each coin with
+        // live Bybit prices (BTC/ETH; stablecoins = $1); the residual of NAV vs summed spot value
+        // is shown as "Open Positions (MTM)".
+        let assets = [];
+        try {
+            const cb = await bybitGet('/v5/asset/transfer/query-account-coins-balance', `accountType=UNIFIED&memberId=${SMA01_UID}`, apiKey, apiSecret, clockOffset);
+            assets = (cb.balance || [])
+                .map(b => ({ coin: b.coin, walletBalance: parseFloat(b.walletBalance || 0) }))
+                .filter(a => Math.abs(a.walletBalance) > 0.000001)
+                .sort((a, b) => Math.abs(b.walletBalance) - Math.abs(a.walletBalance));
+        } catch (e) {
+            console.error('coins-balance fetch failed:', e.message);
+        }
 
         res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
         return res.status(200).json({
