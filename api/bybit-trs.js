@@ -58,38 +58,31 @@ module.exports = async function handler(req, res) {
         const serverMs    = await getServerTime();
         const clockOffset = serverMs - Date.now();
 
-        // Optional raw dump (auth-gated) to inspect Bybit's real response shapes when debugging.
-        if (req.query.raw === '1') {
-            const out = {};
-            for (const [k, path, ps] of [
-                ['assetOverview', '/v5/asset/asset-overview', `memberId=${SMA01_UID}`],
-                ['coinsBalance',  '/v5/asset/transfer/query-account-coins-balance', `accountType=UNIFIED&memberId=${SMA01_UID}`],
-                ['walletBalance', '/v5/account/wallet-balance', `accountType=UNIFIED`],
-            ]) {
-                try { out[k] = await bybitGet(path, ps, apiKey, apiSecret, clockOffset); }
-                catch (e) { out[k + 'Error'] = e.message; }
-            }
-            return res.status(200).json(out);
-        }
-
         // NAV — asset-overview's totalEquity is the true sub-account NAV (includes position MTM).
         const result   = await bybitGet('/v5/asset/asset-overview', `memberId=${SMA01_UID}`, apiKey, apiSecret, clockOffset);
         const totalNav = parseFloat(result.totalEquity || 0);
 
-        // Per-coin breakdown — asset-overview doesn't return per-coin detail for this sub-account,
-        // so pull the sub-account's coin wallet balances directly. The UI values each coin with
-        // live Bybit prices (BTC/ETH; stablecoins = $1); the residual of NAV vs summed spot value
-        // is shown as "Open Positions (MTM)".
-        let assets = [];
-        try {
-            const cb = await bybitGet('/v5/asset/transfer/query-account-coins-balance', `accountType=UNIFIED&memberId=${SMA01_UID}`, apiKey, apiSecret, clockOffset);
-            assets = (cb.balance || [])
-                .map(b => ({ coin: b.coin, walletBalance: parseFloat(b.walletBalance || 0) }))
-                .filter(a => Math.abs(a.walletBalance) > 0.000001)
-                .sort((a, b) => Math.abs(b.walletBalance) - Math.abs(a.walletBalance));
-        } catch (e) {
-            console.error('coins-balance fetch failed:', e.message);
+        // Per-coin breakdown — the coin detail is nested at list[].categories[].coinDetail[]
+        // (the old code read list[].coinDetail, one level too shallow, so assets was always
+        // empty). Each entry gives { coin, equity } where equity = the coin's quantity (incl.
+        // any position PnL carried in that coin). The UI values each coin with live Bybit prices
+        // (BTC/ETH; stablecoins = $1); NAV − Σspot is shown as "Open Positions (MTM)".
+        const coinMap = {};
+        for (const acct of (result.list || [])) {
+            const details = [
+                ...((acct.categories || []).flatMap(c => c.coinDetail || [])),
+                ...(acct.coinDetail || []),   // fallback if a future account type is flat
+            ];
+            for (const cd of details) {
+                const q = parseFloat(cd.equity || cd.walletBalance || 0);
+                if (!(Math.abs(q) > 1e-9)) continue;
+                coinMap[cd.coin] = (coinMap[cd.coin] || 0) + q;
+            }
         }
+        const assets = Object.entries(coinMap)
+            .map(([coin, walletBalance]) => ({ coin, walletBalance }))
+            .filter(a => Math.abs(a.walletBalance) > 1e-9)
+            .sort((a, b) => Math.abs(b.walletBalance) - Math.abs(a.walletBalance));
 
         res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
         return res.status(200).json({
