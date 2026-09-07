@@ -6476,8 +6476,25 @@ const TRSModule = ({bybitPrices}) => {
                         </div>
                     </div>
 
-                    {/* Asset breakdown — simplified, USD value from live prices */}
-                    {data.assets && data.assets.length > 0 && (<TRSAssetBreakdown assets={data.assets} totalNav={data.totalNav} bybitPrices={bybitPrices}/>)}
+                    {/* Per sub-account asset breakdowns (falls back to the single account) */}
+                    <div className="flex flex-col gap-5">
+                        {(data.accounts && data.accounts.length ? data.accounts : (data.assets ? [{name:data.subaccount||'SMA01', uid:'', totalNav:data.totalNav, assets:data.assets}] : [])).map(acct => (
+                            <div key={acct.uid||acct.name}>
+                                <div className="flex items-baseline justify-between mb-2 px-1">
+                                    <div className="flex items-baseline gap-2">
+                                        <span className="text-sm font-bold text-slate-200">{acct.name}</span>
+                                        {acct.uid ? <span className="text-xs text-slate-500 mono">UID {acct.uid}</span> : null}
+                                    </div>
+                                    {acct.error ? null : <span className="text-sm font-bold mono text-white">${fmt(acct.totalNav||0,2)}</span>}
+                                </div>
+                                {acct.error
+                                    ? <div className="card px-5 py-3 text-xs text-red-400">Could not load {acct.name}: {acct.error}</div>
+                                    : (acct.assets && acct.assets.length > 0
+                                        ? <TRSAssetBreakdown assets={acct.assets} totalNav={acct.totalNav} bybitPrices={bybitPrices}/>
+                                        : <div className="card px-5 py-3 text-xs text-slate-500">No coin balances for {acct.name}.</div>)}
+                            </div>
+                        ))}
+                    </div>
                 </>
             )}
         </div>
