@@ -798,7 +798,9 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
     const collateralGroups = collateralTypes.map(type => {
         // Exclude unsecured loans from collateral calculations
         const group = activeLoans.filter(l => l.collateralType === type && l.secured !== false && l.secured !== 'false');
-        const totalCollateral = group.reduce((s, l) => s + l.collateralAmount, 0);
+        // Sum in integer satoshis (1e-8) then convert back — plain float summation of BTC
+        // amounts drifts by ~1 satoshi, which mis-renders the 8th dp (e.g. 165.42544359 → 165.42544360).
+        const totalCollateral = group.reduce((s, l) => s + Math.round((l.collateralAmount || 0) * 1e8), 0) / 1e8;
         const price = prices[type] || 0;
         const totalCollVal = totalCollateral * price;
         const totalLoan = group.reduce((s, l) => s + l.loanAmount, 0);
@@ -906,8 +908,11 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
                     {[...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean).length > 1 && (
                         <div className="flex gap-2 mb-3">
                             {[...new Set(activeLoans.map(l=>l.underlying))].filter(Boolean).map(cur=>{
-                                const total = activeLoans.filter(l=>l.underlying===cur).reduce((s,l)=>s+l.loanAmount,0);
                                 const isCryptoCur = ['BTC','ETH'].includes(cur.toUpperCase());
+                                // Crypto totals summed in integer satoshis so the 8-dp figure is exact (no float drift).
+                                const total = isCryptoCur
+                                    ? activeLoans.filter(l=>l.underlying===cur).reduce((s,l)=>s+Math.round((l.loanAmount||0)*1e8),0)/1e8
+                                    : activeLoans.filter(l=>l.underlying===cur).reduce((s,l)=>s+l.loanAmount,0);
                                 const cryptoPrice = isCryptoCur ? (prices[cur] || 0) : 0;
                                 const cryptoUsd   = isCryptoCur && cryptoPrice ? total * cryptoPrice : 0;
                                 return (
