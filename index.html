@@ -1972,7 +1972,14 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
     // Total accumulated underlying per asset across ALL active contracts
     const totalByUnderlying = useMemo(() => {
         const totals = {};
-        activeContracts.forEach(c => {
+        // Desk Accumulated = underlying the desk still holds across LIVE contracts.
+        // Include a contract until it matures/expires — at maturity the underlying is delivered
+        // to the client, so drop it once today > maturityDate. A contract that has fully deployed
+        // its notional (notionalLeft = 0) but has NOT yet matured STILL counts: the desk is
+        // holding that underlying. (Deliberately NOT activeContracts here — that set excludes
+        // fully-invested contracts, which is what undercounted this total.)
+        contracts.forEach(c => {
+            if (c.maturityDate && today > c.maturityDate) return; // matured/expired → delivered, no longer on the desk
             const rows = computeLedger(c, priceHistory);
             const last = rows.filter(r => r.fixingPrice).slice(-1)[0];
             // Group by base asset (BTC or ETH) regardless of quote currency (USDT or USDC)
@@ -1980,7 +1987,7 @@ const TradingDeskWidget = ({contracts, priceHistory, livePrices}) => {
             totals[sym] = (totals[sym] || 0) + (last ? last.totalUnderlying : 0);
         });
         return totals;
-    }, [activeContracts, priceHistory]);
+    }, [contracts, priceHistory, today]);
 
     // Contracts expiring within 14 days + nearest 3 — for upcoming expiry card
     const enrichContract = c => {
