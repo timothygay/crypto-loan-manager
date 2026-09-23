@@ -3167,6 +3167,29 @@ const rowToTrade = (r) => ({
 
 // Helper: convert pair string to Binance symbol e.g. "BTC/USDC" → "BTCUSDC"
 const pairToSymbol = (pair) => { const [b,q]=(pair||'').split('/'); return (b||'')+(q||'USDT'); };
+// The trade's actual END date = the first schedule date whose recorded fixing tripped a KO
+// (null for Active, or for Exercised/Matured which end at maturity with nothing scheduled
+// after). Used to suppress ONLY post-KO "ghost" settlements while still showing the KO
+// settlement itself — the terminal coupon + notional return that must still be confirmed.
+// NOTE: must NOT be based on the last *paid* coupon — a KO landing on a settlement date whose
+// settlement is still unpaid would then be wrongly hidden from the overdue table.
+const fcnKoDate = (trade) => {
+    if (!['Knocked Out','Exercised','Matured'].includes(trade.status)) return null;
+    const sf = trade.settlementFixings || {};
+    const underlyings = trade.underlyings || [];
+    const isStable = !isCrypto(trade.notionalCurrency);
+    for (const {date} of buildFCNSchedule(trade)) {
+        const pm = sf[date];
+        if (!pm || typeof pm !== 'object') continue;
+        const hit = underlyings.some(u => {
+            if (!u.koEnabled) return false;
+            const fp = parseFloat(pm[pairToSymbol(u.pair)] || 0);
+            return fp > 0 && (isStable ? fp > parseFloat(u.koPrice) : fp < parseFloat(u.koPrice));
+        });
+        if (hit) return date;
+    }
+    return null;
+};
 
 // ─── FCN DASHBOARD ────────────────────────────────────────────────────────────
 const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}, onScrollToTrade}) => {
@@ -3196,16 +3219,15 @@ const FCNDashboard = ({trades, prices, onConfirmPayment, fixingPrices={}, onScro
     trades.forEach(trade => {
         if (!['Active','Knocked Out','Exercised','Matured'].includes(trade.status)) return;
         const tradeIsEnded = ['Knocked Out','Exercised','Matured'].includes(trade.status);
-        // For ended trades, find the last paid settlement — any schedule date
-        // after that is a ghost entry (e.g. maturity date after a KO) and must be suppressed.
-        const paidDates = (trade.paidSettlements||[]).slice().sort();
-        const endedOnDate = tradeIsEnded && paidDates.length > 0 ? paidDates[paidDates.length-1] : null;
+        // Suppress ONLY settlements strictly AFTER the KO date (post-KO "ghost" rows, e.g. a
+        // maturity date after a KO). The KO settlement itself — which lands on a settlement
+        // date and carries the final coupon + notional return — stays visible until confirmed.
+        // (Old code keyed off the last PAID coupon, which wrongly hid an unpaid KO settlement.)
+        const koDate = fcnKoDate(trade);
         const sched = buildFCNSchedule(trade);
         sched.forEach(({date,isMaturity}) => {
             if ((trade.paidSettlements||[]).includes(date)) return;
-            // Suppress any unpaid entry for an ended trade that falls after the last paid date.
-            // This catches the maturity-date ghost row for KO'd trades.
-            if (tradeIsEnded && endedOnDate && date > endedOnDate) return;
+            if (koDate && date > koDate) return;
             const coupon = calcFCNCoupon(trade, date);
             const entry = {trade,date,isMaturity,coupon,weekend:isWeekend(date)};
             const isEffectivelyPast = date < today || (date === today && fcnPast4pm);
@@ -3666,21 +3688,8 @@ const FCNOrderCard = ({trade,prices,onEdit,onDelete,onResetStatus,onConfirmPayme
                                 const sf=trade.settlementFixings||{};
                                 const underlyings=trade.underlyings||[];
                                 const isStable=!isCrypto(trade.notionalCurrency);
-                                const tradeEnded=['Knocked Out','Exercised','Matured'].includes(trade.status);
-                                // Find KO date — first date where ANY underlying triggered its own KO
-                                let koDateFound=null;
-                                if(tradeEnded){
-                                    for(const {date} of schedule){
-                                        const pm=sf[date];
-                                        if(!pm||typeof pm!=='object') continue;
-                                        const hit=underlyings.some(u=>{
-                                            if(!u.koEnabled) return false;
-                                            const fp=parseFloat(pm[pairToSymbol(u.pair)]||0);
-                                            return fp>0&&(isStable?fp>parseFloat(u.koPrice):fp<parseFloat(u.koPrice));
-                                        });
-                                        if(hit){koDateFound=date;break;}
-                                    }
-                                }
+                                // KO date via the shared helper (keeps this schedule and the overdue table in agreement).
+                                const koDateFound = fcnKoDate(trade);
                                 return schedule.map(({date,isMaturity},i)=>{
                                     if(koDateFound&&date>koDateFound) return null;
                                     const isPast=date<today,isPaid=paidSettlements.includes(date),weekend=isWeekend(date);
