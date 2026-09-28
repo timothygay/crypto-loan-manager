@@ -6164,7 +6164,7 @@ const AccumulatorModule = ({prices}) => {
 
 // ─── TRS ASSET BREAKDOWN COMPONENT ──────────────────────────────────────────
 const TRSAssetBreakdown = ({assets, totalNav, bybitPrices}) => {
-    const usd=(c,b)=>{const v=parseFloat(b)||0;return c==='BTC'?v*(bybitPrices.BTC||0):c==='ETH'?v*(bybitPrices.ETH||0):['USDT','USDC','BUSD','DAI'].includes(c)?v:0;};
+    const usd=(c,b)=>{const v=parseFloat(b)||0;return c==='BTC'?v*(bybitPrices.BTC||0):c==='ETH'?v*(bybitPrices.ETH||0):c==='ADA'?v*(bybitPrices.ADA||0):['USDT','USDC','BUSD','DAI'].includes(c)?v:0;};
     const pill=(c)=>c==='BTC'?'bg-orange-500/15 border-orange-500/30 text-orange-400':c==='ETH'?'bg-purple-500/15 border-purple-500/30 text-purple-400':['USDT','USDC','BUSD','DAI'].includes(c)?'bg-green-500/15 border-green-500/30 text-green-400':'bg-cyan-500/15 border-cyan-500/30 text-cyan-400';
     const barcl=(c)=>c==='BTC'?'bg-orange-500':c==='ETH'?'bg-purple-500':['USDT','USDC','BUSD','DAI'].includes(c)?'bg-green-500':'bg-cyan-500';
     const rows=assets.map(a=>({...a,u:usd(a.coin,a.walletBalance)})).sort((a,b)=>b.u-a.u);
@@ -6287,6 +6287,7 @@ const TRSModule = ({bybitPrices}) => {
         const bal = parseFloat(walletBalance)||0;
         if (coin==='BTC') return bal*(bybitPrices.BTC||0);
         if (coin==='ETH') return bal*(bybitPrices.ETH||0);
+        if (coin==='ADA') return bal*(bybitPrices.ADA||0);
         if (['USDT','USDC','BUSD','DAI'].includes(coin)) return bal;
         return 0;
     };
@@ -8233,7 +8234,7 @@ const App = () => {
     }, [isLight]);
 
     // Bybit prices — Loans + SSPS only (BTC, ETH)
-    const [bybitPrices,setBybitPrices]=useState({BTC:0,ETH:0});
+    const [bybitPrices,setBybitPrices]=useState({BTC:0,ETH:0,ADA:0});
     const [bybitUpdate,setBybitUpdate]=useState(null);
     // Binance prices — FCN + Accumulator only (BTC, ETH, ADA, XRP)
     const [binancePrices,setBinancePrices]=useState({BTC:0,ETH:0,ADA:0,XRP:0});
@@ -8244,15 +8245,17 @@ const App = () => {
 
     const fetchBybitPrices=useCallback(async()=>{
         try {
-            const [btc,eth,btcUsdc,ethUsdc]=await Promise.allSettled([
+            const [btc,eth,ada,btcUsdc,ethUsdc]=await Promise.allSettled([
                 fetchBybitLive('BTCUSDT'),
                 fetchBybitLive('ETHUSDT'),
+                fetchBybitLive('ADAUSDT'),
                 fetchBybitLive('BTCUSDC'),
                 fetchBybitLive('ETHUSDC'),
             ]);
             setBybitPrices(p=>({
                 BTC:       btc.status==='fulfilled'?btc.value:p.BTC,
                 ETH:       eth.status==='fulfilled'?eth.value:p.ETH,
+                ADA:       ada.status==='fulfilled'?ada.value:p.ADA||0,
                 'BTC/USDC':btcUsdc.status==='fulfilled'?btcUsdc.value:p['BTC/USDC']||0,
                 'ETH/USDC':ethUsdc.status==='fulfilled'?ethUsdc.value:p['ETH/USDC']||0,
             }));
