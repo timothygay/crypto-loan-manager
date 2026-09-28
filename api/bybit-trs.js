@@ -8,9 +8,17 @@ const RECV_WINDOW = '5000';
 const SMA01_UID   = '555127100';
 // Sub-accounts to report. One master API key reads each by memberId — no extra keys.
 const SUBACCOUNTS = [
-    { name: 'SMA01',     uid: '555127100' },
-    { name: 'SMA01_BTC', uid: '586292192' },
-    { name: 'SMA01_ETH', uid: '586292350' },
+    { name: 'SMA01',             uid: '555127100' },
+    { name: 'SMA01_BTC',         uid: '586292192' },
+    { name: 'SMA01_ETH',         uid: '586292350' },
+    { name: 'SMA01_ADA',         uid: '588395771' },
+    // SMA_Speqtra_L2* are "Under Review" on Bybit (0 USD); they return empty/error until
+    // Bybit finishes linking them, then populate automatically. Each account is fetched
+    // independently (Promise.allSettled) so a not-yet-linked one never breaks the others.
+    { name: 'SMA_Speqtra_L2',     uid: '590542903' },
+    { name: 'SMA_Speqtra_L2_BTC', uid: '590542967' },
+    { name: 'SMA_Speqtra_L2_ETH', uid: '590543157' },
+    { name: 'SMA_Speqtra_L2_ADA', uid: '590543281' },
 ];
 
 function sign(secret, payload) {
