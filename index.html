@@ -6190,6 +6190,27 @@ const TRSAssetBreakdown = ({assets, totalNav, bybitPrices}) => {
 //   fixed_amount = fee (in Notional Amount Ccy) booked on Value Datetime → PnL exposure
 // ═══════════════════════════════════════════════════════════════════════════════
 const TRSTradingDashboard = ({trsLiab, bybitPrices={}}) => {
+    // Acknowledged overdue actions — SHARED across users via a "TRS_Ack" tab on the Loans
+    // Google Sheet (col A = "ref|action|date"), so once anyone ticks one it's gone for all.
+    // (Hooks must run before any early return.)
+    const [acked, setAcked] = useState(()=>new Set());
+    useEffect(()=>{
+        (async()=>{
+            try {
+                const r = await ghfetch('/api/sheet/loans?action=read&sheetName=TRS_Ack').then(x=>x.json());
+                if (r && r.success && Array.isArray(r.values)) setAcked(new Set(r.values.map(row=>String(row[0]||'')).filter(Boolean)));
+            } catch(e) { /* tab absent / no acks yet → treat as none */ }
+        })();
+    },[]);
+    const ackKey=(e)=>`${e.ref}|${e.action}|${e.date}`;
+    const ackEvent=async(e)=>{
+        if (!canWrite()) { alert('Read-only access — you cannot acknowledge.'); return; }
+        const id=ackKey(e); const actor=(window.CPB_USER||{}).email||'';
+        setAcked(prev=>{const n=new Set(prev); n.add(id); return n;});   // optimistic — row disappears immediately
+        try {
+            await ghfetch(`/api/sheet/loans?action=append&sheetName=TRS_Ack&values=${encodeURIComponent(JSON.stringify([id, actor, new Date().toISOString()]))}`);
+        } catch(err) { alert('Could not save acknowledgement (is the "TRS_Ack" tab present in the Loans sheet?): '+err.message); }
+    };
     if (!trsLiab || !trsLiab.rows || !trsLiab.rows.length) return null;
     const col=(r,n)=>r[n]!==undefined?r[n]:'';
     const toISO=(s)=>{s=String(s||'').trim();if(!s)return null;const m=s.match(/^(\d{4}-\d{2}-\d{2})/);if(m)return m[1];const d=new Date(s);return isNaN(d.getTime())?null:d.toISOString().slice(0,10);};
@@ -6216,7 +6237,8 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}}) => {
     const events=[];
     trades.forEach(t=>{const add=(date,action)=>{if(date&&t.notional>0)events.push({date,action,ref:t.ref,client:t.client,amount:t.notional,ccy:t.ccy,days:daysUntil(date)});};add(t.eff,'DEPOSIT');add(t.finalObs,'WITHDRAW');add(t.maturity,'RETURN');});
     const OVERDUE_BACK=30; // show past-due actions for up to 30 days back, then drop (avoids ancient already-done rows)
-    const timeline=events.filter(e=>e.days>=-OVERDUE_BACK).sort((a,b)=>a.date.localeCompare(b.date));
+    // Timeline = overdue (last 30d) + upcoming within 7 days only; acknowledged overdue rows are hidden.
+    const timeline=events.filter(e=>e.days>=-OVERDUE_BACK && e.days<=7 && !acked.has(ackKey(e))).sort((a,b)=>a.date.localeCompare(b.date));
     const within7=events.filter(e=>e.days>=0&&e.days<=7);
     const grp=(action)=>{const m={};within7.filter(e=>e.action===action).forEach(e=>{const k=e.ccy+'|'+e.date;if(!m[k])m[k]={ccy:e.ccy,date:e.date,amount:0};m[k].amount+=e.amount;});return Object.values(m).sort((a,b)=>a.date.localeCompare(b.date));};
     const deposits=grp('DEPOSIT'),withdraws=grp('WITHDRAW'),returns=grp('RETURN');
@@ -6255,7 +6277,7 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}}) => {
                 {timeline.length===0
                     ? <div className="px-4 py-3 text-xs text-slate-500">No upcoming TRS actions.</div>
                     : (<div className="overflow-x-auto scrollbar-hide"><table className="w-full text-xs">
-                        <thead><tr className="border-b border-slate-800 bg-slate-900/40 text-slate-500"><th className="text-left px-4 py-2 font-medium">Date</th><th className="text-left px-4 py-2 font-medium">Days</th><th className="text-left px-4 py-2 font-medium">Action</th><th className="text-left px-4 py-2 font-medium">Client</th><th className="text-left px-4 py-2 font-medium">Ref</th><th className="text-right px-4 py-2 font-medium">Amount</th><th className="text-left px-4 py-2 font-medium">Asset</th></tr></thead>
+                        <thead><tr className="border-b border-slate-800 bg-slate-900/40 text-slate-500"><th className="text-left px-4 py-2 font-medium">Date</th><th className="text-left px-4 py-2 font-medium">Days</th><th className="text-left px-4 py-2 font-medium">Action</th><th className="text-left px-4 py-2 font-medium">Client</th><th className="text-left px-4 py-2 font-medium">Ref</th><th className="text-right px-4 py-2 font-medium">Amount</th><th className="text-left px-4 py-2 font-medium">Asset</th><th className="text-right px-4 py-2 font-medium"></th></tr></thead>
                         <tbody>{timeline.map((e,i)=>(<tr key={i} className={`border-b border-slate-800/50 ${rowCls(e.days)}`}>
                             <td className="px-4 py-2 mono text-slate-300">{e.date}</td>
                             <td className={`px-4 py-2 mono font-bold ${daysCls(e.days)}`}>{e.days<0?`${-e.days}d ago`:e.days===0?'today':`${e.days}d`}</td>
@@ -6264,6 +6286,7 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}}) => {
                             <td className="px-4 py-2 mono text-slate-500">{e.ref||'—'}</td>
                             <td className="px-4 py-2 text-right mono text-white">{fmtAmt(e.amount,e.ccy)}</td>
                             <td className="px-4 py-2"><span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${assetTag(e.ccy)}`}>{e.ccy}</span></td>
+                            <td className="px-4 py-2 text-right">{e.days<0 && canWrite() ? <button onClick={()=>ackEvent(e)} className="text-[11px] font-semibold px-2 py-0.5 rounded border border-red-500/40 text-red-300 hover:bg-red-500/15">✓ Acknowledge</button> : null}</td>
                           </tr>))}</tbody>
                     </table></div>)}
             </div>
