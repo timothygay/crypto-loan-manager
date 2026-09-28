@@ -76,6 +76,67 @@ function parseOverview(result) {
     return { totalNav, assets };
 }
 
+// ── READ-ONLY PROBE: subaccount fund movements ────────────────────────────────
+// Diagnostic for the TRS "fund movements" feature. Confirms the master key can read
+// Bybit's transfer/deposit history and shows the shape of the data before we build a
+// persistent capture. Read-only — no transfers are ever initiated here.
+//   • Universal transfers (master↔sub, sub↔sub) — the real in/out ledger. 7-day window.
+//   • Sub-member on-chain deposits — external top-ups straight into a sub. 30-day window.
+// Each call is wrapped so a missing key-permission surfaces as an error string (likely a
+// permission that must be enabled on the key) instead of failing the whole probe.
+async function probeMovements(apiKey, apiSecret, clockOffset) {
+    const now = Date.now();
+    const sevenDaysAgo = now - 7 * 24 * 3600 * 1000;
+    const uidToName = Object.fromEntries(SUBACCOUNTS.map(s => [String(s.uid), s.name]));
+    const subUids = new Set(SUBACCOUNTS.map(s => String(s.uid)));
+    const label = (uid) => uidToName[String(uid)] || (uid ? 'other/master(' + uid + ')' : '—');
+
+    const out = { window: { transfersFrom: new Date(sevenDaysAgo).toISOString(), to: new Date(now).toISOString() },
+                  universalTransfers: [], subDeposits: {}, errors: {} };
+
+    // 1) Universal transfers (master-level; returns both directions, we tag the strategy ones)
+    try {
+        const ps = `limit=50&startTime=${sevenDaysAgo}&endTime=${now}`;
+        const r = await bybitGet('/v5/asset/transfer/query-universal-transfer-list', ps, apiKey, apiSecret, clockOffset);
+        const list = r.list || r.rows || [];
+        out.universalTransfers = list.map(t => ({
+            transferId: t.transferId,
+            coin: t.coin,
+            amount: t.amount,
+            status: t.status,
+            timestamp: t.timestamp,
+            when: t.timestamp ? new Date(parseInt(t.timestamp, 10)).toISOString() : null,
+            fromMemberId: t.fromMemberId,
+            toMemberId: t.toMemberId,
+            from: label(t.fromMemberId),
+            to: label(t.toMemberId),
+            fromAccountType: t.fromAccountType,
+            toAccountType: t.toAccountType,
+            // true if either side is one of our reserved strategy subs
+            strategyRelated: subUids.has(String(t.fromMemberId)) || subUids.has(String(t.toMemberId)),
+        }));
+        out.universalTransferCount = out.universalTransfers.length;
+        out.strategyTransferCount = out.universalTransfers.filter(t => t.strategyRelated).length;
+    } catch (e) { out.errors.universalTransfers = e.message; }
+
+    // 2) Sub-member on-chain deposits, per reserved sub (default: last 30 days)
+    const depSettled = await Promise.allSettled(
+        SUBACCOUNTS.map(s => bybitGet('/v5/asset/deposit/query-sub-member-record', `subMemberId=${s.uid}&limit=50`, apiKey, apiSecret, clockOffset))
+    );
+    SUBACCOUNTS.forEach((s, i) => {
+        const r = depSettled[i];
+        if (r.status !== 'fulfilled') { out.errors['subDeposits:' + s.name] = (r.reason && r.reason.message) || 'fetch failed'; return; }
+        const rows = r.value.rows || r.value.list || [];
+        out.subDeposits[s.name] = rows.map(d => ({
+            coin: d.coin, chain: d.chain, amount: d.amount, status: d.status,
+            txID: d.txID, when: d.successAt ? new Date(parseInt(d.successAt, 10)).toISOString() : null,
+            depositType: d.depositType,
+        }));
+    });
+
+    return out;
+}
+
 const { sessionUser } = require('../lib/guard');
 module.exports = async function handler(req, res) {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -95,6 +156,13 @@ module.exports = async function handler(req, res) {
         // Sync clock with Bybit server (same as Python script)
         const serverMs    = await getServerTime();
         const clockOffset = serverMs - Date.now();
+
+        // Read-only diagnostic: ?probe=movements → transfer/deposit history for the strategy subs.
+        if (req.query.probe === 'movements') {
+            const probe = await probeMovements(apiKey, apiSecret, clockOffset);
+            res.setHeader('Cache-Control', 'no-store');
+            return res.status(200).json({ probe: 'movements', fetchedAt: new Date().toISOString(), ...probe });
+        }
 
         // Fetch every configured sub-account independently (one master key reads all by memberId).
         // asset-overview's totalEquity is each account's true NAV (includes position MTM); the
