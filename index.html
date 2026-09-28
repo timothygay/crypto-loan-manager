@@ -6197,8 +6197,21 @@ const TRSModule = ({bybitPrices}) => {
     const [editingMS, setEditingMS]     = useState(false);
     const [msEditVal, setMsEditVal]     = useState('');
     const [savingConfig, setSavingConfig] = useState(false);
+    const [trsLiab, setTrsLiab]         = useState(null);   // {columns, rows, capturedAt} — TRS Liabilities table from the treasury monitor
+    const [trsLiabErr, setTrsLiabErr]   = useState(null);
 
     useEffect(()=>{ try{ localStorage.setItem('cpb_trs_config',JSON.stringify(trsConfig)); }catch{} },[trsConfig]);
+
+    // TRS Liabilities table — relayed from the treasury monitor (getTrsView), read-only.
+    const fetchTrsLiab = async () => {
+        try {
+            const res  = await fetch('/api/dci-penguin?kind=trs');
+            const json = await res.json();
+            if (!res.ok || json.success===false) throw new Error(json.error || 'relay error');
+            setTrsLiab({columns:json.columns||[], rows:json.rows||[], capturedAt:json.capturedAt||null, unparsed:json.unparsed||0, note:json.note||null});
+            setTrsLiabErr(null);
+        } catch(e) { setTrsLiabErr(e.message); }
+    };
 
     const fetchTRS = async () => {
         setLoading(true); setError(null);
@@ -6229,7 +6242,7 @@ const TRSModule = ({bybitPrices}) => {
         } catch(e) { console.error('TRS Sheets fetch failed:',e.message); }
     };
 
-    useEffect(()=>{ fetchTRS(); const t=setInterval(fetchTRS,60000); return()=>clearInterval(t); },[]);
+    useEffect(()=>{ fetchTRS(); fetchTrsLiab(); const t=setInterval(()=>{fetchTRS();fetchTrsLiab();},60000); return()=>clearInterval(t); },[]);
     useEffect(()=>{ if(trsConfig.scriptUrl){fetchSheetsData();const t=setInterval(fetchSheetsData,60000);return()=>clearInterval(t);} },[trsConfig.scriptUrl]);
 
     const saveAlertConfig = async () => {
@@ -6517,6 +6530,25 @@ const TRSModule = ({bybitPrices}) => {
                                         : <div className="card px-5 py-3 text-xs text-slate-500">No coin balances for {acct.name}.</div>)}
                             </div>
                         ))}
+                    </div>
+
+                    {/* TRS Liabilities — mirrored from the treasury monitor's Liabilities tab (getTrsView) */}
+                    <div className="card overflow-hidden mt-5">
+                        <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between gap-2 flex-wrap">
+                            <p className="text-sm font-semibold text-slate-300">TRS Liabilities <span className="text-xs text-slate-500 font-normal">· from Treasury Monitor</span></p>
+                            <p className="text-xs text-slate-500">{trsLiab&&trsLiab.capturedAt?`captured ${new Date(trsLiab.capturedAt).toLocaleString('en-SG',{timeZone:'Asia/Singapore'})} SGT`:''}</p>
+                        </div>
+                        {trsLiabErr
+                            ? <div className="px-5 py-3 text-xs text-red-400">Could not load TRS liabilities: {trsLiabErr}</div>
+                            : !trsLiab
+                                ? <div className="px-5 py-3 text-xs text-slate-500">Loading…</div>
+                                : trsLiab.rows.length===0
+                                    ? <div className="px-5 py-3 text-xs text-slate-500">No TRS liabilities captured{trsLiab.note?` — ${trsLiab.note}`:''}.</div>
+                                    : (<div className="overflow-x-auto scrollbar-hide"><table className="w-full text-xs whitespace-nowrap">
+                                        <thead><tr className="border-b border-slate-800 bg-slate-900/40 text-slate-400">{trsLiab.columns.map(c=>(<th key={c} className="text-left px-3 py-2 font-medium">{c}</th>))}</tr></thead>
+                                        <tbody>{trsLiab.rows.map((r,i)=>(<tr key={i} className={`border-b border-slate-800/50 ${i%2===1?'bg-slate-900/20':''}`}>{trsLiab.columns.map(c=>(<td key={c} className="px-3 py-2 mono text-slate-300">{r[c]||'—'}</td>))}</tr>))}</tbody>
+                                    </table></div>)}
+                        {trsLiab&&trsLiab.unparsed>0?<div className="px-5 py-2 text-[10px] text-amber-500/70">{trsLiab.unparsed} row(s) had an unparseable economics blob — shown with blanks.</div>:null}
                     </div>
                 </>
             )}

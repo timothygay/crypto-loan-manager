@@ -66,6 +66,38 @@ export default async function handler(req, res) {
         }
     }
 
+    // ── TRS Liabilities table — relayed from the treasury monitor ──
+    // Returns getTrsView() (the 16-column TRS_TRANSACTIONS projection shown on the
+    // treasury Liabilities tab). Relayed for the same reason as the DCI list below:
+    // the secret stays server-side; the browser never sees it.
+    if (req.query.kind === "trs") {
+        const trsSecret = process.env.MONITOR_RELAY_SECRET;
+        if (!trsSecret) {
+            return res.status(500).json({ success: false, error: "MONITOR_RELAY_SECRET not configured" });
+        }
+        try {
+            const r = await fetch(`${MONITOR_URL}/api/cron/trs-view`, {
+                headers: { Authorization: `Bearer ${trsSecret}` },
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || !d.ok) {
+                return res.status(502).json({ success: false, error: `relay ${r.status}: ${d.error || "unknown"}` });
+            }
+            res.setHeader("Cache-Control", "no-store");
+            return res.status(200).json({
+                success: true,
+                columns: d.columns || [],
+                rows: d.rows || [],
+                capturedAt: d.capturedAt || null,
+                unparsed: d.unparsed || 0,
+                note: d.note || null,
+            });
+        } catch (err) {
+            console.error("TRS relay error:", err);
+            return res.status(500).json({ success: false, error: err.message });
+        }
+    }
+
     // ── Default: DCI APR relay ──
     const secret = process.env.MONITOR_RELAY_SECRET;
     if (!secret) {
