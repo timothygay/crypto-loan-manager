@@ -430,6 +430,24 @@ const fetchBinanceFixing = async (symbol, dateStr) => {
     return price;
 };
 
+// Derived FCN fixings — some pairs are computed from two Binance indices rather than
+// fetched directly. HYPE/USDC = HYPEUSDT / USDCUSDT (per termsheet), which matches how the
+// Central Pricing Database stores BINANCE_HYPEUSDC. The division uses full-precision index
+// values before any rounding, so USDCUSDT's ~1.0002 deviation is preserved.
+const FCN_DERIVED_SYMBOLS = { HYPEUSDC: ['HYPEUSDT', 'USDCUSDT'] };
+const fetchBinanceFixingResolved = async (symbol, dateStr) => {
+    const parts = FCN_DERIVED_SYMBOLS[symbol];
+    if (parts) {
+        const [num, den] = await Promise.all([
+            fetchBinanceFixing(parts[0], dateStr),
+            fetchBinanceFixing(parts[1], dateStr),
+        ]);
+        if (!den) throw new Error(`Zero denominator (${parts[1]}) deriving ${symbol} ${dateStr}`);
+        return num / den;
+    }
+    return fetchBinanceFixing(symbol, dateStr);
+};
+
 // Backfill: walk every calendar day from fromDate up to (not including) today,
 
 // fetch both BTC and ETH 08:00 UTC opens from Bybit for missing entries.
@@ -531,6 +549,10 @@ const PriceTicker = ({bybitPrices, binancePrices, bybitUpdate, binanceUpdate, de
         {sym:'XRP', name:'Ripple', stamp:binanceUpdate, venues:[
             {label:'Binance·USDT', val:binancePrices['XRP'],         always:true},
             {label:'Binance·USDC', val:binancePrices['XRP/USDC']},
+        ]},
+        {sym:'HYPE', name:'Hyperliquid', stamp:binanceUpdate, venues:[
+            {label:'Binance·USDT', val:binancePrices['HYPE'],        always:true},
+            {label:'Binance·USDC', val:binancePrices['HYPE/USDC']},
         ]},
     ];
     return (
@@ -2956,8 +2978,8 @@ const SSPSFormModal = ({onSave, onClose}) => {
 // FCN MODULE — Fixed Coupon Note
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const FCN_CURRENCIES = ['BTC','ETH','ADA','XRP','USDT','USDC'];
-const FCN_CRYPTO = ['BTC','ETH','ADA','XRP'];
+const FCN_CURRENCIES = ['BTC','ETH','ADA','XRP','HYPE','USDT','USDC'];
+const FCN_CRYPTO = ['BTC','ETH','ADA','XRP','HYPE'];
 const FCN_STABLE = ['USDT','USDC'];
 const isCrypto = (ccy) => FCN_CRYPTO.includes(ccy);
 
@@ -4430,7 +4452,7 @@ const FCNModule = ({prices}) => {
                 if(fixingPrices[dashKey]){
                     freshPrices[dashKey]=fixingPrices[dashKey];
                 } else {
-                    const p=await fetchBinanceFixing(sym,date);
+                    const p=await fetchBinanceFixingResolved(sym,date);
                     const price=p.toFixed(2);
                     freshPrices[dashKey]=price;
                     setFixingPrices(prev=>({...prev,[dashKey]:price}));
@@ -5405,8 +5427,8 @@ const AccumulatorFormModal = ({trade, onSave, onClose}) => {
     const feeUnderlying = form.upfrontFeeUnderlying || form.notionalCurrency;
     const upfrontAmount = (() => {
         if (!notional || !upfrontFee) return 0;
-        const notionalIsCrypto = ['BTC','ETH','ADA','XRP'].includes(form.notionalCurrency);
-        const feeIsCrypto = ['BTC','ETH','ADA','XRP'].includes(feeUnderlying);
+        const notionalIsCrypto = isCrypto(form.notionalCurrency);
+        const feeIsCrypto = isCrypto(feeUnderlying);
         // Same currency — straightforward
         if (feeUnderlying === form.notionalCurrency) return notional * upfrontFee / 100;
         // Notional is crypto, fee in stablecoin → multiply by spot ref
@@ -8382,7 +8404,7 @@ const App = () => {
     const [bybitPrices,setBybitPrices]=useState({BTC:0,ETH:0,ADA:0});
     const [bybitUpdate,setBybitUpdate]=useState(null);
     // Binance prices — FCN + Accumulator only (BTC, ETH, ADA, XRP)
-    const [binancePrices,setBinancePrices]=useState({BTC:0,ETH:0,ADA:0,XRP:0});
+    const [binancePrices,setBinancePrices]=useState({BTC:0,ETH:0,ADA:0,XRP:0,HYPE:0});
     const [binanceUpdate,setBinanceUpdate]=useState(null);
     // Deribit index prices — live settlement reference for DCI
     const [deribitPrices,setDeribitPrices]=useState({BTC:null,ETH:null});
@@ -8410,7 +8432,7 @@ const App = () => {
 
     const fetchBinancePrices=useCallback(async()=>{
         try {
-            const [btc,eth,ada,xrp,btcUsdc,ethUsdc,adaUsdc,xrpUsdc]=await Promise.allSettled([
+            const [btc,eth,ada,xrp,btcUsdc,ethUsdc,adaUsdc,xrpUsdc,hype,usdcUsdt]=await Promise.allSettled([
                 fetchBinanceLive('BTCUSDT'),
                 fetchBinanceLive('ETHUSDT'),
                 fetchBinanceLive('ADAUSDT'),
@@ -8419,17 +8441,24 @@ const App = () => {
                 fetchBinanceLive('ETHUSDC'),
                 fetchBinanceLive('ADAUSDC'),
                 fetchBinanceLive('XRPUSDC'),
+                fetchBinanceLive('HYPEUSDT'),
+                fetchBinanceLive('USDCUSDT'),
             ]);
+            // HYPE/USDC is DERIVED (HYPEUSDT / USDCUSDT) to match the termsheet + Central DB.
+            const hypeVal=hype.status==='fulfilled'?hype.value:0;
+            const usdcRate=usdcUsdt.status==='fulfilled'?usdcUsdt.value:0;
             setBinancePrices(p=>({
                 BTC:btc.status==='fulfilled'?btc.value:p.BTC,
                 ETH:eth.status==='fulfilled'?eth.value:p.ETH,
                 ADA:ada.status==='fulfilled'?ada.value:p.ADA,
                 XRP:xrp.status==='fulfilled'?xrp.value:p.XRP,
+                HYPE:hypeVal||p.HYPE||0,
                 // USDC variants — keyed as "BTC/USDC" so lookups can use the full pair
                 'BTC/USDC':btcUsdc.status==='fulfilled'?btcUsdc.value:p['BTC/USDC']||0,
                 'ETH/USDC':ethUsdc.status==='fulfilled'?ethUsdc.value:p['ETH/USDC']||0,
                 'ADA/USDC':adaUsdc.status==='fulfilled'?adaUsdc.value:p['ADA/USDC']||0,
                 'XRP/USDC':xrpUsdc.status==='fulfilled'?xrpUsdc.value:p['XRP/USDC']||0,
+                'HYPE/USDC':(hypeVal&&usdcRate)?hypeVal/usdcRate:(p['HYPE/USDC']||0),
             }));
             setBinanceUpdate(new Date());
         } catch(e){console.error('Binance price error',e);}

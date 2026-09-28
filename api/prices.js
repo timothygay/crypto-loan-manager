@@ -52,10 +52,17 @@ export default async function handler(req, res) {
                 triedSources: result.tried
             });
         }
+        // Per-symbol decimal precision. Default 2dp keeps every existing symbol
+        // byte-for-byte identical. USDCUSDT lives near 1.0000 — 2dp would flatten it
+        // to "1.00" and destroy the HYPE/USDC derivation (HYPEUSDT / USDCUSDT), so it
+        // (and HYPEUSDT) are returned at higher precision. Consumers parseFloat() the
+        // value, so a longer decimal string is harmless for existing callers.
+        const PRICE_DP = { USDCUSDT: 6, HYPEUSDT: 4 };
+        const dp = PRICE_DP[sym] !== undefined ? PRICE_DP[sym] : 2;
         return res.status(200).json({
             success: true,
             exchange: exc, symbol: sym, date,
-            price: result.price.toFixed(2),
+            price: result.price.toFixed(dp),
             source: result.source,
         });
 
