@@ -6239,7 +6239,10 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}}) => {
     const num=(s)=>{const v=parseFloat(String(s==null?'':s).replace(/,/g,''));return isNaN(v)?0:v;};
     const isCC=(c)=>['BTC','ETH','ADA'].includes((c||'').toUpperCase());
     const pxOf=(c)=>{c=(c||'').toUpperCase();if(c==='BTC')return bybitPrices.BTC||0;if(c==='ETH')return bybitPrices.ETH||0;if(c==='ADA')return bybitPrices.ADA||0;if(['USDT','USDC','BUSD','DAI'].includes(c))return 1;return 0;};
-    const fmtAmt=(v,c)=>isCC(c)?(Math.floor(v*1e8)/1e8).toFixed(8):fmt(v,2);
+    // Round to the nearest satoshi (not floor): these are individual source notionals, and
+    // e.g. 0.53323998*1e8 = 53323997.9999999 in IEEE-754, so flooring would display one satoshi
+    // short (0.53323997). Round reproduces the source value exactly and is accurate for sums too.
+    const fmtAmt=(v,c)=>isCC(c)?(Math.round(v*1e8)/1e8).toFixed(8):fmt(v,2);
     const nowSGT=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Singapore'}));
     const todayISO=`${nowSGT.getFullYear()}-${String(nowSGT.getMonth()+1).padStart(2,'0')}-${String(nowSGT.getDate()).padStart(2,'0')}`;
     const daysUntil=(iso)=>Math.round((Date.parse(iso)-Date.parse(todayISO))/86400000);
