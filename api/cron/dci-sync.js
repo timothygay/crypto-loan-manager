@@ -99,8 +99,23 @@ module.exports = async (req, res) => {
         const rows = active.map(o => mapRow(o, uploadedAt));
 
         if (dry) {
+            // Diagnostic breakdown: how many HYDI in the snapshot, how many active (not matured),
+            // and — for each active row — whether the UI would hide it (blank Product or Bid IV).
+            const hydi = payload.filter(o => String(o.txnFormType || '').toUpperCase() === 'HYDI');
+            const detail = active.map(o => {
+                const opt = (o.product && o.product.option) || {};
+                const pname = o.product && o.product.product_name;
+                const product = s(opt.instrument_name || pname), bidIv = s(opt.bid_iv);
+                return { txnId: s(o.transaction_id), client: s(o.client_name),
+                         maturity: dt(o.maturity_datetime), orderStatus: s(o.order_status),
+                         product, bidIv, hiddenInUI: (product.trim() === '' || bidIv.trim() === '') };
+            });
             return res.status(200).json({ ok: true, dry: true, snapshotAt: snap[0].captured_at,
-                activeRows: rows.length, sample: rows.slice(0, 3) });
+                totalInSnapshot: payload.length, hydiTotal: hydi.length,
+                hydiMaturedExcluded: hydi.length - active.length, activeRows: rows.length,
+                wouldHideInUI: detail.filter(d => d.hiddenInUI).length,
+                hiddenTxns: detail.filter(d => d.hiddenInUI),
+                allActive: detail });
         }
 
         const gasRes = await fetch(`${gasUrl}?action=appendDciActive`, {
