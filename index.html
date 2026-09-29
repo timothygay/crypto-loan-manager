@@ -6359,6 +6359,7 @@ const TRSModule = ({bybitPrices}) => {
     const [navHistory, setNavHistory]   = useState([]);
     const [dailyHistory, setDailyHistory] = useState([]);
     const [movements, setMovements]     = useState([]);   // fund movements in/out of strategy subs
+    const [mvBusy, setMvBusy]           = useState(false); // on-demand movements capture in progress
     const [showConfig, setShowConfig]   = useState(false);
     const [editingMS, setEditingMS]     = useState(false);
     const [msEditVal, setMsEditVal]     = useState('');
@@ -6407,6 +6408,20 @@ const TRSModule = ({bybitPrices}) => {
                 if (row) setMonthStart({yearMonth:row[0], nav:parseFloat(row[1]), manual:row[2]==='YES'});
             }
         } catch(e) { console.error('TRS Sheets fetch failed:',e.message); }
+    };
+
+    // On-demand: capture movements now (Bybit → sheet) then show the fresh rows. Wired to Refresh.
+    const refreshMovements = async () => {
+        if (!trsConfig.scriptUrl || mvBusy) return;
+        setMvBusy(true);
+        try {
+            const res  = await ghfetch(`${trsConfig.scriptUrl}?action=captureMovements`);
+            const json = await res.json();
+            const d    = json.data || json;
+            const rows = d.values || [];
+            setMovements(rows.map(r=>({when:r[0], transferId:r[1], coin:r[2], amount:parseFloat(r[3]), direction:r[4], sub:r[5], counterparty:r[6], from:r[7], to:r[8], status:r[11]})));
+        } catch(e) { console.error('TRS movements capture failed:', e.message); }
+        setMvBusy(false);
     };
 
     useEffect(()=>{ fetchTRS(); fetchTrsLiab(); const t=setInterval(()=>{fetchTRS();fetchTrsLiab();},60000); return()=>clearInterval(t); },[]);
@@ -6513,8 +6528,8 @@ const TRSModule = ({bybitPrices}) => {
                 </div>
                 <div className="flex gap-2">
                     <button onClick={()=>setShowConfig(!showConfig)} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5"><Icon.Settings/> Config</button>
-                    <button onClick={fetchTRS} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
-                        <Icon.Refresh spin={loading}/> {loading?'Refreshing…':'Refresh'}
+                    <button onClick={()=>{fetchTRS();fetchTrsLiab();refreshMovements();}} disabled={loading} className="btn-secondary px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5">
+                        <Icon.Refresh spin={loading||mvBusy}/> {loading?'Refreshing…':'Refresh'}
                     </button>
                 </div>
             </div>
@@ -6725,7 +6740,10 @@ const TRSModule = ({bybitPrices}) => {
                     <div className="card overflow-hidden mt-5">
                         <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between gap-2 flex-wrap">
                             <p className="text-sm font-semibold text-slate-300">Fund Movements <span className="text-xs text-slate-500 font-normal">· transfers in/out of strategy subaccounts</span></p>
-                            <p className="text-xs text-slate-500">{movements.length} record{movements.length===1?'':'s'}</p>
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-slate-500">{movements.length} record{movements.length===1?'':'s'}</span>
+                                {trsConfig.scriptUrl && <button onClick={refreshMovements} disabled={mvBusy} className="btn-secondary px-2.5 py-1 rounded-lg text-xs flex items-center gap-1.5"><Icon.Refresh spin={mvBusy}/> {mvBusy?'Checking…':'Check now'}</button>}
+                            </div>
                         </div>
                         {!trsConfig.scriptUrl
                             ? <div className="px-5 py-3 text-xs text-slate-500">Configure the TRS Apps Script URL to load fund movements.</div>
