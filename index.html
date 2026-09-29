@@ -6358,6 +6358,7 @@ const TRSModule = ({bybitPrices}) => {
     const [monthStart, setMonthStart]   = useState(null);
     const [navHistory, setNavHistory]   = useState([]);
     const [dailyHistory, setDailyHistory] = useState([]);
+    const [movements, setMovements]     = useState([]);   // fund movements in/out of strategy subs
     const [showConfig, setShowConfig]   = useState(false);
     const [editingMS, setEditingMS]     = useState(false);
     const [msEditVal, setMsEditVal]     = useState('');
@@ -6399,6 +6400,7 @@ const TRSModule = ({bybitPrices}) => {
             const d    = json.data || json;
             if (d.minutes)    setNavHistory(d.minutes.map(r=>({ts:r[0], nav:parseFloat(r[1])})));
             if (d.daily)      setDailyHistory(d.daily.map(r=>({date:r[0], nav:parseFloat(r[1])})));
+            if (d.movements)  setMovements(d.movements.map(r=>({when:r[0], transferId:r[1], coin:r[2], amount:parseFloat(r[3]), direction:r[4], sub:r[5], counterparty:r[6], from:r[7], to:r[8], status:r[11]})));
             if (d.monthStart && d.monthStart.length > 0) {
                 const ym  = new Date().toISOString().slice(0,7);
                 const row = d.monthStart.find(r=>String(r[0]).trim()===ym) || d.monthStart[d.monthStart.length-1];
@@ -6717,6 +6719,42 @@ const TRSModule = ({bybitPrices}) => {
                                         <tbody>{trsLiab.rows.map((r,i)=>(<tr key={i} className={`border-b border-slate-800/50 ${i%2===1?'bg-slate-900/20':''}`}>{trsLiab.columns.map(c=>(<td key={c} className="px-3 py-2 mono text-slate-300">{r[c]||'—'}</td>))}</tr>))}</tbody>
                                     </table></div>)}
                         {trsLiab&&trsLiab.unparsed>0?<div className="px-5 py-2 text-[10px] text-amber-500/70">{trsLiab.unparsed} row(s) had an unparseable economics blob — shown with blanks.</div>:null}
+                    </div>
+
+                    {/* Fund Movements — transfers in/out of the strategy subaccounts (from TRS_Movements) */}
+                    <div className="card overflow-hidden mt-5">
+                        <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between gap-2 flex-wrap">
+                            <p className="text-sm font-semibold text-slate-300">Fund Movements <span className="text-xs text-slate-500 font-normal">· transfers in/out of strategy subaccounts</span></p>
+                            <p className="text-xs text-slate-500">{movements.length} record{movements.length===1?'':'s'}</p>
+                        </div>
+                        {!trsConfig.scriptUrl
+                            ? <div className="px-5 py-3 text-xs text-slate-500">Configure the TRS Apps Script URL to load fund movements.</div>
+                            : movements.length===0
+                                ? <div className="px-5 py-3 text-xs text-slate-500">No fund movements recorded yet — the capture runs every ~6h and seeds from 1 Aug 2026.</div>
+                                : (<div className="overflow-x-auto scrollbar-hide"><table className="w-full text-xs whitespace-nowrap">
+                                    <thead><tr className="border-b border-slate-800 bg-slate-900/40 text-slate-400">
+                                        <th className="text-left px-3 py-2 font-medium">When (SGT)</th>
+                                        <th className="text-left px-3 py-2 font-medium">Direction</th>
+                                        <th className="text-left px-3 py-2 font-medium">Subaccount</th>
+                                        <th className="text-right px-3 py-2 font-medium">Amount</th>
+                                        <th className="text-left px-3 py-2 font-medium">Coin</th>
+                                        <th className="text-left px-3 py-2 font-medium">Counterparty</th>
+                                        <th className="text-left px-3 py-2 font-medium">Status</th>
+                                    </tr></thead>
+                                    <tbody>{[...movements].sort((a,b)=>String(b.when).localeCompare(String(a.when))).map((m,i)=>{
+                                        const dirCls = m.direction==='IN' ? 'text-emerald-400 bg-emerald-500/10' : m.direction==='OUT' ? 'text-amber-400 bg-amber-500/10' : 'text-sky-400 bg-sky-500/10';
+                                        return (<tr key={m.transferId||i} className={`border-b border-slate-800/50 ${i%2===1?'bg-slate-900/20':''}`}>
+                                            <td className="px-3 py-2 mono text-slate-400">{(m.when||'').replace('T',' ')}</td>
+                                            <td className="px-3 py-2"><span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${dirCls}`}>{m.direction}</span></td>
+                                            <td className="px-3 py-2 text-slate-300">{m.sub}</td>
+                                            <td className="px-3 py-2 mono text-right text-slate-200">{isNaN(m.amount)?'—':Number(m.amount).toLocaleString('en-US',{maximumFractionDigits:8})}</td>
+                                            <td className="px-3 py-2 mono text-slate-400">{m.coin}</td>
+                                            <td className="px-3 py-2 text-slate-400">{m.counterparty}</td>
+                                            <td className="px-3 py-2 text-slate-500">{m.status}</td>
+                                        </tr>);
+                                    })}</tbody>
+                                </table></div>)}
+                        <div className="px-5 py-2 text-[10px] text-slate-600">IN = funded into a strategy sub · OUT = swept out · INTERNAL = moved between two strategy subs. Auto-captured from Bybit transfer records (read-only) every ~6h.</div>
                     </div>
                 </>
             )}

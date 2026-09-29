@@ -84,11 +84,15 @@ function parseOverview(result) {
 //   • Sub-member on-chain deposits — external top-ups straight into a sub. 30-day window.
 // Each call is wrapped so a missing key-permission surfaces as an error string (likely a
 // permission that must be enabled on the key) instead of failing the whole probe.
-async function probeMovements(apiKey, apiSecret, clockOffset, weeks) {
+async function probeMovements(apiKey, apiSecret, clockOffset, weeks, fromMs, skipDeposits) {
     const now = Date.now();
     const DAY = 24 * 3600 * 1000;
-    const lookbackWeeks = Math.min(Math.max(parseInt(weeks, 10) || 12, 1), 26); // 1..26 weeks
-    const out = { lookbackWeeks, apiKeyInfo: null, subMembers: [], strategyUids: SUBACCOUNTS.map(s => ({ name: s.name, uid: s.uid })),
+    // If a `from` date is given (used by the persistent capture to seed/backfill), page back
+    // just far enough to cover it; otherwise use the weeks param (diagnostic default 12).
+    const lookbackWeeks = (fromMs && fromMs < now)
+        ? Math.min(Math.ceil((now - fromMs) / (7 * DAY)) + 1, 60)
+        : Math.min(Math.max(parseInt(weeks, 10) || 12, 1), 26);
+    const out = { lookbackWeeks, fromMs: fromMs || null, apiKeyInfo: null, subMembers: [], strategyUids: SUBACCOUNTS.map(s => ({ name: s.name, uid: s.uid })),
                   universalTransfers: [], subDeposits: {}, errors: {} };
 
     // Name resolution: our reserved strategy subs first, then any username Bybit returns,
@@ -132,6 +136,7 @@ async function probeMovements(apiKey, apiSecret, clockOffset, weeks) {
             const list = r.list || r.rows || [];
             if (list.length >= 50) hitWindowCap = true; // more than one page in this week — flag it
             for (const t of list) {
+                if (fromMs && t.timestamp && parseInt(t.timestamp, 10) < fromMs) continue;
                 if (t.transferId && seen.has(t.transferId)) continue;
                 if (t.transferId) seen.add(t.transferId);
                 out.universalTransfers.push({
@@ -153,6 +158,9 @@ async function probeMovements(apiKey, apiSecret, clockOffset, weeks) {
     out.someWeeksHadMoreThan50 = hitWindowCap; // if true, a busy week may have older rows we didn't page
 
     // 2) Sub-member on-chain deposits, per reserved sub (explicit 30-day window; one retry on 131001).
+    // Skipped by the persistent capture: the strategy subs are custodial and can't take direct
+    // on-chain deposits, so this endpoint always errors (131001) and adds nothing.
+    if (skipDeposits) { out.subDeposits = { skipped: true }; return out; }
     const depStart = now - 30 * DAY;
     for (const s of SUBACCOUNTS) {
         const ps = `subMemberId=${s.uid}&startTime=${depStart}&endTime=${now}&limit=50`;
@@ -201,7 +209,9 @@ module.exports = async function handler(req, res) {
 
         // Read-only diagnostic: ?probe=movements → transfer/deposit history for the strategy subs.
         if (req.query.probe === 'movements') {
-            const probe = await probeMovements(apiKey, apiSecret, clockOffset, req.query.weeks);
+            const fromMs = req.query.from ? Date.parse(req.query.from + 'T00:00:00Z') : null;
+            const skipDeposits = req.query.nodeposits === '1' || req.query.nodeposits === 'true';
+            const probe = await probeMovements(apiKey, apiSecret, clockOffset, req.query.weeks, fromMs, skipDeposits);
             res.setHeader('Cache-Control', 'no-store');
             return res.status(200).json({ probe: 'movements', fetchedAt: new Date().toISOString(), ...probe });
         }
