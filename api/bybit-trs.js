@@ -84,55 +84,97 @@ function parseOverview(result) {
 //   • Sub-member on-chain deposits — external top-ups straight into a sub. 30-day window.
 // Each call is wrapped so a missing key-permission surfaces as an error string (likely a
 // permission that must be enabled on the key) instead of failing the whole probe.
-async function probeMovements(apiKey, apiSecret, clockOffset) {
+async function probeMovements(apiKey, apiSecret, clockOffset, weeks) {
     const now = Date.now();
-    const sevenDaysAgo = now - 7 * 24 * 3600 * 1000;
-    const uidToName = Object.fromEntries(SUBACCOUNTS.map(s => [String(s.uid), s.name]));
-    const subUids = new Set(SUBACCOUNTS.map(s => String(s.uid)));
-    const label = (uid) => uidToName[String(uid)] || (uid ? 'other/master(' + uid + ')' : '—');
-
-    const out = { window: { transfersFrom: new Date(sevenDaysAgo).toISOString(), to: new Date(now).toISOString() },
+    const DAY = 24 * 3600 * 1000;
+    const lookbackWeeks = Math.min(Math.max(parseInt(weeks, 10) || 12, 1), 26); // 1..26 weeks
+    const out = { lookbackWeeks, apiKeyInfo: null, subMembers: [], strategyUids: SUBACCOUNTS.map(s => ({ name: s.name, uid: s.uid })),
                   universalTransfers: [], subDeposits: {}, errors: {} };
 
-    // 1) Universal transfers (master-level; returns both directions, we tag the strategy ones)
-    try {
-        const ps = `limit=50&startTime=${sevenDaysAgo}&endTime=${now}`;
-        const r = await bybitGet('/v5/asset/transfer/query-universal-transfer-list', ps, apiKey, apiSecret, clockOffset);
-        const list = r.list || r.rows || [];
-        out.universalTransfers = list.map(t => ({
-            transferId: t.transferId,
-            coin: t.coin,
-            amount: t.amount,
-            status: t.status,
-            timestamp: t.timestamp,
-            when: t.timestamp ? new Date(parseInt(t.timestamp, 10)).toISOString() : null,
-            fromMemberId: t.fromMemberId,
-            toMemberId: t.toMemberId,
-            from: label(t.fromMemberId),
-            to: label(t.toMemberId),
-            fromAccountType: t.fromAccountType,
-            toAccountType: t.toAccountType,
-            // true if either side is one of our reserved strategy subs
-            strategyRelated: subUids.has(String(t.fromMemberId)) || subUids.has(String(t.toMemberId)),
-        }));
-        out.universalTransferCount = out.universalTransfers.length;
-        out.strategyTransferCount = out.universalTransfers.filter(t => t.strategyRelated).length;
-    } catch (e) { out.errors.universalTransfers = e.message; }
+    // Name resolution: our reserved strategy subs first, then any username Bybit returns,
+    // then flag the master; anything else stays as its raw UID.
+    const uidToName = Object.fromEntries(SUBACCOUNTS.map(s => [String(s.uid), s.name]));
+    const subUids = new Set(SUBACCOUNTS.map(s => String(s.uid)));
+    let masterUid = null;
 
-    // 2) Sub-member on-chain deposits, per reserved sub (default: last 30 days)
-    const depSettled = await Promise.allSettled(
-        SUBACCOUNTS.map(s => bybitGet('/v5/asset/deposit/query-sub-member-record', `subMemberId=${s.uid}&limit=50`, apiKey, apiSecret, clockOffset))
-    );
-    SUBACCOUNTS.forEach((s, i) => {
-        const r = depSettled[i];
-        if (r.status !== 'fulfilled') { out.errors['subDeposits:' + s.name] = (r.reason && r.reason.message) || 'fetch failed'; return; }
-        const rows = r.value.rows || r.value.list || [];
-        out.subDeposits[s.name] = rows.map(d => ({
-            coin: d.coin, chain: d.chain, amount: d.amount, status: d.status,
-            txID: d.txID, when: d.successAt ? new Date(parseInt(d.successAt, 10)).toISOString() : null,
-            depositType: d.depositType,
-        }));
-    });
+    // 0a) Who is this key? (uid, master/sub, permissions) — confirms access level.
+    try {
+        const info = await bybitGet('/v5/user/query-api', '', apiKey, apiSecret, clockOffset);
+        masterUid = String(info.userID || '');
+        out.apiKeyInfo = { userID: info.userID, isMaster: info.isMaster, parentUid: info.parentUid,
+                           readOnly: info.readOnly, permissions: info.permissions };
+    } catch (e) { out.errors.apiKeyInfo = e.message; }
+
+    // 0b) All sub accounts under the master → resolve the mystery UIDs to real usernames.
+    try {
+        const subs = await bybitGet('/v5/user/query-sub-members', '', apiKey, apiSecret, clockOffset);
+        const members = subs.subMembers || [];
+        out.subMembers = members.map(m => ({ uid: m.uid, username: m.username, memberType: m.memberType, status: m.status, remark: m.remark }));
+        members.forEach(m => { if (!uidToName[String(m.uid)]) uidToName[String(m.uid)] = m.username || ('sub(' + m.uid + ')'); });
+    } catch (e) { out.errors.subMembers = e.message; }
+
+    const label = (uid) => {
+        const u = String(uid || '');
+        if (uidToName[u]) return uidToName[u];
+        if (u && u === masterUid) return 'MASTER(' + u + ')';
+        return u ? 'other(' + u + ')' : '—';
+    };
+
+    // 1) Universal transfers — page back week by week (Bybit caps each query at a 7-day window).
+    const seen = new Set();
+    let hitWindowCap = false;
+    for (let w = 0; w < lookbackWeeks; w++) {
+        const end = now - w * 7 * DAY;
+        const start = end - 7 * DAY;
+        try {
+            const ps = `limit=50&startTime=${start}&endTime=${end}`;
+            const r = await bybitGet('/v5/asset/transfer/query-universal-transfer-list', ps, apiKey, apiSecret, clockOffset);
+            const list = r.list || r.rows || [];
+            if (list.length >= 50) hitWindowCap = true; // more than one page in this week — flag it
+            for (const t of list) {
+                if (t.transferId && seen.has(t.transferId)) continue;
+                if (t.transferId) seen.add(t.transferId);
+                out.universalTransfers.push({
+                    transferId: t.transferId, coin: t.coin, amount: t.amount, status: t.status,
+                    when: t.timestamp ? new Date(parseInt(t.timestamp, 10)).toISOString() : null,
+                    fromMemberId: t.fromMemberId, toMemberId: t.toMemberId,
+                    from: label(t.fromMemberId), to: label(t.toMemberId),
+                    fromAccountType: t.fromAccountType, toAccountType: t.toAccountType,
+                    strategyRelated: subUids.has(String(t.fromMemberId)) || subUids.has(String(t.toMemberId)),
+                });
+            }
+        } catch (e) { out.errors['transfers:week-' + w] = e.message; break; }
+        await new Promise(r => setTimeout(r, 120));
+    }
+    out.universalTransfers.sort((a, b) => (b.when || '').localeCompare(a.when || ''));
+    out.universalTransferCount = out.universalTransfers.length;
+    out.strategyTransfers = out.universalTransfers.filter(t => t.strategyRelated);
+    out.strategyTransferCount = out.strategyTransfers.length;
+    out.someWeeksHadMoreThan50 = hitWindowCap; // if true, a busy week may have older rows we didn't page
+
+    // 2) Sub-member on-chain deposits, per reserved sub (explicit 30-day window; one retry on 131001).
+    const depStart = now - 30 * DAY;
+    for (const s of SUBACCOUNTS) {
+        const ps = `subMemberId=${s.uid}&startTime=${depStart}&endTime=${now}&limit=50`;
+        let attempt = 0, done = false;
+        while (attempt < 2 && !done) {
+            attempt++;
+            try {
+                const r = await bybitGet('/v5/asset/deposit/query-sub-member-record', ps, apiKey, apiSecret, clockOffset);
+                const rows = r.rows || r.list || [];
+                out.subDeposits[s.name] = rows.map(d => ({
+                    coin: d.coin, chain: d.chain, amount: d.amount, status: d.status,
+                    txID: d.txID, when: d.successAt ? new Date(parseInt(d.successAt, 10)).toISOString() : null,
+                    depositType: d.depositType,
+                }));
+                done = true;
+            } catch (e) {
+                if (attempt >= 2) out.errors['subDeposits:' + s.name] = e.message;
+                else await new Promise(r => setTimeout(r, 400));
+            }
+        }
+        await new Promise(r => setTimeout(r, 120));
+    }
 
     return out;
 }
@@ -159,7 +201,7 @@ module.exports = async function handler(req, res) {
 
         // Read-only diagnostic: ?probe=movements → transfer/deposit history for the strategy subs.
         if (req.query.probe === 'movements') {
-            const probe = await probeMovements(apiKey, apiSecret, clockOffset);
+            const probe = await probeMovements(apiKey, apiSecret, clockOffset, req.query.weeks);
             res.setHeader('Cache-Control', 'no-store');
             return res.status(200).json({ probe: 'movements', fetchedAt: new Date().toISOString(), ...probe });
         }
