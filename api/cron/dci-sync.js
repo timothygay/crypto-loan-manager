@@ -110,11 +110,24 @@ module.exports = async (req, res) => {
                          maturity: dt(o.maturity_datetime), orderStatus: s(o.order_status),
                          product, bidIv, hiddenInUI: (product.trim() === '' || bidIv.trim() === '') };
             });
+            // Also peek at the EXPIRED snapshot: DCI trades whose SINDI order_status isn't
+            // exactly "ACTIVE" are routed here by the monitor's partition, so they never reach
+            // the active feed. This shows whether the "missing" trades are sitting here (and why).
+            const snapExp = await sql`
+                SELECT payload, captured_at FROM public.client_order_snapshots
+                WHERE source = 'expired' ORDER BY captured_at DESC LIMIT 1`;
+            const expPayload = (snapExp.length && Array.isArray(snapExp[0].payload)) ? snapExp[0].payload : [];
+            const expHydi = expPayload
+                .filter(o => String(o.txnFormType || '').toUpperCase() === 'HYDI')
+                .map(o => ({ txnId: s(o.transaction_id), client: s(o.client_name),
+                             maturity: dt(o.maturity_datetime), orderStatus: s(o.order_status) }));
             return res.status(200).json({ ok: true, dry: true, snapshotAt: snap[0].captured_at,
                 totalInSnapshot: payload.length, hydiTotal: hydi.length,
                 hydiMaturedExcluded: hydi.length - active.length, activeRows: rows.length,
                 wouldHideInUI: detail.filter(d => d.hiddenInUI).length,
                 hiddenTxns: detail.filter(d => d.hiddenInUI),
+                expiredSnapshotAt: snapExp.length ? snapExp[0].captured_at : null,
+                expiredHydiCount: expHydi.length, expiredHydi: expHydi,
                 allActive: detail });
         }
 
