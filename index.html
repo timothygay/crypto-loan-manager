@@ -6235,8 +6235,14 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}}) => {
         const id=ackKey(e); const actor=(window.CPB_USER||{}).email||'';
         setAcked(prev=>{const n=new Set(prev); n.add(id); return n;});   // optimistic — row disappears immediately
         try {
-            await ghfetch(`/api/sheet/loans?action=append&sheetName=TRS_Ack&values=${encodeURIComponent(JSON.stringify([id, actor, new Date().toISOString()]))}`);
-        } catch(err) { alert('Could not save acknowledgement (is the "TRS_Ack" tab present in the Loans sheet?): '+err.message); }
+            const resp = await ghfetch(`/api/sheet/loans?action=append&sheetName=TRS_Ack&values=${encodeURIComponent(JSON.stringify([id, actor, new Date().toISOString()]))}`).then(r=>r.json());
+            if (!resp || resp.success === false) throw new Error((resp && resp.error) || 'save failed');
+        } catch(err) {
+            // The save did NOT persist — revert the optimistic hide so the row doesn't
+            // falsely look acknowledged, and surface the real reason.
+            setAcked(prev=>{const n=new Set(prev); n.delete(id); return n;});
+            alert('Could not save acknowledgement: '+err.message+'\n\nIf this says "Sheet not found", the Loans Apps Script needs its latest code deployed as a NEW version.');
+        }
     };
     if (!trsLiab || !trsLiab.rows || !trsLiab.rows.length) return null;
     const col=(r,n)=>r[n]!==undefined?r[n]:'';
