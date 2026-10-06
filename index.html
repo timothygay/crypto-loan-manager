@@ -720,14 +720,19 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
             : (isOpenTerm
                 ? (loan.status === 'Active' ? new Date(9999,0,1) : new Date())
                 : new Date(loan.maturityDate+'T00:00:00Z'));
-        // Period: 1st of month to last day of month (or today if current month)
-        const periodStart = new Date(year, month, 1);
+        // Period: 1st of month to last day of month (or today if current month).
+        // Boundaries are built in UTC to match loanStart (…T00:00:00Z) and accruedThrough,
+        // so a mid-month placement counts its FIRST day (e.g. placed 24 Sep → 7 days through
+        // 30 Sep, not 6). A local-midnight boundary vs a UTC-midnight loanStart floored off
+        // that first day for mid-month loans — and left this column disagreeing with the
+        // amount actually paid (accruedThrough, which was already UTC/inclusive).
+        const periodStart = new Date(Date.UTC(year, month, 1));
         const isCurrentMonth = (year === today.getFullYear() && month === today.getMonth());
         // Upper bound = START of the next month (exclusive). Previously this was the
         // last day at 23:59:59.999, which is 1 ms short of a full day, so Math.floor
         // below dropped the final day of every month (Jul→30, Feb→27). Next-month
         // start makes the count exact: Jul 1 → Aug 1 = 31 days.
-        const periodEnd = isCurrentMonth ? today : new Date(year, month + 1, 1);
+        const periodEnd = isCurrentMonth ? today : new Date(Date.UTC(year, month + 1, 1));
         // Clamp to loan active period
         const effectiveStart = new Date(Math.max(loanStart, periodStart));
         const effectiveEnd   = new Date(Math.min(loanEnd, periodEnd));
@@ -1143,9 +1148,9 @@ const LoanDashboard = ({loans, prices, calcMetrics, onTopUp, transactions=[], on
                                 const mo  = showInterestModal==='prev'?prevMonth:today.getMonth();
                                 const loanStart  = new Date(loan.startDate+'T00:00:00Z');
                                 const loanEnd    = loan.endDate ? new Date(loan.endDate+'T00:00:00Z') : loan.maturityDate ? new Date(loan.maturityDate+'T00:00:00Z') : new Date();
-                                const periodStart = new Date(yr, mo, 1);
+                                const periodStart = new Date(Date.UTC(yr, mo, 1));
                                 const isCurrentMonth = (yr===today.getFullYear()&&mo===today.getMonth());
-                                const periodEnd = isCurrentMonth ? today : new Date(yr, mo+1, 1); // exclusive next-month start — exact day count (see calcMonthInterest)
+                                const periodEnd = isCurrentMonth ? today : new Date(Date.UTC(yr, mo+1, 1)); // UTC boundaries → counts the placement day (see calcMonthInterest)
                                 const effStart = new Date(Math.max(loanStart, periodStart));
                                 const effEnd   = new Date(Math.min(loanEnd, periodEnd));
                                 const days = Math.max(0, Math.floor((effEnd-effStart)/86400000));
