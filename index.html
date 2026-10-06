@@ -6216,32 +6216,35 @@ const TRSAssetBreakdown = ({assets, totalNav, bybitPrices}) => {
 //   RETURN   = Maturity Datetime (return Notional to client)
 //   fixed_amount = fee (in Notional Amount Ccy) booked on Value Datetime → PnL exposure
 // ═══════════════════════════════════════════════════════════════════════════════
-const TRSTradingDashboard = ({trsLiab, bybitPrices={}}) => {
-    // Acknowledged overdue actions — SHARED across users via a "TRS_Ack" tab on the Loans
-    // Google Sheet (col A = "ref|action|date"), so once anyone ticks one it's gone for all.
-    // (Hooks must run before any early return.)
+const TRSTradingDashboard = ({trsLiab, bybitPrices={}, scriptUrl}) => {
+    // Acknowledged overdue actions — SHARED across users via a "TRS_Ack" tab in the TRS
+    // Google Sheet (this product's own data; col A = "ref|action|date"), so once anyone
+    // ticks one it's gone for all. (Hooks must run before any early return.)
     const [acked, setAcked] = useState(()=>new Set());
     useEffect(()=>{
+        if (!scriptUrl) return;
         (async()=>{
             try {
-                const r = await ghfetch('/api/sheet/loans?action=read&sheetName=TRS_Ack').then(x=>x.json());
-                if (r && r.success && Array.isArray(r.values)) setAcked(new Set(r.values.map(row=>String(row[0]||'')).filter(Boolean)));
-            } catch(e) { /* tab absent / no acks yet → treat as none */ }
+                const r = await ghfetch(`${scriptUrl}?action=readAck`).then(x=>x.json());
+                const rows = (r && r.data && r.data.values) || [];
+                setAcked(new Set(rows.map(row=>String(row[0]||'')).filter(Boolean)));
+            } catch(e) { /* no acks yet → treat as none */ }
         })();
-    },[]);
+    },[scriptUrl]);
     const ackKey=(e)=>`${e.ref}|${e.action}|${e.date}`;
     const ackEvent=async(e)=>{
         if (!canWrite()) { alert('Read-only access — you cannot acknowledge.'); return; }
+        if (!scriptUrl) { alert('TRS Apps Script URL not set — configure it in the TRS tab’s Config first.'); return; }
         const id=ackKey(e); const actor=(window.CPB_USER||{}).email||'';
         setAcked(prev=>{const n=new Set(prev); n.add(id); return n;});   // optimistic — row disappears immediately
         try {
-            const resp = await ghfetch(`/api/sheet/loans?action=append&sheetName=TRS_Ack&values=${encodeURIComponent(JSON.stringify([id, actor, new Date().toISOString()]))}`).then(r=>r.json());
+            const resp = await ghfetch(`${scriptUrl}?action=addAck&ackId=${encodeURIComponent(id)}&actor=${encodeURIComponent(actor)}`).then(r=>r.json());
             if (!resp || resp.success === false) throw new Error((resp && resp.error) || 'save failed');
         } catch(err) {
             // The save did NOT persist — revert the optimistic hide so the row doesn't
             // falsely look acknowledged, and surface the real reason.
             setAcked(prev=>{const n=new Set(prev); n.delete(id); return n;});
-            alert('Could not save acknowledgement: '+err.message+'\n\nIf this says "Sheet not found", the Loans Apps Script needs its latest code deployed as a NEW version.');
+            alert('Could not save acknowledgement: '+err.message);
         }
     };
     if (!trsLiab || !trsLiab.rows || !trsLiab.rows.length) return null;
@@ -6527,7 +6530,7 @@ const TRSModule = ({bybitPrices}) => {
     return (
         <div>
             {/* Trading Dashboard — deposit/withdraw/return actions + fee exposure, from the TRS Liabilities table */}
-            <TRSTradingDashboard trsLiab={trsLiab} bybitPrices={bybitPrices}/>
+            <TRSTradingDashboard trsLiab={trsLiab} bybitPrices={bybitPrices} scriptUrl={trsConfig.scriptUrl}/>
             {/* Header */}
             <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
                 <div>
