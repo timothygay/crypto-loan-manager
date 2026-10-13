@@ -57,7 +57,7 @@ export default async function handler(req, res) {
         // to "1.00" and destroy the HYPE/USDC derivation (HYPEUSDT / USDCUSDT), so it
         // (and HYPEUSDT) are returned at higher precision. Consumers parseFloat() the
         // value, so a longer decimal string is harmless for existing callers.
-        const PRICE_DP = { USDCUSDT: 6, HYPEUSDT: 4 };
+        const PRICE_DP = { USDCUSDT: 6, HYPEUSDT: 4, TAOUSDT: 4 };
         const dp = PRICE_DP[sym] !== undefined ? PRICE_DP[sym] : 2;
         return res.status(200).json({
             success: true,
