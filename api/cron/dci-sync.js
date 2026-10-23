@@ -102,6 +102,15 @@ module.exports = async (req, res) => {
             // Diagnostic breakdown: how many HYDI in the snapshot, how many active (not matured),
             // and — for each active row — whether the UI would hide it (blank Product or Bid IV).
             const hydi = payload.filter(o => String(o.txnFormType || '').toUpperCase() === 'HYDI');
+            // Diagnose the re-tag: what txnFormType values ARE in the snapshot now, and what
+            // do the DCI-looking orders (economics has final_notional_exchange / DCI payout) carry?
+            const txnFormTypeCounts = {};
+            for (const o of payload) { const t = String(o.txnFormType ?? '(none)'); txnFormTypeCounts[t] = (txnFormTypeCounts[t] || 0) + 1; }
+            const dciLike = payload.filter(o => {
+                const e = JSON.stringify(o.economics || o.product || o || '');
+                return /final_notional_exchange|ON_MATURITY|dci|dual.?currency/i.test(e);
+            }).slice(0, 5).map(o => ({ txnId: s(o.transaction_id), client: s(o.client_name),
+                txnFormType: s(o.txnFormType), topKeys: Object.keys(o).slice(0, 20) }));
             const detail = active.map(o => {
                 const opt = (o.product && o.product.option) || {};
                 const pname = o.product && o.product.product_name;
@@ -123,6 +132,7 @@ module.exports = async (req, res) => {
                              maturity: dt(o.maturity_datetime), orderStatus: s(o.order_status) }));
             return res.status(200).json({ ok: true, dry: true, snapshotAt: snap[0].captured_at,
                 totalInSnapshot: payload.length, hydiTotal: hydi.length,
+                txnFormTypeCounts, dciLike,
                 hydiMaturedExcluded: hydi.length - active.length, activeRows: rows.length,
                 wouldHideInUI: detail.filter(d => d.hiddenInUI).length,
                 hiddenTxns: detail.filter(d => d.hiddenInUI),
