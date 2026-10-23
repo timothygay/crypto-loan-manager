@@ -1,7 +1,8 @@
 // api/cron/dci-sync.js — daily DCI Active feed (fully external, monitor untouched)
 // ─────────────────────────────────────────────────────────────────────────────
 // Reads the treasury-monitor's Postgres READ-ONLY (client_order_snapshots), takes
-// the latest `active` snapshot, keeps DCI (HYDI) orders that have NOT yet matured,
+// the latest `active` snapshot, keeps DCI orders (txnFormType 'DCI' or legacy 'HYDI')
+// that have NOT yet matured,
 // maps them to the exact DCI-Active sheet columns, and appends them to the DCI
 // Google Sheet via the DCI Apps Script (append + dedup by Txn Id|Ref No).
 //
@@ -92,7 +93,7 @@ module.exports = async (req, res) => {
         const payload = Array.isArray(snap[0].payload) ? snap[0].payload : [];
         const nowMs = Date.now();
         const active = payload.filter(o =>
-            String(o.txnFormType || '').toUpperCase() === 'HYDI' &&
+            ['HYDI', 'DCI'].includes(String(o.txnFormType || '').toUpperCase()) &&   // SINDI renamed HYDI→DCI (Oct 2026); accept both
             maturityMs(o.maturity_datetime) >= nowMs);        // Active = not yet matured (as upload_dci.py)
 
         const uploadedAt = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ') + ' SGT';
@@ -101,7 +102,7 @@ module.exports = async (req, res) => {
         if (dry) {
             // Diagnostic breakdown: how many HYDI in the snapshot, how many active (not matured),
             // and — for each active row — whether the UI would hide it (blank Product or Bid IV).
-            const hydi = payload.filter(o => String(o.txnFormType || '').toUpperCase() === 'HYDI');
+            const hydi = payload.filter(o => ['HYDI', 'DCI'].includes(String(o.txnFormType || '').toUpperCase()));
             // Diagnose the re-tag: what txnFormType values ARE in the snapshot now, and what
             // do the DCI-looking orders (economics has final_notional_exchange / DCI payout) carry?
             const txnFormTypeCounts = {};
@@ -127,7 +128,7 @@ module.exports = async (req, res) => {
                 WHERE source = 'expired' ORDER BY captured_at DESC LIMIT 1`;
             const expPayload = (snapExp.length && Array.isArray(snapExp[0].payload)) ? snapExp[0].payload : [];
             const expHydi = expPayload
-                .filter(o => String(o.txnFormType || '').toUpperCase() === 'HYDI')
+                .filter(o => ['HYDI', 'DCI'].includes(String(o.txnFormType || '').toUpperCase()))
                 .map(o => ({ txnId: s(o.transaction_id), client: s(o.client_name),
                              maturity: dt(o.maturity_datetime), orderStatus: s(o.order_status) }));
             return res.status(200).json({ ok: true, dry: true, snapshotAt: snap[0].captured_at,
