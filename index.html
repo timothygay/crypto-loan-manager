@@ -6279,7 +6279,7 @@ const TRSAssetBreakdown = ({assets, totalNav, bybitPrices}) => {
 //   RETURN   = Maturity Datetime (return Notional to client)
 //   fixed_amount = fee (in Notional Amount Ccy) booked on Value Datetime → PnL exposure
 // ═══════════════════════════════════════════════════════════════════════════════
-const TRSTradingDashboard = ({trsLiab, bybitPrices={}, scriptUrl}) => {
+const TRSTradingDashboard = ({trsLiab, bybitPrices={}, trsData, scriptUrl}) => {
     // Acknowledged overdue actions — SHARED across users via a "TRS_Ack" tab in the TRS
     // Google Sheet (this product's own data; col A = "ref|action|date"), so once anyone
     // ticks one it's gone for all. (Hooks must run before any early return.)
@@ -6348,6 +6348,24 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}, scriptUrl}) => {
     trades.forEach(t=>{if(t.fee>0){feeByCcy[t.ccy]=(feeByCcy[t.ccy]||0)+t.fee;feeUsd+=t.fee*pxOf(t.ccy);}});
     const feeRows=trades.filter(t=>t.fee>0);
 
+    // Total funds in TRS — the LIVE client book: notional of trades currently between
+    // their value date and maturity date (inclusive). Grouped by notional ccy + live-USD.
+    const liveTrades=trades.filter(t=>t.valueDate&&t.maturity&&t.valueDate<=todayISO&&todayISO<=t.maturity&&t.notional>0);
+    const fundsByCcy={};let fundsUsd=0;
+    liveTrades.forEach(t=>{fundsByCcy[t.ccy]=(fundsByCcy[t.ccy]||0)+t.notional;fundsUsd+=t.notional*pxOf(t.ccy);});
+
+    // What is currently inside ALL TRS subaccounts — live Bybit feed (same data/maths as the
+    // per-account Asset Breakdown): Assets = wallet balances x live px; Open Positions (MTM) =
+    // NAV - Assets (unrealised PnL); Total NAV = what's actually in the subs. Summed across subs.
+    const subUsd=(c,b)=>{c=(c||'').toUpperCase();const v=parseFloat(b)||0;return c==='BTC'?v*(bybitPrices.BTC||0):c==='ETH'?v*(bybitPrices.ETH||0):c==='ADA'?v*(bybitPrices.ADA||0):['USDT','USDC','BUSD','DAI'].includes(c)?v:0;};
+    const subAccounts=(trsData&&trsData.accounts&&trsData.accounts.length)?trsData.accounts
+        :(trsData&&trsData.assets?[{name:trsData.subaccount||'SMA01',totalNav:trsData.totalNav,assets:trsData.assets}]:[]);
+    let subAssetsUsd=0;subAccounts.forEach(a=>{if(!a.error&&a.assets)a.assets.forEach(x=>{subAssetsUsd+=subUsd(x.coin,x.walletBalance);});});
+    const subNav=(trsData&&typeof trsData.totalNav==='number')?trsData.totalNav:subAccounts.reduce((s,a)=>s+(a.totalNav||0),0);
+    const subMtm=subNav-subAssetsUsd;
+    const subCount=subAccounts.filter(a=>!a.error).length;
+    const hasSubData=subCount>0&&subNav>0;
+
     const Ribbon=({title,rows})=>(
         <div className="card p-3.5">
             <p className="text-xs text-slate-400 mb-2 font-medium">{title} <span className="text-slate-600">· next 7d</span></p>
@@ -6366,6 +6384,30 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}, scriptUrl}) => {
                 <Icon.Desk/>
                 <h2 className="font-bold text-sm text-cyan-300 uppercase tracking-wider">TRS Trading Desk</h2>
                 <span className="text-xs text-slate-500">· {trades.length} active trade{trades.length!==1?'s':''} · derived from TRS Liabilities</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+                <div className="card p-3.5">
+                    <p className="text-xs text-slate-400 mb-2 font-medium">Total Funds in TRS <span className="text-slate-600">· live book · value date → maturity</span></p>
+                    {Object.keys(fundsByCcy).length===0
+                        ? <p className="text-xs text-slate-600">No live trades</p>
+                        : <div className="flex flex-wrap gap-x-4 gap-y-1 mb-1.5">
+                            {Object.entries(fundsByCcy).map(([c,v])=>(<span key={c} className="mono text-sm font-bold text-white">{fmtAmt(v,c)} <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${assetTag(c)}`}>{c}</span></span>))}
+                          </div>}
+                    <p className="mono text-lg font-bold text-cyan-300">${fmt(fundsUsd,2)} <span className="text-[11px] text-slate-500 font-normal">≈ USD @ live px</span></p>
+                    <p className="text-[11px] text-slate-600 mt-0.5">{liveTrades.length} live trade{liveTrades.length!==1?'s':''} · notional between value &amp; maturity date</p>
+                </div>
+                <div className="card p-3.5">
+                    <p className="text-xs text-slate-400 mb-2 font-medium">Inside All TRS Subaccounts <span className="text-slate-600">· live Bybit · assets + open positions</span></p>
+                    {!hasSubData
+                        ? <p className="text-xs text-slate-600">Subaccount balances not loaded yet — refresh the TRS panel below.</p>
+                        : <div>
+                            <div className="flex items-baseline justify-between py-0.5"><span className="text-xs text-slate-400">Assets <span className="text-slate-600">(wallet @ live px)</span></span><span className="mono text-sm font-bold text-white">${fmt(subAssetsUsd,2)}</span></div>
+                            <div className="flex items-baseline justify-between py-0.5"><span className="text-xs text-slate-400">Open Positions (MTM) <span className="text-slate-600">· unrealised</span></span><span className={`mono text-sm font-bold ${subMtm>=0?'text-green-400':'text-red-400'}`}>{subMtm>=0?'+':''}{fmt(subMtm,2)}</span></div>
+                            <div className="flex items-baseline justify-between border-t border-slate-700/50 mt-1 pt-1"><span className="text-xs font-semibold text-slate-200">Total NAV <span className="text-slate-600 font-normal">· all subs</span></span><span className="mono text-lg font-bold text-cyan-300">${fmt(subNav,2)}</span></div>
+                            <p className="text-[11px] text-slate-600 mt-0.5">across {subCount} subaccount{subCount!==1?'s':''}</p>
+                          </div>}
+                </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
@@ -6593,7 +6635,7 @@ const TRSModule = ({bybitPrices}) => {
     return (
         <div>
             {/* Trading Dashboard — deposit/withdraw/return actions + fee exposure, from the TRS Liabilities table */}
-            <TRSTradingDashboard trsLiab={trsLiab} bybitPrices={bybitPrices} scriptUrl={trsConfig.scriptUrl}/>
+            <TRSTradingDashboard trsLiab={trsLiab} bybitPrices={bybitPrices} trsData={data} scriptUrl={trsConfig.scriptUrl}/>
             {/* Header */}
             <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
                 <div>
