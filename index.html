@@ -6647,7 +6647,7 @@ const TRSModule = ({bybitPrices}) => {
                         Total Return Swap — SMA01
                     </h2>
                     <p className="text-xs text-slate-500 mt-0.5">
-                        Bybit subaccount · Read-only · Unified Trading Account
+                        Bybit subaccounts · Read-only · aggregated across all subs
                         {lastRefresh && <span className="ml-2">· Refreshed {lastRefresh.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>}
                     </p>
                 </div>
@@ -6716,7 +6716,7 @@ const TRSModule = ({bybitPrices}) => {
             {/* Error */}
             {error && (
                 <div className="card p-5 mb-4 border border-red-500/30 bg-red-900/10">
-                    <p className="text-red-400 text-sm font-semibold flex items-center gap-2 mb-1"><Icon.Alert/> Failed to load SMA01 data</p>
+                    <p className="text-red-400 text-sm font-semibold flex items-center gap-2 mb-1"><Icon.Alert/> Failed to load TRS subaccount data</p>
                     <p className="text-xs mono text-slate-400">{error}</p>
                     <p className="text-xs text-slate-500 mt-2">Check Vercel proxy is deployed and BYBIT_TRS_API_KEY / BYBIT_TRS_API_SECRET env vars are set.</p>
                 </div>
@@ -6738,10 +6738,10 @@ const TRSModule = ({bybitPrices}) => {
 
                         {/* Current NAV */}
                         <div className="card p-5 bg-gradient-to-br from-emerald-500/5 to-cyan-500/5 border-emerald-500/20">
-                            <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">Current NAV · SMA01</p>
+                            <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">Current NAV · All Subs</p>
                             <p className="text-3xl font-bold mono text-white">${fmt(data.totalNav,2)}</p>
                             <p className="text-xs text-slate-500 mt-1">
-                                {data.assets?.length||0} asset{data.assets?.length!==1?'s':''} · live
+                                {data.assets?.length||0} asset{data.assets?.length!==1?'s':''} · {data.accounts?.length||0} sub{data.accounts?.length!==1?'s':''} · live
                                 {lastRefresh && <span className="ml-1">· {lastRefresh.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'})}</span>}
                             </p>
                         </div>

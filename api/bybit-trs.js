@@ -231,11 +231,25 @@ module.exports = async function handler(req, res) {
         // Keep the legacy single-account fields (primary = SMA01) so the existing NAV header,
         // history and alerts keep working unchanged.
         const primary = accounts.find(a => a.uid === SMA01_UID) || accounts[0] || {};
+        // NAV = aggregate across ALL subaccounts. Funds are spread across the strategy subs
+        // (SMA01, SMA01_BTC, …), not just SMA01, so the dashboard header, the NAV-move / MTD
+        // comparisons, and the GAS NAV-history capture (which all read totalNav) should reflect
+        // the whole book. navSMA01 keeps the primary-only figure for reference.
+        const totalNavAll = accounts.reduce((s, a) => s + (a.error ? 0 : (a.totalNav || 0)), 0);
+        // Merge wallet balances across subs (same coin summed) for the top-level asset view.
+        const mergedAssets = (() => {
+            const m = {};
+            for (const a of accounts) if (!a.error) for (const x of (a.assets || [])) m[x.coin] = (m[x.coin] || 0) + (parseFloat(x.walletBalance) || 0);
+            return Object.entries(m).map(([coin, walletBalance]) => ({ coin, walletBalance }))
+                .filter(a => Math.abs(a.walletBalance) > 1e-9)
+                .sort((a, b) => Math.abs(b.walletBalance) - Math.abs(a.walletBalance));
+        })();
 
         res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
         return res.status(200).json({
-            totalNav:   primary.totalNav || 0,
-            assets:     primary.assets || [],
+            totalNav:   totalNavAll,          // SUM across all subs (was SMA01-only)
+            navSMA01:   primary.totalNav || 0, // kept for reference
+            assets:     mergedAssets,          // merged across all subs
             accounts,
             subaccount: 'SMA01',
             fetchedAt:  new Date().toISOString(),
