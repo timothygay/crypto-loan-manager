@@ -6284,6 +6284,7 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}, trsData, scriptUrl}) => {
     // Google Sheet (this product's own data; col A = "ref|action|date"), so once anyone
     // ticks one it's gone for all. (Hooks must run before any early return.)
     const [acked, setAcked] = useState(()=>new Set());
+    const [subOpen, setSubOpen] = useState(false);   // "Inside All Subaccounts" breakdown drawer
     useEffect(()=>{
         if (!scriptUrl) return;
         (async()=>{
@@ -6368,6 +6369,13 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}, trsData, scriptUrl}) => {
     const subMtm=subNav-subAssetsUsd;
     const subCount=subAccounts.filter(a=>!a.error).length;
     const hasSubData=subCount>0;
+    // Per-sub breakdown for the expandable drawer: assets (coin/bal/USD), assets subtotal,
+    // open-positions MTM (= sub NAV - assets subtotal), and sub NAV. Shows how NAV is built.
+    const subBreakdown=subAccounts.filter(a=>!a.error).map(a=>{
+        const rows=(a.assets||[]).map(x=>({coin:(x.coin||'').toUpperCase(),bal:parseFloat(x.walletBalance)||0,usd:subUsd(x.coin,x.walletBalance)})).sort((p,q)=>q.usd-p.usd);
+        const aU=rows.reduce((s,r)=>s+r.usd,0);
+        return {name:a.name,uid:a.uid,nav:a.totalNav||0,rows,assetsUsd:aU,mtm:(a.totalNav||0)-aU};
+    }).sort((p,q)=>q.nav-p.nav);
 
     const Ribbon=({title,rows})=>(
         <div className="card p-3.5">
@@ -6400,8 +6408,11 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}, trsData, scriptUrl}) => {
                     <p className="mono text-lg font-bold text-cyan-300">${fmt(fundsUsd,2)} <span className="text-[11px] text-slate-500 font-normal">≈ USD @ live px</span></p>
                     <p className="text-[11px] text-slate-600 mt-0.5">{liveTrades.length} live trade{liveTrades.length!==1?'s':''} · notional between value &amp; maturity date</p>
                 </div>
-                <div className="card p-3.5">
-                    <p className="text-xs text-slate-400 mb-2 font-medium">Inside All TRS Subaccounts <span className="text-slate-600">· live Bybit · assets + open positions</span></p>
+                <div className={`card p-3.5 ${hasSubData?'cursor-pointer hover:border-slate-600 transition-colors':''}`} onClick={()=>{if(hasSubData)setSubOpen(o=>!o);}}>
+                    <p className="text-xs text-slate-400 mb-2 font-medium flex items-center justify-between gap-2">
+                        <span>Inside All TRS Subaccounts <span className="text-slate-600">· live Bybit · assets + open positions</span></span>
+                        {hasSubData ? <span className="text-cyan-400/80 text-[10px] font-semibold whitespace-nowrap">{subOpen?'▾ hide breakdown':'▸ breakdown'}</span> : null}
+                    </p>
                     {!hasSubData
                         ? <p className="text-xs text-slate-600">Subaccount balances not loaded yet — refresh the TRS panel below.</p>
                         : <div>
@@ -6412,6 +6423,48 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}, trsData, scriptUrl}) => {
                           </div>}
                 </div>
             </div>
+
+            {subOpen && hasSubData && (
+                <div className="card p-4 mb-5 border-slate-700/60">
+                    <p className="text-xs font-semibold text-slate-300 mb-2">All Subaccounts — Asset &amp; NAV Breakdown</p>
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm mb-1">
+                        <span className="text-slate-400">Assets <span className="mono font-bold text-white">${fmt(subAssetsUsd,2)}</span></span>
+                        <span className="text-slate-600">+</span>
+                        <span className="text-slate-400">Open Positions (MTM) <span className={`mono font-bold ${subMtm>=0?'text-green-400':'text-red-400'}`}>{subMtm>=0?'+':''}{fmt(subMtm,2)}</span></span>
+                        <span className="text-slate-600">=</span>
+                        <span className="text-slate-400">Total NAV <span className="mono font-bold text-cyan-300">${fmt(subNav,2)}</span></span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mb-3">Each sub's NAV = wallet assets valued at live Bybit prices + unrealised PnL on its open positions (the MTM gap). Summed across {subCount} subaccount{subCount!==1?'s':''}.</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                        {subBreakdown.map(s=>(
+                            <div key={s.uid||s.name} className="card p-3 bg-slate-900/30">
+                                <div className="flex items-baseline justify-between mb-2 pb-1.5 border-b border-slate-800">
+                                    <span className="text-sm font-semibold text-slate-200">{s.name}</span>
+                                    <span className="mono text-sm font-bold text-cyan-300">${fmt(s.nav,2)}</span>
+                                </div>
+                                {s.rows.length===0
+                                    ? <p className="text-xs text-slate-600">No wallet assets</p>
+                                    : s.rows.map(r=>(<div key={r.coin} className="flex items-baseline justify-between py-0.5">
+                                        <span className="mono text-xs text-slate-300">{fmtAmt(r.bal,r.coin)} <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${assetTag(r.coin)}`}>{r.coin}</span></span>
+                                        <span className="mono text-xs text-white">${fmt(r.usd,2)}</span>
+                                      </div>))}
+                                <div className="flex items-baseline justify-between py-0.5 border-t border-slate-800 mt-1.5 pt-1.5">
+                                    <span className="text-[11px] text-slate-500 italic">Assets subtotal</span>
+                                    <span className="mono text-xs text-slate-300">${fmt(s.assetsUsd,2)}</span>
+                                </div>
+                                <div className="flex items-baseline justify-between py-0.5">
+                                    <span className="text-[11px] text-slate-500 italic">Open Positions (MTM)</span>
+                                    <span className={`mono text-xs ${s.mtm>=0?'text-green-400':'text-red-400'}`}>{s.mtm>=0?'+':''}{fmt(s.mtm,2)}</span>
+                                </div>
+                                <div className="flex items-baseline justify-between py-0.5 border-t border-slate-800 mt-0.5 pt-1">
+                                    <span className="text-[11px] font-semibold text-slate-400">Sub NAV</span>
+                                    <span className="mono text-xs font-bold text-cyan-300">${fmt(s.nav,2)}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
                 <Ribbon title="To Deposit → subaccounts" rows={deposits}/>
