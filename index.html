@@ -6361,10 +6361,13 @@ const TRSTradingDashboard = ({trsLiab, bybitPrices={}, trsData, scriptUrl}) => {
     const subAccounts=(trsData&&trsData.accounts&&trsData.accounts.length)?trsData.accounts
         :(trsData&&trsData.assets?[{name:trsData.subaccount||'SMA01',totalNav:trsData.totalNav,assets:trsData.assets}]:[]);
     let subAssetsUsd=0;subAccounts.forEach(a=>{if(!a.error&&a.assets)a.assets.forEach(x=>{subAssetsUsd+=subUsd(x.coin,x.walletBalance);});});
-    const subNav=(trsData&&typeof trsData.totalNav==='number')?trsData.totalNav:subAccounts.reduce((s,a)=>s+(a.totalNav||0),0);
+    // SUM across ALL subs — NOT trsData.totalNav, which the API pins to SMA01 only
+    // (primary.totalNav). Funds live mostly in the other strategy subs, so SMA01's own
+    // NAV can be ~0; summing every non-error account is what "all subaccounts" means.
+    const subNav=subAccounts.reduce((s,a)=>s+(a.error?0:(a.totalNav||0)),0);
     const subMtm=subNav-subAssetsUsd;
     const subCount=subAccounts.filter(a=>!a.error).length;
-    const hasSubData=subCount>0&&subNav>0;
+    const hasSubData=subCount>0;
 
     const Ribbon=({title,rows})=>(
         <div className="card p-3.5">
